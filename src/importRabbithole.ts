@@ -126,7 +126,7 @@ export async function importRabbithole(file: File): Promise<RabbitholeImport> {
       const group = it.groupId ? groupName.get(it.groupId) : undefined;
       for (const r of components(cells)) {
         const o: MapObject = {
-          ...newObject('object', r.x, r.y, r.w, r.h), name: it.name, color: it.color || '#c0510a', icon: '✦', height: 1,
+          ...newObject('object', r.x, r.y, r.w, r.h), name: it.name, color: it.color || '#c0510a', icon: '✦', height: 0, // 可查看的东西，不挡路
           notes: (group ? `【${group}】\n` : '') + (it.note ?? '').trim(),
         };
         for (const a of it.attachments ?? []) {
