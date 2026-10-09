@@ -1,0 +1,217 @@
+import { beginSandbox, endSandbox, getUI, getWorld, setUI, toast, update, type UIState } from './store';
+import { addMark, findMap } from './actions';
+import type { GameMap, World } from './types';
+import { uid } from './util';
+import { ROUND_MINUTES } from './perception';
+
+// 试玩：放白板玩家进去，用 WASD 走，体验视野。退出时一切恢复原样（沙盒）。
+// 默认是非战斗：不限步数；打开"战斗模式"才是每回合 5 格。
+
+export const MOVE_PER_TURN = 5;
+const BLOCK_HEIGHT = 0.5; // 这么高以上的家具挡路
+const COLORS = ['#f4f1ea', '#ffd166', '#81e2ff', '#ff9fb2'];
+
+export type Trial = NonNullable<UIState['trial']>;
+
+function walkable(w: World, m: GameMap, x: number, y: number) {
+  if (x < 0 || y < 0 || x >= m.width || y >= m.height) return false;
+  const t = w.terrains.find((t) => t.id === m.cells[y * m.width + x]);
+  if (!t || t.blocksMove) return false; // 空白格（地图外）也不能走
+  return !m.objects.some((o) => o.kind === 'object' && o.height >= BLOCK_HEIGHT && x >= o.x && x < o.x + o.w && y >= o.y && y < o.y + o.h);
+}
+
+/** 出生点：作者设的；没设就是最靠北、最居中的那扇门外面（大家从北边进来）。 */
+function spawnPoint(w: World, m: GameMap) {
+  if (m.spawn && walkable(w, m, m.spawn.x, m.spawn.y)) return m.spawn;
+  const door = w.terrains.find((t) => t.id === 'door' || t.name === '门');
+  const cands: { x: number; y: number }[] = [];
+  if (door)
+    for (let y = 0; y < m.height; y++)
+      for (let x = 0; x < m.width; x++) {
+        if (m.cells[y * m.width + x] !== door.id) continue;
+        for (const [dx, dy] of [[0, -1], [-1, 0], [1, 0], [0, 1]]) {
+          const nx = x + dx, ny = y + dy;
+          if (walkable(w, m, nx, ny) && !m.roomCells[ny * m.width + nx]) cands.push({ x: nx, y: ny });
+        }
+      }
+  if (cands.length) return cands.sort((a, b) => a.y - b.y || Math.abs(a.x - m.width / 2) - Math.abs(b.x - m.width / 2))[0];
+  for (let y = 0; y < m.height; y++)
+    for (let x = 0; x < m.width; x++) if (walkable(w, m, x, y)) return { x, y };
+  return null;
+}
+
+/** 离 p 最近、能站、没人占的格子（再放一个玩家时用）。 */
+function freeNear(w: World, m: GameMap, p: { x: number; y: number }) {
+  const seen = new Set<string>();
+  const q = [p];
+  while (q.length) {
+    const c = q.shift()!;
+    const k = `${c.x},${c.y}`;
+    if (seen.has(k)) continue;
+    seen.add(k);
+    if (walkable(w, m, c.x, c.y) && !m.tokens.some((t) => t.x === c.x && t.y === c.y)) return c;
+    if (seen.size > 400) break;
+    for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) q.push({ x: c.x + dx, y: c.y + dy });
+  }
+  return null;
+}
+
+const tr = () => getUI().trial;
+const setTr = (patch: Partial<Trial>) => { const t = tr(); if (t) setUI({ trial: { ...t, ...patch } }); };
+
+function placePlayer(mapId: string) {
+  const w = getWorld();
+  const m = findMap(w, mapId)!;
+  const base = spawnPoint(w, m);
+  const p = base && freeNear(w, m, base);
+  if (!p) { toast('这张图上找不到能站的地方（要先铺地形）'); return null; }
+  const n = (tr()?.players.length ?? 0) + 1;
+  const pcId = uid(), tokenId = uid(), name = `白板玩家${n > 1 ? ' ' + n : ''}`, color = COLORS[(n - 1) % COLORS.length];
+  update((d) => {
+    d.party.push({ id: pcId, name, tags: [], color });
+    const dm = findMap(d, mapId)!;
+    dm.autoFog = true;
+    dm.tokens.push({ id: tokenId, pcId, name, color, x: p.x, y: p.y });
+  });
+  return { tokenId, pcId, name };
+}
+
+export function startTrial() {
+  const mapId = getUI().mapId;
+  if (!findMap(getWorld(), mapId)) return;
+  beginSandbox();
+  setUI({ trial: { mapId, players: [], current: 0, combat: false, moved: {}, turn: 1, msg: '', markSymbol: '!', markText: '', markMode: false }, selection: null, pendingConn: null });
+  const p = placePlayer(mapId);
+  if (!p) return endTrial();
+  setTr({ players: [p] });
+}
+
+export function addTrialPlayer() {
+  const t = tr();
+  if (!t) return;
+  const p = placePlayer(t.mapId);
+  if (p) setTr({ players: [...t.players, p], current: t.players.length, msg: '' });
+}
+
+export function switchTrialPlayer(i?: number) {
+  const t = tr();
+  if (!t || !t.players.length) return;
+  setTr({ current: i ?? (t.current + 1) % t.players.length, msg: '' });
+}
+
+export function endTrial() {
+  endSandbox();
+  setUI({ trial: null, selection: null });
+}
+
+export function trialMove(dx: number, dy: number) {
+  const t = tr();
+  const pl = t?.players[t.current];
+  if (!t || !pl) return;
+  const w = getWorld();
+  const m = findMap(w, t.mapId);
+  const tok = m?.tokens.find((x) => x.id === pl.tokenId);
+  if (!m || !tok) return;
+  if (tok.status) {
+    if (tok.status.endsAt !== undefined && tok.status.endsAt <= Date.now()) clearTrialStatus(tok.id);
+    else return setTr({ msg: `${pl.name}${tok.status.label}中，暂时不能行动` });
+  }
+  const used = t.moved[pl.tokenId] ?? 0;
+  if (t.combat && used >= MOVE_PER_TURN) return setTr({ msg: '这回合的移动力用完了，按空格结束回合' });
+  const nx = tok.x + dx, ny = tok.y + dy;
+  if (!walkable(w, m, nx, ny)) return setTr({ msg: '走不过去' });
+  if (m.tokens.some((x) => x.x === nx && x.y === ny)) return setTr({ msg: '有人挡着' });
+  update((d) => {
+    const dt = findMap(d, t.mapId)!.tokens.find((x) => x.id === pl.tokenId)!;
+    dt.x = nx; dt.y = ny;
+  });
+  setTr({ moved: { ...t.moved, [pl.tokenId]: used + 1 }, msg: '' });
+}
+
+/** 空格（只在战斗中）：结束这一回合。重置每人的移动力；"暂时不能行动"的回合数减一，减到 0 就恢复。 */
+export function trialEndTurn() {
+  const t = tr();
+  if (!t?.combat) return;
+  update((d) => {
+    const m = findMap(d, t.mapId);
+    for (const k of m?.tokens ?? []) {
+      if (k.status?.roundsLeft === undefined) continue;
+      k.status.roundsLeft -= 1;
+      if (k.status.roundsLeft <= 0) delete k.status;
+    }
+  });
+  setTr({ moved: {}, turn: t.turn + 1, msg: '' });
+}
+
+/** 进出战斗：暂时不能行动的状态在"真实时间"和"回合"之间换算（1 回合 = 5 分钟）。 */
+export function toggleCombat() {
+  const t = tr();
+  if (!t) return;
+  const toCombat = !t.combat, now = Date.now();
+  update((d) => {
+    for (const k of findMap(d, t.mapId)?.tokens ?? []) {
+      const st = k.status;
+      if (!st) continue;
+      if (toCombat && st.endsAt !== undefined) { st.roundsLeft = Math.max(1, Math.ceil((st.endsAt - now) / 60000 / ROUND_MINUTES)); delete st.endsAt; }
+      if (!toCombat && st.roundsLeft !== undefined) { st.endsAt = now + st.roundsLeft * ROUND_MINUTES * 60000; delete st.roundsLeft; }
+    }
+  });
+  setTr({ combat: toCombat, moved: {}, turn: 1, msg: '' });
+}
+
+/** 让当前角色暂时不能行动（晕厥、泡温泉……），时长按分钟给；战斗中自动换算成回合。 */
+export function setTrialStatus(label: string, minutes: number) {
+  const t = tr();
+  const pl = t?.players[t.current];
+  if (!t || !pl) return;
+  update((d) => {
+    const k = findMap(d, t.mapId)?.tokens.find((x) => x.id === pl.tokenId);
+    if (!k) return;
+    k.status = t.combat
+      ? { label, roundsLeft: Math.max(1, Math.ceil(minutes / ROUND_MINUTES)) }
+      : { label, endsAt: Date.now() + minutes * 60000 };
+  });
+}
+
+export function clearTrialStatus(tokenId: string) {
+  const t = tr();
+  if (t) update((d) => { const k = findMap(d, t.mapId)?.tokens.find((x) => x.id === tokenId); if (k) delete k.status; });
+}
+
+/** 这个状态还剩多久：自由行动显示分秒，战斗显示回合；已经结束返回 null。 */
+export function statusLeft(st: { endsAt?: number; roundsLeft?: number }) {
+  if (st.roundsLeft !== undefined) return st.roundsLeft > 0 ? `还剩 ${st.roundsLeft} 回合` : null;
+  const ms = (st.endsAt ?? 0) - Date.now();
+  if (ms <= 0) return null;
+  const sec = Math.ceil(ms / 1000);
+  return `还剩 ${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, '0')}`;
+}
+
+export function toggleMarkMode(on?: boolean) {
+  const t = tr();
+  if (t) setTr({ markMode: on ?? !t.markMode, msg: '' });
+}
+
+/** 试玩时点地图：放标记状态下放标记；否则点到自己队里的人就切换操控他。 */
+export function trialClick(x: number, y: number) {
+  const t = tr();
+  if (!t) return;
+  if (t.markMode) { trialPlaceMark(x, y); setTr({ markMode: false }); return; }
+  const m = findMap(getWorld(), t.mapId);
+  const i = t.players.findIndex((p) => m?.tokens.some((k) => k.id === p.tokenId && k.x === x && k.y === y));
+  if (i >= 0) switchTrialPlayer(i);
+}
+
+/** 在地图上做标记：只能标自己知道的地方（看得见的或记得的）。 */
+export function trialPlaceMark(x: number, y: number) {
+  const t = tr();
+  const pl = t?.players[t.current];
+  if (!t || !pl) return;
+  const w = getWorld();
+  const m = findMap(w, t.mapId);
+  if (!m || x < 0 || y < 0 || x >= m.width || y >= m.height) return;
+  const fog = w.visionMode === 'individual' ? m.views[pl.pcId]?.fog : m.fog;
+  if (!fog?.[y * m.width + x]) return setTr({ msg: '没去过的地方标不了' });
+  addMark(t.mapId, pl.pcId, x, y, t.markSymbol, t.markText.trim());
+  setTr({ msg: '' });
+}
