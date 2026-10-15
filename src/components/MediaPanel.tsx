@@ -4,7 +4,8 @@ import { toast, update, useUI, useWorld } from '../store';
 import { uid } from '../util';
 import { Section } from './fields';
 
-const kindOf = (mime: string) => (mime.startsWith('video') ? '视频' : mime.startsWith('audio') ? '音频' : mime.startsWith('image') ? '图片' : '文件');
+const isPdf = (mime: string) => mime === 'application/pdf';
+const kindOf = (mime: string) => (mime.startsWith('video') ? '视频' : mime.startsWith('audio') ? '音频' : mime.startsWith('image') ? '图片' : isPdf(mime) ? 'PDF' : '文件');
 
 export function MediaPanel() {
   const w = useWorld();
@@ -13,8 +14,10 @@ export function MediaPanel() {
     for (const f of Array.from(files)) {
       const id = uid();
       try {
-        await putBlob(id, f);
-        update((d) => { d.media.push({ id, name: f.name, mime: f.type || 'application/octet-stream', size: f.size }); });
+        // 有的系统给 PDF 的类型是空的，按扩展名补上
+        const mime = f.type || (/\.pdf$/i.test(f.name) ? 'application/pdf' : 'application/octet-stream');
+        await putBlob(id, mime === f.type ? f : new Blob([f], { type: mime }));
+        update((d) => { d.media.push({ id, name: f.name, mime, size: f.size }); });
       } catch (e) {
         toast(`上传失败：${f.name}`);
       }
@@ -24,8 +27,8 @@ export function MediaPanel() {
     <Section title="媒体库">
       <div className="hint">文件存在这台电脑的浏览器里。换电脑请用「导出工程」打包带走。</div>
       <label className="upload">
-        上传音频 / 视频 / 图片
-        <input type="file" multiple accept="audio/*,video/*,image/*" onChange={(e) => { upload(e.target.files); e.target.value = ''; }} />
+        上传音频 / 视频 / 图片 / PDF
+        <input type="file" multiple accept="audio/*,video/*,image/*,application/pdf,.pdf" onChange={(e) => { upload(e.target.files); e.target.value = ''; }} />
       </label>
       {w.media.map((m) => (
         <div key={m.id} className="list-row">
@@ -54,6 +57,8 @@ export function MediaView({ mediaId, blob, mime, autoPlay, onEnded }: { mediaId:
   if (mime.startsWith('video')) return <video src={url} controls autoPlay={autoPlay} onEnded={onEnded} />;
   if (mime.startsWith('audio')) return <audio src={url} controls autoPlay={autoPlay} onEnded={onEnded} />;
   if (mime.startsWith('image')) return <img src={url} />;
+  // PDF（比如模组里的书）：用浏览器自带的阅读器，能翻页、缩放
+  if (isPdf(mime)) return <iframe className="pdf-view" src={url} title="PDF" />;
   return <a href={url} target="_blank">打开文件</a>;
 }
 
