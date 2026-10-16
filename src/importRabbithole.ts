@@ -165,6 +165,7 @@ export async function importRabbithole(file: File): Promise<RabbitholeImport> {
     playerMapId: ground.id,
     visionMode: 'shared',
     marks: [],
+    npcs: [],
   };
   const nRooms = maps.reduce((s, m) => s + m.rooms.length, 0);
   const summary = `导入了 ${maps.length} 层（${W}×${H} 格）、${nRooms} 个房间、${nObj} 件家具、${nInt} 个可交互物、${media.length} 张配图。楼梯之间的连接点要手动加。`;

@@ -11,6 +11,7 @@ import { Inspector } from './components/Inspector';
 import { RecordPanel } from './components/RecordPanel';
 import { FlowPanel } from './components/FlowPanel';
 import { PartyPanel } from './components/PartyPanel';
+import { NpcPanel } from './components/NpcPanel';
 import { MediaDock, MediaPanel } from './components/MediaPanel';
 import { PlayerView } from './components/PlayerView';
 import { Splitter, usePanel } from './components/Splitter';
@@ -24,8 +25,8 @@ const MODES: { mode: Mode; label: string; tab: Tab }[] = [
 ];
 const TABS: Record<Mode, [Tab, string][]> = {
   edit: [['inspect', '检查器'], ['media', '媒体库']],
-  prep: [['inspect', '检查器'], ['party', '队伍'], ['media', '媒体库']],
-  run: [['inspect', '检查器'], ['log', '记录'], ['party', '队伍'], ['media', '媒体库']],
+  prep: [['inspect', '检查器'], ['party', '队伍'], ['npc', 'NPC'], ['media', '媒体库']],
+  run: [['inspect', '检查器'], ['log', '记录'], ['party', '队伍'], ['npc', 'NPC'], ['media', '媒体库']],
 };
 
 export default function App() {
@@ -181,6 +182,7 @@ function Editor() {
             {ui.tab === 'inspect' && <Inspector />}
             {ui.tab === 'log' && ui.mode === 'run' && <RecordPanel />}
             {ui.tab === 'party' && ui.mode !== 'edit' && <PartyPanel />}
+            {ui.tab === 'npc' && ui.mode !== 'edit' && <NpcPanel />}
             {ui.tab === 'media' && <MediaPanel />}
           </div>
         </aside>}

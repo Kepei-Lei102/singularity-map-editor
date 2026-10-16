@@ -373,6 +373,34 @@ export function render(
     ctx.textBaseline = 'alphabetic';
   }
 
+  // 普通人 NPC（主持人视角）：在季节里的实线，不在季节的淡一点；已结束的不画
+  if (!player) {
+    const month = new Date().getMonth() + 1;
+    for (const n of world.npcs ?? []) {
+      if (!n.place || n.place.mapId !== map.id || n.progress.status === 'done') continue;
+      const off = n.progress.status === 'waiting' && n.months.length > 0 && !n.months.includes(month);
+      const cx = (n.place.x + 0.5) * CS, cy = (n.place.y + 0.5) * CS;
+      ctx.globalAlpha = off ? 0.35 : 1;
+      ctx.beginPath();
+      ctx.moveTo(cx, cy - CS * 0.42); ctx.lineTo(cx + CS * 0.42, cy); ctx.lineTo(cx, cy + CS * 0.42); ctx.lineTo(cx - CS * 0.42, cy); ctx.closePath();
+      ctx.fillStyle = n.color;
+      ctx.fill();
+      ctx.lineWidth = 1.5;
+      ctx.strokeStyle = '#fff';
+      ctx.stroke();
+      ctx.font = '13px system-ui, sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(n.icon, cx, cy + 1);
+      ctx.fillStyle = n.color;
+      ctx.font = '600 9px system-ui, sans-serif';
+      ctx.fillText(n.name, cx, cy + CS * 0.62);
+      ctx.textAlign = 'start';
+      ctx.textBaseline = 'alphabetic';
+      ctx.globalAlpha = 1;
+    }
+  }
+
   // 迷雾
   if (player || o.mode !== 'edit' || o.showFog) {
     const black = player ? '#000' : 'rgba(8,8,16,0.62)';

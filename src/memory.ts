@@ -68,6 +68,8 @@ export function migrateWorld(w: World): World {
   }
   w.visionMode ??= 'shared';
   w.marks ??= [];
+  w.npcs ??= [];
+  for (const n of w.npcs) n.progress ??= { status: 'waiting', beatsDone: [] };
   delete (w as { clock?: number }).clock; // 旧版的世界时钟，已改成直接读真实时间
   if (!w.flows) w.flows = [linesToFlow(w.lines ?? [])];
   delete w.lines;

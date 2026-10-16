@@ -264,6 +264,56 @@ export interface Mark {
   life: number; // 能留多少分钟
 }
 
+/**
+ * 普通人 NPC（非凡者以外的街坊、路人、委托人）。通用：任何模组都能用。
+ * 奇点之后的游戏时间和现实时间绑定，所以"什么时候出现""多久以后回来"都按现实日期算：
+ * 只在某几个月出现；玩家出完主意，NPC 真的去办，过几天（现实时间）才回来说结果。没到日子，连着开团也不出现。
+ */
+export interface NpcTopic {
+  id: Id;
+  ask: string; // 玩家问到什么
+  answer: string; // TA 才说什么
+}
+export interface NpcOutcome {
+  id: Id;
+  label: string; // 例如 好结果 / 漂亮解 / 坏结果
+  text: string; // 回访时讲的后来
+  reward: string; // 这一档给什么
+}
+/** 结果出来之前的一拍近况（不给奖励），出完主意后至少 afterDays 天才会出现。 */
+export interface NpcBeat {
+  id: Id;
+  afterDays: number;
+  text: string;
+}
+export interface NpcProgress {
+  status: 'waiting' | 'met' | 'advised' | 'done';
+  metAt?: number; // 真实时间（毫秒）
+  advisedAt?: number;
+  advice?: string; // 玩家出的主意
+  outcomeId?: Id;
+  beatsDone: Id[];
+  doneAt?: number;
+}
+export interface Npc {
+  id: Id;
+  name: string;
+  summary: string; // 一句话：谁，要做什么
+  icon: string;
+  color: string;
+  months: number[]; // 只在这几个月出现（1–12）；空 = 任何时候
+  place: Endpoint | null; // 一般在地图哪里出现（可不填）
+  persona: string; // 人设（主持人看）
+  request: string; // 开场：带着什么事来
+  topics: NpcTopic[]; // 被问到才说的
+  notes: string; // 主持人备注：坑、书里查得到的、好答案
+  beats: NpcBeat[];
+  returnAfterDays: number; // 出完主意后至少几天才回来说结果
+  extra: string; // 回访时顺口说的（比如认识的人的一件小事）
+  outcomes: NpcOutcome[];
+  progress: NpcProgress;
+}
+
 export interface World {
   version: 1;
   name: string;
@@ -279,4 +329,5 @@ export interface World {
   playerMapId: Id | null;
   visionMode: 'shared' | 'individual'; // 视野：全队共享 / 各自独立（A 看到的，B 默认看不到）
   marks: Mark[];
+  npcs: Npc[];
 }

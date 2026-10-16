@@ -129,7 +129,7 @@ export type Selection =
   | null;
 
 export type Mode = 'edit' | 'prep' | 'run';
-export type Tab = 'inspect' | 'log' | 'party' | 'media';
+export type Tab = 'inspect' | 'log' | 'party' | 'npc' | 'media';
 
 export interface View { zoom: number; panX: number; panY: number }
 
