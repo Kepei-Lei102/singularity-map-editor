@@ -4,7 +4,7 @@ import type { Npc } from '../types';
 import { cellName, uid } from '../util';
 import { findMap, jumpTo } from '../actions';
 import {
-  MONTH_NAMES, exportNpcs, importNpcs, inSeason, newNpc, nextStep, npcAdvised, npcBeatDone, npcMet, npcOrder, npcReset, npcReturned, npcSkipWait,
+  MONTH_NAMES, exportNpcs, importNpcs, inSeason, newNpc, nextStep, npcActive, npcAdvised, npcBeatDone, npcCast, npcMet, npcOrder, npcReset, npcReturned, npcSkipWait,
 } from '../npc';
 import { Area, Num, Row, Section, Txt } from './fields';
 
@@ -23,8 +23,12 @@ export function NpcPanel() {
   const editable = ui.mode !== 'run' || ui.unlock;
   const now = new Date();
   const list = npcOrder(w);
+  const run = ui.mode === 'run';
+  const castCount = list.filter((n) => n.progress.status === 'waiting' && n.progress.cast).length;
   const dueCount = list.filter((n) => nextStep(n).due && n.progress.status !== 'waiting').length;
   const seasonCount = list.filter((n) => n.progress.status === 'waiting' && inSeason(n, now)).length;
+  const shown = run ? list.filter(npcActive) : list;
+  const rest = run ? list.filter((n) => !npcActive(n)) : [];
 
   return (
     <Section title={`NPC（${w.npcs.length}）`} extra={
@@ -42,9 +46,14 @@ export function NpcPanel() {
     }>
       <div className="hint">
         今天 {now.getMonth() + 1} 月 {now.getDate()} 日。时间按现实算：没到日子的人，连着开团也不出现。
-        {` 现在能出场：${dueCount} 位等着回来，${seasonCount} 位这个月可能出现。`}
+        {` 本场安排了 ${castCount} 位；${dueCount} 位到日子可以回来；这个月在季节里的有 ${seasonCount} 位。`}
+        {!run && ' 备团时按玩家已经知道的信息和今天的日期，勾选这一场要出场的人（☐ 本场）。'}
       </div>
-      {list.map((n) => <NpcCard key={n.id} n={n} open={open === n.id} onToggle={() => setOpen(open === n.id ? null : n.id)} editable={editable} />)}
+      {shown.map((n) => <NpcCard key={n.id} n={n} open={open === n.id} onToggle={() => setOpen(open === n.id ? null : n.id)} editable={editable} />)}
+      {run && shown.length === 0 && <div className="hint">这一场没安排 NPC，也没有人等着回来。去「备团」里勾选。</div>}
+      {rest.length > 0 && <details className="npc-rest"><summary>没安排的（{rest.length}）</summary>
+        {rest.map((n) => <NpcCard key={n.id} n={n} open={open === n.id} onToggle={() => setOpen(open === n.id ? null : n.id)} editable={editable} />)}
+      </details>}
     </Section>
   );
 }
@@ -58,6 +67,8 @@ function NpcCard({ n, open, onToggle, editable }: { n: Npc; open: boolean; onTog
     <div className="card npc-card" style={{ borderLeft: `3px solid ${n.color}` }}>
       <div className="card-title" style={{ cursor: 'pointer' }} onClick={onToggle}>
         <span>{n.icon}</span><span>{n.name}</span><span className="spacer" />
+        {n.progress.status === 'waiting' && <label className="npc-cast" title="这一场安排出场" onClick={(e) => e.stopPropagation()}>
+          <input type="checkbox" checked={!!n.progress.cast} onChange={(e) => npcCast(n.id, e.target.checked)} />本场</label>}
         <span className={`badge ${badge}`}>{s.label}</span>
       </div>
       {n.summary && <div className="hint">{n.summary}</div>}
@@ -88,7 +99,7 @@ function NpcRun({ n }: { n: Npc }) {
         </div>}
         {n.notes && <details><summary>主持人备注（坑、书里查得到的、好答案）</summary><p className="pre">{n.notes}</p></details>}
       </>}
-      {p.status === 'waiting' && <div className="btns"><button onClick={() => npcMet(n.id)}>出现了</button></div>}
+      {p.status === 'waiting' && <div className="btns"><button onClick={() => npcMet(n.id)}>出现了</button>{!p.cast && <span className="hint">（这一场没安排）</span>}</div>}
       {p.status === 'met' && <>
         <Row label="玩家的主意"><Area value={advice} onChange={setAdvice} rows={2} placeholder="玩家最后建议送什么、怎么送" /></Row>
         <Row label="会是">

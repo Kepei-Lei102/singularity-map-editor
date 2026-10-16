@@ -288,6 +288,7 @@ export interface NpcBeat {
 }
 export interface NpcProgress {
   status: 'waiting' | 'met' | 'advised' | 'done';
+  cast?: boolean; // 本场安排出场：备团时主持人按玩家已知的信息和今天的日期挑
   metAt?: number; // 真实时间（毫秒）
   advisedAt?: number;
   advice?: string; // 玩家出的主意

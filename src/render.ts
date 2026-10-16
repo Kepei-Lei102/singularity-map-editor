@@ -373,12 +373,14 @@ export function render(
     ctx.textBaseline = 'alphabetic';
   }
 
-  // 普通人 NPC（主持人视角）：在季节里的实线，不在季节的淡一点；已结束的不画
+  // 普通人 NPC（主持人视角）：本场安排的、在场的画实；等回访的淡一点；没安排的、已结束的不画
   if (!player) {
     const month = new Date().getMonth() + 1;
     for (const n of world.npcs ?? []) {
-      if (!n.place || n.place.mapId !== map.id || n.progress.status === 'done') continue;
-      const off = n.progress.status === 'waiting' && n.months.length > 0 && !n.months.includes(month);
+      const p = n.progress;
+      // 只画本场安排的、在场的、有事没了结的（等回访的淡一点）
+      if (!n.place || n.place.mapId !== map.id || p.status === 'done' || p.status === 'waiting' && !p.cast) continue;
+      const off = p.status === 'advised' || (p.status === 'waiting' && n.months.length > 0 && !n.months.includes(month));
       const cx = (n.place.x + 0.5) * CS, cy = (n.place.y + 0.5) * CS;
       ctx.globalAlpha = off ? 0.35 : 1;
       ctx.beginPath();

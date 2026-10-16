@@ -301,3 +301,5 @@ button.ai { color: #e6c2ff; border-color: #6b4f8c; }
 .pre { white-space: pre-wrap; margin: 4px 0 6px; line-height: 1.6; }
 .npc-sub { border-left: 2px solid var(--line); padding-left: 6px; margin: 6px 0; }
 .npc-sub textarea { width: 100%; box-sizing: border-box; margin-top: 4px; }
+.npc-cast { font-size: 12px; display: inline-flex; align-items: center; gap: 2px; color: var(--muted); }
+.npc-rest summary { cursor: pointer; color: var(--muted); margin: 8px 0; }

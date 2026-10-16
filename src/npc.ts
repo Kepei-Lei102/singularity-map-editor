@@ -12,7 +12,7 @@ export const inSeason = (n: Npc, now = new Date()) => n.months.length === 0 || n
 
 /** 主持人现在要知道的一件事。due = 现在就可以出现；wait = 还要等；idle = 不在季节或已结束。 */
 export interface NpcNext {
-  kind: 'appear' | 'present' | 'beat' | 'return' | 'done' | 'off';
+  kind: 'appear' | 'season' | 'present' | 'beat' | 'return' | 'done' | 'off';
   label: string;
   due: boolean;
   at?: number; // 最早出现的时间（毫秒）
@@ -24,9 +24,8 @@ export function nextStep(n: Npc, now = Date.now()): NpcNext {
   if (p.status === 'done') return { kind: 'done', label: '已结束', due: false };
   if (p.status === 'met') return { kind: 'present', label: '在场：等玩家出主意', due: true };
   if (p.status === 'waiting') {
-    return inSeason(n, new Date(now))
-      ? { kind: 'appear', label: '这个月可能出现', due: true }
-      : { kind: 'off', label: `不在季节（${n.months.map((m) => MONTH_NAMES[m - 1]).join('、')}）`, due: false };
+    if (!inSeason(n, new Date(now))) return { kind: 'off', label: `不在季节（${n.months.map((m) => MONTH_NAMES[m - 1]).join('、')}）`, due: false };
+    return p.cast ? { kind: 'appear', label: '本场安排出场', due: true } : { kind: 'season', label: '这个月可以安排', due: false };
   }
   // advised：先过完近况，再回访
   const from = p.advisedAt ?? now;
@@ -49,7 +48,7 @@ export function npcOrder(w: World, now = Date.now()) {
   const rank = (n: Npc) => {
     const s = nextStep(n, now);
     if (s.due) return s.kind === 'present' ? 0 : s.kind === 'return' || s.kind === 'beat' ? 1 : 2;
-    return s.kind === 'beat' || s.kind === 'return' ? 3 : s.kind === 'off' ? 4 : 5;
+    return s.kind === 'beat' || s.kind === 'return' ? 3 : s.kind === 'season' ? 4 : s.kind === 'off' ? 5 : 6;
   };
   return [...w.npcs].sort((a, b) => rank(a) - rank(b));
 }
@@ -74,6 +73,12 @@ function setProgress(id: string, fn: (p: NpcProgress, n: Npc) => void, text: str
   });
 }
 
+/** 这场要不要出场（备团时挑）。 */
+export const npcCast = (id: string, on: boolean) =>
+  setProgress(id, (p) => { p.cast = on; }, on ? '本场安排出场' : '本场不出场');
+/** 在场、或者有事还没了结的，地图上要画、带团列表里要列。 */
+export const npcActive = (n: Npc) => n.progress.status === 'met' || n.progress.status === 'advised' || (n.progress.status === 'waiting' && !!n.progress.cast);
+
 export const npcMet = (id: string) => setProgress(id, (p) => { p.status = 'met'; p.metAt = Date.now(); }, '出现了');
 export const npcAdvised = (id: string, advice: string, outcomeId: string, label: string) =>
   setProgress(id, (p) => { p.status = 'advised'; p.advisedAt = Date.now(); p.advice = advice; p.outcomeId = outcomeId; p.beatsDone = []; },
@@ -81,9 +86,9 @@ export const npcAdvised = (id: string, advice: string, outcomeId: string, label:
 export const npcBeatDone = (id: string, beatId: string) =>
   setProgress(id, (p) => { if (!p.beatsDone.includes(beatId)) p.beatsDone.push(beatId); }, '来说了一句近况');
 export const npcReturned = (id: string, label: string) =>
-  setProgress(id, (p) => { p.status = 'done'; p.doneAt = Date.now(); }, `回访：${label}`);
+  setProgress(id, (p) => { p.status = 'done'; p.cast = false; p.doneAt = Date.now(); }, `回访：${label}`);
 export const npcReset = (id: string) =>
-  setProgress(id, (p) => { p.status = 'waiting'; delete p.metAt; delete p.advisedAt; delete p.advice; delete p.outcomeId; delete p.doneAt; p.beatsDone = []; }, '进度重置');
+  setProgress(id, (p) => { p.status = 'waiting'; p.cast = false; delete p.metAt; delete p.advisedAt; delete p.advice; delete p.outcomeId; delete p.doneAt; p.beatsDone = []; }, '进度重置');
 /** 主持人兜底：把要等的时间往前挪，当作已经到日子了（比如这周临时加了一场）。 */
 export const npcSkipWait = (id: string, at: number) =>
   setProgress(id, (p) => { if (p.advisedAt) p.advisedAt -= Math.max(0, at - Date.now()); }, '主持人跳过了等待');
