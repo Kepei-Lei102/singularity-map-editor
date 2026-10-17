@@ -102,20 +102,32 @@ export const npcSkipWait = (id: string, at: number) =>
  * 旧进度引用的结果或近况在新内容里没了：近况从"已讲过"里去掉，结果清掉并在返回的提示里说一声。
  */
 export function importNpcs(input: unknown[]): string[] {
-  input.forEach((n, i) => checkNpc(n, `第 ${i + 1} 位 NPC`, true)); // 和整份工程用同一套校验；有一位不对就一位都不导入
+  input.forEach((n, i) => {
+    checkNpc(n, `第 ${i + 1} 位 NPC`, true); // 和整份工程用同一套校验；有一位不对就一位都不导入
+    if (!(n as { name: string }).name.trim()) throw new Error(`第 ${i + 1} 位 NPC 没有名字（导入时靠名字认人）`);
+  });
   const list = input as (Partial<Npc> & { name: string })[];
+  // 先在草稿外把每一位补成完整的 NPC（可以省略的字段填默认值，null 也当省略），再严格查一遍——导进来的一定能保存
+  const text = (v: unknown, dflt = '') => (typeof v === 'string' ? v : dflt);
+  const fresh = <T extends { id?: string }>(xs: T[]) => { const seen = new Set<string>(); return xs.map((x) => { const id = typeof x.id === 'string' && x.id && !seen.has(x.id) ? x.id : uid(); seen.add(id); return { ...x, id }; }); };
+  const built = list.map((raw, i) => {
+    const base = newNpc();
+    const n: Npc = {
+      id: base.id, name: raw.name,
+      summary: text(raw.summary), icon: text(raw.icon, base.icon), color: text(raw.color, base.color), persona: text(raw.persona),
+      request: text(raw.request), notes: text(raw.notes), extra: text(raw.extra),
+      months: raw.months ?? [], place: raw.place ?? null, returnAfterDays: raw.returnAfterDays ?? base.returnAfterDays,
+      topics: fresh(raw.topics ?? []).map((t) => ({ id: t.id, ask: text(t.ask), answer: text(t.answer) })),
+      beats: fresh(raw.beats ?? []).map((b) => ({ id: b.id, afterDays: b.afterDays, text: text(b.text) })),
+      outcomes: fresh(raw.outcomes ?? base.outcomes).map((o) => ({ id: o.id, label: text(o.label), text: text(o.text), reward: text(o.reward) })),
+      progress: raw.progress && typeof raw.progress === 'object' ? { ...base.progress, ...raw.progress, beatsDone: Array.isArray(raw.progress.beatsDone) ? raw.progress.beatsDone : [] } : base.progress,
+    };
+    checkNpc(n, `第 ${i + 1} 位 NPC（补全后）`);
+    return { raw, n };
+  });
   const warnings: string[] = [];
   update((d) => {
-    for (const raw of list) {
-      const base = newNpc();
-      const fresh = <T extends { id?: string }>(xs: T[]) => { const seen = new Set<string>(); return xs.map((x) => { const id = typeof x.id === 'string' && x.id && !seen.has(x.id) ? x.id : uid(); seen.add(id); return { ...x, id }; }); };
-      const n: Npc = {
-        ...base, ...raw, id: base.id,
-        topics: fresh(raw.topics ?? []),
-        beats: fresh(raw.beats ?? []),
-        outcomes: fresh(raw.outcomes ?? base.outcomes),
-        progress: raw.progress && typeof raw.progress === 'object' ? { ...base.progress, ...raw.progress, beatsDone: Array.isArray(raw.progress.beatsDone) ? raw.progress.beatsDone : [] } : base.progress,
-      };
+    for (const { raw, n } of built) {
       const i = d.npcs.findIndex((x) => x.name === n.name);
       if (i < 0) {
         if (raw.id && !d.npcs.some((x) => x.id === raw.id)) n.id = raw.id;

@@ -1,5 +1,5 @@
 import { stopMedia, playMedia } from '../actions';
-import { putBlob, useBlobUrl } from '../media';
+import { storeBlob, useBlobUrl } from '../media';
 import { toast, update, useUI, useWorld } from '../store';
 import { uid } from '../util';
 import { Section } from './fields';
@@ -16,8 +16,8 @@ export function MediaPanel() {
       try {
         // 有的系统给 PDF 的类型是空的，按扩展名补上
         const mime = f.type || (/\.pdf$/i.test(f.name) ? 'application/pdf' : 'application/octet-stream');
-        await putBlob(id, mime === f.type ? f : new Blob([f], { type: mime }));
-        update((d) => { d.media.push({ id, name: f.name, mime, size: f.size }); });
+        const key = await storeBlob(mime === f.type ? f : new Blob([f], { type: mime })); // 存成新文件（不覆盖任何已有的）
+        update((d) => { d.media.push({ id, name: f.name, mime, size: f.size, key }); });
       } catch (e) {
         toast(`上传失败：${f.name}`);
       }

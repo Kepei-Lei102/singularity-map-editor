@@ -1,7 +1,12 @@
 import { useEffect, useState, useSyncExternalStore } from 'react';
+import type { MediaMeta } from './types';
 
 // 媒体文件（音频/视频/图片）存在浏览器的 IndexedDB 里，世界 JSON 只存元数据。
 // 主持人窗口和玩家窗口同源，所以玩家窗口可以直接读到同一份文件。
+//
+// 存储名（key）和媒体 ID 分开：写进去的文件永远不改。同一个 ID 换了内容（导入另一个版本的工程），
+// 就用新的存储名（v:内容哈希）另存一份，旧的原样留着。所以导入、恢复、两个标签页开着不同版本，
+// 谁都不会把别人正在用的文件换掉。旧数据没有 key，就按 ID 存取（老办法）。
 
 const DB = 'ts-map-media';
 const STORE = 'blobs';
@@ -27,9 +32,34 @@ async function tx<T>(mode: IDBTransactionMode, fn: (s: IDBObjectStore) => IDBReq
   });
 }
 
-export const putBlob = (id: string, blob: Blob) => tx('readwrite', (s) => s.put(blob, id));
-export const getBlob = (id: string) => tx<Blob | undefined>('readonly', (s) => s.get(id));
-export const delBlob = (id: string) => tx('readwrite', (s) => s.delete(id));
+/** 按存储名直接读写（导入时用；一般代码用下面按媒体 ID 的版本）。 */
+export const putRaw = (key: string, blob: Blob) => tx('readwrite', (s) => s.put(blob, key));
+export const getRaw = (key: string) => tx<Blob | undefined>('readonly', (s) => s.get(key));
+export const delBlob = (key: string) => tx('readwrite', (s) => s.delete(key));
+
+// 当前世界里媒体 ID → 存储名（世界一变，store 就调用 setMediaIndex）
+let keyOf = new Map<string, string>();
+export function setMediaIndex(list: MediaMeta[]) { keyOf = new Map(list.map((m) => [m.id, m.key ?? m.id])); }
+/** 这个媒体 ID 在当前世界里存在哪。 */
+export const storageKey = (id: string) => keyOf.get(id) ?? id;
+export const getBlob = (id: string) => getRaw(storageKey(id));
+
+/** 按内容算存储名：v: + SHA-256（同样的内容只存一份）。算不了哈希的环境就用随机名，照样不覆盖别的。 */
+export async function contentKey(blob: Blob): Promise<string> {
+  try {
+    const h = new Uint8Array(await crypto.subtle.digest('SHA-256', await blob.arrayBuffer()));
+    return 'v:' + Array.from(h.slice(0, 20), (b) => b.toString(16).padStart(2, '0')).join('');
+  } catch {
+    return 'v:r' + Math.random().toString(36).slice(2) + Date.now().toString(36);
+  }
+}
+
+/** 存一份新文件，返回存储名。已经有同样内容的就不再写。 */
+export async function storeBlob(blob: Blob): Promise<string> {
+  const key = await contentKey(blob);
+  if (!(await getRaw(key))) await putRaw(key, blob);
+  return key;
+}
 
 /** 一批写入放在同一个事务里：要么全部生效，要么（任何一步出错、空间不够）一个都不生效。blob = null 表示删除。 */
 export async function putBlobs(ops: { id: string; blob: Blob | null }[]): Promise<void> {
@@ -38,7 +68,14 @@ export async function putBlobs(ops: { id: string; blob: Blob | null }[]): Promis
   return new Promise((resolve, reject) => {
     const t = db.transaction(STORE, 'readwrite');
     const s = t.objectStore(STORE);
-    for (const o of ops) { if (o.blob) s.put(o.blob, o.id); else s.delete(o.id); }
+    try {
+      for (const o of ops) { if (o.blob) s.put(o.blob, o.id); else s.delete(o.id); }
+    } catch (e) { // 入队时就出错：主动中止，已经入队的也不生效
+      try { t.abort(); } catch { /* 已经结束 */ }
+      db.close();
+      reject(e);
+      return;
+    }
     t.oncomplete = () => { db.close(); resolve(); };
     t.onerror = () => { db.close(); reject(t.error ?? new Error('写媒体文件失败')); };
     t.onabort = () => { db.close(); reject(t.error ?? new Error('写媒体文件被中止（可能是空间不够）')); };
@@ -56,12 +93,13 @@ export function mediaChanged() {
   versionListeners.forEach((l) => l());
 }
 export async function blobUrl(id: string): Promise<string | null> {
-  const hit = urlCache.get(id);
+  const key = storageKey(id); // 按存储名缓存：同一个 ID 换了内容就是另一个存储名，不会拿到旧的
+  const hit = urlCache.get(key);
   if (hit) return hit;
-  const b = await getBlob(id);
+  const b = await getRaw(key);
   if (!b) return null;
   const u = URL.createObjectURL(b);
-  urlCache.set(id, u);
+  urlCache.set(key, u);
   return u;
 }
 const useMediaVersion = () => useSyncExternalStore((l) => { versionListeners.add(l); return () => versionListeners.delete(l); }, () => version);
@@ -80,6 +118,6 @@ export function useBlobUrl(id: string | null | undefined, blob?: Blob) {
     }
     if (id) blobUrl(id).then((u) => live && setUrl(u)).catch(() => live && setUrl(null));
     return () => { live = false; };
-  }, [id, blob, v]);
+  }, [id, id && storageKey(id), blob, v]);
   return url;
 }

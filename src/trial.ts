@@ -1,5 +1,5 @@
 import { beginSandbox, endSandbox, getUI, getWorld, setUI, toast, update, type UIState } from './store';
-import { addMark, autoReveal, cancelPendingPlay, checkEnterTriggers, findMap } from './actions';
+import { addMark, autoReveal, cancelPendingPlay, checkEnterTriggers, findMap, ioBusy } from './actions';
 import type { GameMap, World } from './types';
 import { uid } from './util';
 import { ROUND_MINUTES } from './perception';
@@ -79,6 +79,8 @@ function placePlayer(mapId: string) {
 let playingBefore: UIState['nowPlaying'] = null;
 
 export function startTrial() {
+  const io = ioBusy();
+  if (io) return toast(`正在${io}，完成后再开始试玩`); // 导入途中进试玩，导入的结果会被试玩结束时的还原冲掉
   const mapId = getUI().mapId;
   if (!findMap(getWorld(), mapId)) return;
   beginSandbox();

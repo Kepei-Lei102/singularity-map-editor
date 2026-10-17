@@ -46,7 +46,6 @@ export function checkNpc(n, where, partial = false, c = checker(partial ? '' : '
   c.obj(n, where);
   if (!partial) c.id(n.id, `${where}.id`); else c.optStr(n.id, `${where}.id`);
   c.str(n.name, `${where}.name`);
-  if (!n.name.trim()) c.fail(`${where}.name`, '是空的');
   for (const k of ['summary', 'icon', 'color', 'persona', 'request', 'notes', 'extra']) (partial ? c.optStr : c.str)(n[k], `${where}.${k}`);
   if (!partial || n.months !== undefined) c.arr(n.months, `${where}.months`).forEach((m, i) => c.int(m, `${where}.months[${i}]`, 1, 12));
   if (n.place != null) { c.obj(n.place, `${where}.place`); c.id(n.place.mapId, `${where}.place.mapId`); c.int(n.place.x, `${where}.place.x`); c.int(n.place.y, `${where}.place.y`); }
@@ -68,7 +67,7 @@ export function checkNpc(n, where, partial = false, c = checker(partial ? '' : '
   if (n.progress !== undefined || !partial) {
     const p = c.obj(n.progress, `${where}.progress`);
     c.oneOf(p.status, ['waiting', 'met', 'advised', 'done'], `${where}.progress.status`);
-    c.strings(p.beatsDone ?? [], `${where}.progress.beatsDone`);
+    if (partial && p.beatsDone === undefined) { /* 单独导入时可以不写，编辑器会补 */ } else c.strings(p.beatsDone, `${where}.progress.beatsDone`);
     c.optBool(p.cast, `${where}.progress.cast`);
     for (const k of ['metAt', 'advisedAt', 'doneAt']) c.optNum(p[k], `${where}.progress.${k}`);
     c.optStr(p.advice, `${where}.progress.advice`);
@@ -76,8 +75,41 @@ export function checkNpc(n, where, partial = false, c = checker(partial ? '' : '
   }
 }
 
-/** 检查整份工程，有问题就抛出一句能看懂的错误（带出错的位置）。 */
-export function checkWorld(w) {
+/**
+ * 旧版输入框允许过、现在不允许的值（高度过千、楼层带小数、物件边长超过 200……）：夹回范围内，返回改了什么。
+ * 只动数值范围，不动结构；结构不对的仍交给 checkWorld 报错。命令行和浏览器导入都先过这一步。
+ */
+export function repairWorld(w) {
+  const fixed = [];
+  if (!w || typeof w !== 'object' || !Array.isArray(w.maps)) return fixed;
+  const clampNum = (o, k, lo, hi, what, round = false) => {
+    if (!o || typeof o[k] !== 'number' || !Number.isFinite(o[k])) return;
+    const v = Math.min(hi, Math.max(lo, round ? Math.round(o[k]) : o[k]));
+    if (v !== o[k]) { fixed.push(`${what}：${o[k]} → ${v}`); o[k] = v; }
+  };
+  for (const t of Array.isArray(w.terrains) ? w.terrains : []) clampNum(t, 'visionCoef', 0, 1000, `地形「${t?.name}」的视野衰减`);
+  for (const m of w.maps) {
+    if (!m || typeof m !== 'object') continue;
+    clampNum(m, 'floor', -1000, 1000, `地图「${m.name}」的楼层`, true);
+    for (const o of Array.isArray(m.objects) ? m.objects : []) {
+      clampNum(o, 'height', 0, 1000, `「${o?.name}」的高度`);
+      clampNum(o, 'w', 1, MAX_SIDE, `「${o?.name}」的宽`, true);
+      clampNum(o, 'h', 1, MAX_SIDE, `「${o?.name}」的高`, true);
+      for (const s of Array.isArray(o?.secrets) ? o.secrets : []) clampNum(s, 'range', 0, MAX_SIDE * 2, `「${o?.name}」线索的距离`, true);
+    }
+  }
+  for (const n of Array.isArray(w.npcs) ? w.npcs : []) {
+    clampNum(n, 'returnAfterDays', 0, 36500, `NPC「${n?.name}」的回访天数`);
+    for (const b of Array.isArray(n?.beats) ? n.beats : []) clampNum(b, 'afterDays', 0, 36500, `NPC「${n?.name}」近况的天数`);
+  }
+  return fixed;
+}
+
+/**
+ * 检查整份工程，有问题就抛出一句能看懂的错误（带出错的位置）。
+ * migrated = true：浏览器里迁移（补旧字段）之后再查一遍，这时旧字段都必须在（编辑器直接用它们）。
+ */
+export function checkWorld(w, migrated = false) {
   const c = checker('工程文件有问题：');
   const { fail, obj, arr, str, optStr, bool, optBool, id, int, num, optNum, oneOf, unique, strings } = c;
   const fogs = (v, where, len) => arr(v, where, len).forEach((f, i) => { if (f !== 0 && f !== 1 && f !== 2) fail(`${where}[${i}]`, `迷雾只能是 0/1/2，现在是 ${JSON.stringify(f)}`); });
@@ -109,6 +141,7 @@ export function checkWorld(w) {
     arr(m.d100, `${at}.d100`, n).forEach((v, i) => num(v, `${at}.d100[${i}]`));
     fogs(m.fog, `${at}.fog`, n);
     optBool(m.autoFog, `${at}.autoFog`);
+    if (migrated) for (const k of ['roomCells', 'seen', 'views', 'rooms']) if (m[k] === undefined) fail(`${at}.${k}`, '缺失');
     if (m.roomCells !== undefined) strings(m.roomCells, `${at}.roomCells`, n);
     if (m.seen !== undefined) memory(m.seen, `${at}.seen`, n);
     if (m.views !== undefined) Object.entries(obj(m.views, `${at}.views`)).forEach(([pc, L]) => {
@@ -194,6 +227,7 @@ export function checkWorld(w) {
     obj(m, `media[${i}]`);
     if (!safeId(m.id)) fail(`media[${i}].id`, `不合法：${JSON.stringify(m.id)}`);
     str(m.name, `media[${i}].name`); str(m.mime, `media[${i}].mime`); num(m.size, `media[${i}].size`, 0);
+    if (m.key !== undefined && !(typeof m.key === 'string' && /^v:[A-Za-z0-9]{1,80}$/.test(m.key))) fail(`media[${i}].key`, `不合法：${JSON.stringify(m.key)}`);
   });
   unique(w.media, 'media');
   num(w.session, 'session');
@@ -204,8 +238,9 @@ export function checkWorld(w) {
     obj(k, ka); id(k.id, `${ka}.id`); str(k.mapId, `${ka}.mapId`); int(k.x, `${ka}.x`); int(k.y, `${ka}.y`); str(k.author, `${ka}.author`);
     str(k.symbol, `${ka}.symbol`); str(k.text, `${ka}.text`); num(k.createdAt, `${ka}.createdAt`); num(k.life, `${ka}.life`, 0);
   });
+  if (migrated) for (const k of ['marks', 'npcs', 'flows']) if (w[k] === undefined) fail(k, '缺失');
   if (w.npcs !== undefined) {
-    arr(w.npcs, 'npcs').forEach((n, i) => checkNpc(n, `NPC「${typeof n?.name === 'string' ? n.name : i}」`, n?.progress === undefined, c));
+    arr(w.npcs, 'npcs').forEach((n, i) => checkNpc(n, `NPC「${typeof n?.name === 'string' ? n.name : i}」`, !migrated, c)); // 迁移前宽一点（旧存档缺的字段迁移会补），迁移后严格
     unique(w.npcs, 'npcs');
   }
 }

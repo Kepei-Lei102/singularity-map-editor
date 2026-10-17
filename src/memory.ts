@@ -1,3 +1,4 @@
+import { repairWorld } from './schema.js';
 import type { Draft } from 'immer';
 import type { GameMap, MapObject, SeenObject, VisionLayer, World } from './types';
 import { linesToFlow } from './flow';
@@ -69,7 +70,8 @@ export function migrateWorld(w: World): World {
   w.visionMode ??= 'shared';
   w.marks ??= [];
   w.npcs ??= [];
-  for (const n of w.npcs) n.progress ??= { status: 'waiting', beatsDone: [] };
+  for (const n of w.npcs) { n.progress ??= { status: 'waiting', beatsDone: [] }; n.progress.beatsDone ??= []; }
+  repairWorld(w); // 旧版输入框允许过的超范围数值夹回来
   delete (w as { clock?: number }).clock; // 旧版的世界时钟，已改成直接读真实时间
   if (!w.flows) w.flows = [linesToFlow(w.lines ?? [])];
   delete w.lines;

@@ -9,7 +9,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import JSZip from 'jszip';
 import { fileURLToPath } from 'node:url';
-import { checkWorld, missingMedia, safeId } from '../src/schema.js';
+import { checkWorld, missingMedia, repairWorld, safeId } from '../src/schema.js';
 
 export { checkWorld, safeId };
 
@@ -21,6 +21,8 @@ function writeNew(file, data) {
   try { fs.writeFileSync(fd, data); fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
 }
 
+const warnRepairs = (fixed) => { if (fixed.length) console.warn(`旧版的超范围数值已夹回范围：\n  ${fixed.join('\n  ')}`); };
+
 /** 读工程：文件夹或 zip 都行，返回 { world, media: Map<id, Buffer> }。
  * 校验结构；工程里声明了的媒体缺文件就报错（allowMissing 时只跳过）。 */
 export async function readProject(p, { allowMissing = false } = {}) {
@@ -30,6 +32,7 @@ export async function readProject(p, { allowMissing = false } = {}) {
     const wj = path.join(p, 'world.json'), mediaDir = path.join(p, 'media');
     if (isLink(wj) || isLink(mediaDir)) throw new Error('world.json 或 media 文件夹是符号链接，拒绝读取');
     world = JSON.parse(fs.readFileSync(wj, 'utf8'));
+    warnRepairs(repairWorld(world));
     checkWorld(world);
     for (const m of world.media) {
       const f = path.join(mediaDir, m.id);
@@ -40,6 +43,7 @@ export async function readProject(p, { allowMissing = false } = {}) {
     const wj = zip.file('world.json');
     if (!wj) throw new Error('压缩包里没有 world.json');
     world = JSON.parse(await wj.async('string'));
+    warnRepairs(repairWorld(world));
     checkWorld(world);
     for (const m of world.media) {
       const f = zip.file(`media/${m.id}`);

@@ -120,7 +120,7 @@ export function FlowPanel() {
   );
 
   useEffect(() => () => endBatch(), []); // 拖着事件时面板被关掉：收尾
-  useEffect(() => { drag.current = null; endBatch(); }, [flow?.id, run]); // 换了流程图、换了模式：丢掉这次拖动
+  useEffect(() => { drag.current = null; endBatch(); }, [flow?.id, run, collapsed]); // 换了流程图、换了模式、折叠：丢掉这次拖动
 
   if (collapsed || !flow) {
     return (
@@ -138,8 +138,10 @@ export function FlowPanel() {
   const takenEdges = new Set<string>();
   for (const n of flow.nodes) {
     if (n.status !== 'happened') continue;
-    const via = n.via && flow.edges.find((e) => e.id === n.via && byId.get(e.from)?.status === 'happened');
-    const best = via || incomingCandidates(flow, n.id, tags).find((e) => (byId.get(e.from)!.at ?? 0) <= (n.at ?? 0));
+    // via === ''：发生时明确没有合法来路，不画；via 没有（旧存档）：按规则补，只补条件满足的
+    const best = n.via !== undefined
+      ? flow.edges.find((e) => e.id === n.via && byId.get(e.from)?.status === 'happened')
+      : incomingCandidates(flow, n.id, tags).find((e) => (!e.condition || tags.has(e.condition)) && (byId.get(e.from)!.at ?? 0) <= (n.at ?? 0));
     if (best) takenEdges.add(best.id);
   }
   const toGraph = (e: { clientX: number; clientY: number }) => {
@@ -221,7 +223,7 @@ export function FlowPanel() {
     <div className="flow-panel" style={{ height }}>
       {head}
       <div className="flow-body">
-        <svg ref={svg} className="flow-svg" onPointerDown={onBgDown} onPointerMove={onMove} onPointerUp={onUp} onPointerCancel={() => { drag.current = null; endBatch(); setLink(null); }} onDoubleClick={onDouble}>
+        <svg ref={svg} className="flow-svg" onPointerDown={onBgDown} onPointerMove={onMove} onPointerUp={onUp} onPointerCancel={() => { drag.current = null; endBatch(); setLink(null); }} onLostPointerCapture={() => { if (drag.current?.k === 'node') { drag.current = null; endBatch(); } }} onDoubleClick={onDouble}>
           <defs>
             {(['pred', 'taken', 'lock'] as const).map((c) => (
               <marker key={c} id={`arrow-${c}`} viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
@@ -346,11 +348,11 @@ function NodeSide({ world, flow, n, editable, run, locked, onSelect }: {
       )}
       {n.status === 'happened' && (() => {
         const cands = incomingCandidates(flow, n.id, partyTags(world));
-        if (cands.length < 2) return null;
+        if (!cands.length || (cands.length === 1 && n.via === cands[0].id)) return null; // 只有一条而且已经记了，就不用选
         return (
           <Row label="从哪里来">
             <select value={n.via ?? ''} onChange={(e) => setNodeVia(flow.id, n.id, e.target.value)}>
-              {!n.via && <option value="">（没记）</option>}
+              {!n.via && <option value="">（没记 / 没有合法来路）</option>}
               {cands.map((e) => <option key={e.id} value={e.id}>{byId.get(e.from)?.title}{e.label ? ` · ${e.label}` : ''}{e.condition && !partyTags(world).has(e.condition) ? ' 🔒' : ''}</option>)}
             </select>
           </Row>

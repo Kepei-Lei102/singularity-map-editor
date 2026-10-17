@@ -3,6 +3,7 @@ import { useSyncExternalStore } from 'react';
 import type { World } from './types';
 import { demoWorld } from './defaults';
 import { migrateWorld, syncMemory } from './memory';
+import { setMediaIndex } from './media';
 import { withVision } from './perception';
 
 const SAVE_KEY = 'ts-map-world-v1';
@@ -25,6 +26,7 @@ function load(): World | null {
 
 let world: World = load() ?? demoWorld();
 world = produce(withVision(world, { ...world, maps: [] }), syncMemory);
+setMediaIndex(world.media);
 let past: World[] = [];
 let future: World[] = [];
 let batching = false;
@@ -36,6 +38,7 @@ let sandbox: { world: World; past: World[]; future: World[] } | null = null;
 let batchStart: World | null = null; // 拖动开始时的世界：拖动中第一次真的改了东西才把它记进撤销
 
 function emit() {
+  setMediaIndex(world.media); // 媒体 ID → 存储名，跟着当前世界走
   listeners.forEach((l) => l());
   clearTimeout(saveTimer);
   if (sandbox) return; // 试玩期间不保存，免得把试玩状态存进去
@@ -125,6 +128,7 @@ export function replaceWorld(w: World) {
   future = [];
   batching = false;
   batchStart = null;
+  lastCoalesce = null; // 换了世界，上一个世界的"连续打字合并"不能延续
   world = w;
   emit();
 }

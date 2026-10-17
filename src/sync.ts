@@ -17,14 +17,15 @@ export type SyncBody =
   | { type: 'claim' } // 编辑器启动时：这个会话标识有人在用吗？
   | { type: 'taken' }; // 回答：在用（复制标签页时会碰上），换一个
 /** from：发送方的会话；to：只给某个会话（玩家窗口打招呼时用）。 */
-export type SyncMsg = SyncBody & { __ts: 'ts-map'; seq: string; from: string; to?: string };
+/** inst / born：发送的是哪个页面实例、什么时候打开的（同一个会话标识出现在两个实例上时，后打开的让）。 */
+export type SyncMsg = SyncBody & { __ts: 'ts-map'; seq: string; from: string; to?: string; inst: string; born: number };
 
 const rand = () => Math.random().toString(36).slice(2) + Date.now().toString(36);
 const SESSION_KEY = 'ts-sync-session';
 /**
  * 这个编辑器窗口的会话标识。同时开着两个编辑器（两场团）时，玩家窗口只认打开它的那一个。
  * 存在 sessionStorage：刷新页面不变（玩家窗口不用重开）。复制标签页会把 sessionStorage 一起复制，
- * 所以编辑器启动时先问一句（claim），还有活着的编辑器在用同一个标识，就换一个新的。
+ * 所以编辑器启动时先问一句（claim）；之后任何时候发现另一个实例也在用这个标识，后打开的那个换新的。
  */
 export let SESSION = (() => {
   try {
@@ -33,6 +34,8 @@ export let SESSION = (() => {
     return s;
   } catch { return rand(); }
 })();
+const INST = rand(); // 这个页面实例（刷新就是新的实例，但会话标识不变）
+const BORN = Date.now();
 function renewSession() {
   SESSION = rand();
   try { sessionStorage.setItem(SESSION_KEY, SESSION); } catch { /* 存不了就只在这次有效 */ }
@@ -46,7 +49,7 @@ export function openPlayerWindow() {
   playerWin = window.open(`?view=player&session=${SESSION}`, `ts-player-${SESSION}`, 'width=1280,height=800');
 }
 
-const isMsg = (d: unknown): d is SyncMsg => !!d && typeof d === 'object' && (d as SyncMsg).__ts === 'ts-map' && typeof (d as SyncMsg).from === 'string';
+const isMsg = (d: unknown): d is SyncMsg => !!d && typeof d === 'object' && (d as SyncMsg).__ts === 'ts-map' && typeof (d as SyncMsg).from === 'string' && typeof (d as SyncMsg).inst === 'string' && typeof (d as SyncMsg).born === 'number';
 
 /**
  * 发给玩家窗口的"玩家版"世界：主持人才能看的东西在发出去之前就删掉，而不只是不画。
@@ -151,7 +154,7 @@ export function send(body: SyncBody, to?: string) {
   // 试玩是主持人自己的测试：试玩期间不往玩家窗口推播放；世界一律推真正的那份（试玩前的）
   if ((body.type === 'play' || body.type === 'stop') && getUI().trial) return;
   const out: SyncBody = body.type === 'world' ? { type: 'world', world: playerWorld(getRealWorld()) } : body;
-  const msg: SyncMsg = { ...out, __ts: 'ts-map', seq: rand(), from: SESSION, ...(to ? { to } : {}) };
+  const msg: SyncMsg = { ...out, __ts: 'ts-map', seq: rand(), from: SESSION, inst: INST, born: BORN, ...(to ? { to } : {}) };
   try { channel?.postMessage(msg); } catch { /* 有的浏览器不能用 BroadcastChannel 传 Blob */ }
   const targets = [playerWin, window.opener as Window | null].filter((w): w is Window => !!w && !w.closed && w !== window);
   targets.forEach((w) => { try { w.postMessage(msg, target()); } catch { /* 窗口已关 */ } });
@@ -183,8 +186,14 @@ export function listen(fn: (m: SyncMsg, source: MessageEventSource | null) => vo
  */
 export function listenAsEditor(onHello: () => void) {
   const off = listen((m, source) => {
-    if (m.type === 'claim') { if (m.from === SESSION) send({ type: 'taken' }, m.from); return; }
-    if (m.type === 'taken') { if (m.to === SESSION && Date.now() < quietUntil) renewSession(); return; }
+    // 另一个编辑器实例在用同一个会话标识（复制了标签页）：不管消息来得多晚，都按"后打开的让"处理
+    if (m.type !== 'hello' && m.from === SESSION && m.inst !== INST) {
+      const iAmNewer = m.born < BORN || (m.born === BORN && m.inst < INST);
+      if (iAmNewer) renewSession();
+      else { send({ type: 'taken' }); onHello(); } // 我是原来那个：叫对方换号，并重推一次世界（万一玩家窗口刚才收到了对方的）
+      return;
+    }
+    if (m.type === 'claim' || m.type === 'taken') return;
     if (m.type !== 'hello' || (m.to && m.to !== SESSION)) return;
     if (source && source !== window && 'postMessage' in source) playerWin = source as Window;
     onHello();

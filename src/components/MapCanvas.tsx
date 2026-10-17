@@ -246,7 +246,9 @@ export function MapCanvas({ world, map, mode, playerNumbers = false, follow, vie
     if (!hover || hover.x !== cx || hover.y !== cy) setHover({ x: cx, y: cy });
     const dr = drag.current;
     if (!dr) return;
-    const m = findMap(getWorld(), map.id)!;
+    const m = findMap(getWorld(), map.id);
+    const gone = () => { drag.current = null; endBatch(); setPreview(null); }; // 拖着的东西没了（被撤销掉了、地图删了）：取消这次拖动
+    if (!m) return gone();
     const clampX = (x: number, w = 1) => Math.max(0, Math.min(m.width - w, x));
     const clampY = (y: number, h = 1) => Math.max(0, Math.min(m.height - h, y));
     if (dr.k === 'pan') {
@@ -260,12 +262,14 @@ export function MapCanvas({ world, map, mode, playerNumbers = false, follow, vie
       dr.x1 = clampX(cx); dr.y1 = clampY(cy);
       setPreview({ x: Math.min(dr.x0, dr.x1), y: Math.min(dr.y0, dr.y1), w: Math.abs(dr.x1 - dr.x0) + 1, h: Math.abs(dr.y1 - dr.y0) + 1 });
     } else if (dr.k === 'obj') {
-      const o = m.objects.find((x) => x.id === dr.id)!;
+      const o = m.objects.find((x) => x.id === dr.id);
+      if (!o) return gone();
       const nx = clampX(cx - dr.ox, o.w), ny = clampY(cy - dr.oy, o.h);
       if (nx !== o.x || ny !== o.y) dr.moved = true;
       if (nx !== o.x || ny !== o.y) update((d) => { const od = findMap(d, map.id)!.objects.find((x) => x.id === dr.id)!; od.x = nx; od.y = ny; });
     } else if (dr.k === 'tok') {
-      const t = m.tokens.find((x) => x.id === dr.id)!;
+      const t = m.tokens.find((x) => x.id === dr.id);
+      if (!t) return gone();
       const nx = clampX(cx), ny = clampY(cy);
       if (nx !== t.x || ny !== t.y) dr.moved = true;
       if (nx !== t.x || ny !== t.y) update((d) => { const td = findMap(d, map.id)!.tokens.find((x) => x.id === dr.id)!; td.x = nx; td.y = ny; });
@@ -320,6 +324,7 @@ export function MapCanvas({ world, map, mode, playerNumbers = false, follow, vie
         onPointerMove={onMove}
         onPointerUp={onUp}
         onPointerCancel={() => { drag.current = null; endBatch(); setPreview(null); }}
+        onLostPointerCapture={() => { if (drag.current && drag.current.k !== 'pan') { drag.current = null; endBatch(); setPreview(null); } }}
         onPointerLeave={() => setHover(null)}
         onContextMenu={(e) => e.preventDefault()}
       />

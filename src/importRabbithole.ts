@@ -1,3 +1,4 @@
+import { MAX_COORD, MAX_SIDE } from './schema.js';
 import JSZip from 'jszip';
 import type { GameMap, MapObject, MediaMeta, Room, Terrain, World } from './types';
 import { DEFAULT_TERRAINS, newMap, newObject } from './defaults';
@@ -72,12 +73,19 @@ export async function importRabbithole(file: File): Promise<RabbitholeImport> {
 
   // 三层用同一个偏移，保证上下对齐；四周留两格，一楼外圈铺成能走的空地（多入口要能绕着楼走）
   let minR = Infinity, minC = Infinity, maxR = -Infinity, maxC = -Infinity;
-  for (const L of rh.levels) for (const k of Object.keys(L.cells)) {
-    const [r, c] = k.split(',').map(Number);
-    minR = Math.min(minR, r); maxR = Math.max(maxR, r); minC = Math.min(minC, c); maxC = Math.max(maxC, c);
+  // 先查原始坐标：必须是像样的整数、整体不超过地图上限，否则在建地图（分配数组）之前就停
+  for (const L of rh.levels) {
+    if (!L || typeof L.cells !== 'object' || L.cells === null) throw new Error('有一层没有 cells');
+    for (const k of Object.keys(L.cells)) {
+      const [r, c] = k.split(',').map(Number);
+      if (!Number.isSafeInteger(r) || !Number.isSafeInteger(c) || Math.abs(r) > MAX_COORD || Math.abs(c) > MAX_COORD) throw new Error(`格子坐标不对：${k}`);
+      minR = Math.min(minR, r); maxR = Math.max(maxR, r); minC = Math.min(minC, c); maxC = Math.max(maxC, c);
+    }
   }
+  if (minR === Infinity) throw new Error('地图里一个格子都没有');
   const MARGIN = 2;
   const W = maxC - minC + 1 + MARGIN * 2, H = maxR - minR + 1 + MARGIN * 2;
+  if (W > MAX_SIDE || H > MAX_SIDE) throw new Error(`地图太大：${W}×${H} 格（加上四周留白），最多 ${MAX_SIDE}×${MAX_SIDE}`);
   const pos = (k: string) => { const [r, c] = k.split(',').map(Number); return { x: c - minC + MARGIN, y: r - minR + MARGIN }; };
 
   const media: MediaMeta[] = [];

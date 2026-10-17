@@ -252,6 +252,7 @@ export interface MediaMeta {
   name: string;
   mime: string;
   size: number;
+  key?: string; // 浏览器里的存储名（v:内容哈希）。写进去就不改；没有就按 id 存（旧数据）
 }
 
 /** 玩家在地图上做的标记：随时间淡去；别人要站得离做标记的人很近才看得到。 */

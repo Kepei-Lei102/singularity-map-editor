@@ -8,8 +8,8 @@ export { NODE_H, NODE_W, reachable } from './flow';
 import { CONN_LABEL } from './types';
 import { TIER_LABEL } from './types';
 import { download, uid } from './util';
-import { getBlob, mediaChanged, putBlobs } from './media';
-import { checkWorld } from './schema.js';
+import { contentKey, getRaw, putBlobs, storageKey } from './media';
+import { checkWorld, repairWorld } from './schema.js';
 import { send } from './sync';
 import { emptyLayer, migrateWorld } from './memory';
 
@@ -90,10 +90,11 @@ export function playMedia(mediaId: string, label: string, broadcast: boolean) {
   const meta = getWorld().media.find((m) => m.id === mediaId);
   if (!meta) return toast('找不到这个媒体文件');
   const seq = ++playSeq;
+  const key = storageKey(mediaId); // 按开始播放那一刻的版本
   setUI({ nowPlaying: { mediaId, label, broadcast } });
   // 文件本身也一起发过去：玩家窗口不一定能读到本地存储（例如双击 html 打开时）。试玩里的播放只在主持人这边，根本不发
   if (broadcast && !getUI().trial)
-    getBlob(mediaId).catch(() => undefined).then((blob) => { if (seq === playSeq && !getUI().trial) send({ type: 'play', mediaId, label, mime: meta.mime, blob }); });
+    getRaw(key).catch(() => undefined).then((blob) => { if (seq === playSeq && !getUI().trial) send({ type: 'play', mediaId: key, label, mime: meta.mime, blob }); }); // 玩家窗口没有媒体表，直接给存储名
   update((d) => log(d, 'media', `播放：${label || meta.name}${broadcast ? '（同步给玩家）' : '（仅主持人）'}`), { history: false });
 }
 
@@ -245,7 +246,7 @@ export function setNodeStatus(flowId: string, nodeId: string, status: 'predicted
       log(d, 'step', `［${f.name}］${n.title}`);
       // 自动只选条件满足的；只有锁着的连线可选时不替主持人决定（侧栏可以手动指定，算破例）
       const tags = partyTags(d as World);
-      n.via = via ?? incomingCandidates(f, n.id, tags).find((e) => !e.condition || tags.has(e.condition))?.id;
+      n.via = via ?? incomingCandidates(f, n.id, tags).find((e) => !e.condition || tags.has(e.condition))?.id ?? ''; // '' = 明确没有合法来路（区别于旧存档的"没记"）
       const e = n.effect;
       const o = e && findObj(d, e.mapId, e.objectId);
       if (e && o && o.state !== e.toState && o.states[e.toState] !== undefined) {
@@ -259,11 +260,12 @@ export function setNodeStatus(flowId: string, nodeId: string, status: 'predicted
       const o = a && findObj(d, a.mapId, a.objectId);
       if (a && o) {
         // 之后没人动过（版本还是这次改完的那个）才改回去；只比状态值的话，"关了又开"会被误认成没动过
-        const untouched = a.rev !== undefined ? (o.stateRev ?? 0) === a.rev : o.state === a.to;
+        // 旧存档的记录没有版本：证明不了之后没人动过，就不自动改回（写进记录，主持人自己判断）
+        const untouched = a.rev !== undefined && (o.stateRev ?? 0) === a.rev;
         if (untouched && o.state === a.to && o.states[a.from] !== undefined) {
           o.state = a.from;
           log(d, 'state', `${o.name}：${o.states[a.to]} → ${o.states[a.from]}（撤销「${n.title}」）`, a.mapId);
-        } else log(d, 'note', `撤销「${n.title}」：${o.name}后来又被改过（现在是${o.states[o.state]}），没有改回去`, a.mapId);
+        } else log(d, 'note', `撤销「${n.title}」：${o.name}${a.rev === undefined ? '是旧版记录，确认不了之后有没有被改过' : '后来又被改过'}（现在是${o.states[o.state]}），没有改回去`, a.mapId);
       }
       delete n.applied;
       delete n.via;
@@ -444,10 +446,26 @@ export let pendingFocus: { mapId: string; x: number; y: number } | null = null;
 export const clearPendingFocus = () => { pendingFocus = null; };
 
 // ---------- 导入 / 导出 ----------
+//
+// 媒体文件写进浏览器后永远不改（见 media.ts）：导入只"添"新文件，不覆盖任何已有的。
+// 所以世界和它引用的文件天然对得上：导入中途失败、恢复、两个标签页开着不同版本，都不会出现"世界是 A、媒体是 B"。
+// 导入、恢复、保存、导出一次只做一件（同一个标签页里），导入期间也不能开始试玩。
+
+let busy: string | null = null;
+/** 正在导入 / 恢复 / 保存吗（试玩按钮看这个）。 */
+export const ioBusy = () => busy;
+async function exclusive<T>(what: string, fn: () => Promise<T>): Promise<T | undefined> {
+  if (busy) { toast(`正在${busy}，请稍等`); return undefined; }
+  busy = what;
+  try { return await fn(); } finally { busy = null; }
+}
 
 class MissingMedia extends Error {}
 
-/** 打包工程。先过一遍和导入一样的校验（存出去的东西一定能再导进来）；缺了哪个媒体文件就列出来（不再悄悄跳过）。 */
+/**
+ * 打包工程。先过一遍和导入一样的校验（存出去的东西一定能再导进来）；缺了哪个媒体文件就列出来（不再悄悄跳过）。
+ * 世界在开始时就固定下来，媒体按那一刻的存储名去读（文件不会被改，所以读到的一定是那个版本）。
+ */
 async function buildProjectZip(allowMissing = false) {
   const w = getWorld();
   checkWorld(w);
@@ -455,7 +473,7 @@ async function buildProjectZip(allowMissing = false) {
   zip.file('world.json', JSON.stringify(w, null, 2));
   const missing: string[] = [];
   for (const m of w.media) {
-    const b = await readBlob(m.id);
+    const b = await readRaw(m.key ?? m.id);
     if (b) zip.file(`media/${m.id}`, b);
     else missing.push(m.name);
   }
@@ -466,14 +484,16 @@ async function buildProjectZip(allowMissing = false) {
 export async function exportProject() {
   if (getUI().trial) return toast('试玩中不能导出，先结束试玩');
   const name = `${getWorld().name || '世界'}.tsmap.zip`;
-  try {
-    download(name, await buildProjectZip());
-  } catch (e) {
-    if (!(e instanceof MissingMedia)) return toast('导出失败：' + (e as Error).message);
-    if (confirm(`${e.message}\n\n还要导出吗？（导出的工程里会缺这些文件）`)) {
-      try { download(name, await buildProjectZip(true)); } catch (e2) { toast('导出失败：' + (e2 as Error).message); }
+  await exclusive('导出', async () => {
+    try {
+      download(name, await buildProjectZip());
+    } catch (e) {
+      if (!(e instanceof MissingMedia)) return toast('导出失败：' + (e as Error).message);
+      if (confirm(`${e.message}\n\n还要导出吗？（导出的工程里会缺这些文件）`)) {
+        try { download(name, await buildProjectZip(true)); } catch (e2) { toast('导出失败：' + (e2 as Error).message); }
+      }
     }
-  }
+  });
 }
 
 /** 用命令行带文件启动时才有：存回硬盘（见 scripts/open.mjs）。 */
@@ -489,42 +509,50 @@ let saveToken = '';
 export async function saveToDisk() {
   if (getUI().trial) return toast('试玩中不能保存（试玩的改动不该进正式工程），先结束试玩');
   if (!getUI().diskTarget) return exportProject();
-  try {
-    const r = await fetch('/__save', { method: 'POST', headers: { 'X-Save-Token': saveToken }, body: await buildProjectZip() });
-    if (!r.ok) throw new Error(await r.text());
-    const { path } = await r.json();
-    setUI({ diskTarget: path });
-    toast(`已保存到 ${path}`);
-  } catch (e) {
-    toast('保存失败：' + (e as Error).message);
-  }
+  await exclusive('保存', async () => {
+    try {
+      const r = await fetch('/__save', { method: 'POST', headers: { 'X-Save-Token': saveToken }, body: await buildProjectZip() });
+      if (!r.ok) throw new Error(await r.text());
+      const { path } = await r.json();
+      setUI({ diskTarget: path });
+      toast(`已保存到 ${path}`);
+    } catch (e) {
+      toast('保存失败：' + (e as Error).message);
+    }
+  });
 }
 
 /** 导入前的校验：任何写入（媒体、世界）之前先过这一关（和命令行共用 schema.js）。 */
 function parseWorld(text: string): World {
   let w: unknown;
   try { w = JSON.parse(text); } catch { throw new Error('world.json 不是有效的 JSON'); }
+  repairWorld(w); // 旧版允许过的超范围数值先夹回来
   checkWorld(w);
   migrateWorld(w);
-  checkWorld(w); // 补完旧字段以后再查一遍，确保交给编辑器的是完整的工程
+  checkWorld(w, true); // 补完旧字段以后再严格查一遍，确保交给编辑器的是完整的工程
   return w;
 }
 
+/** 读一个媒体文件。读出错就报错（不当作"没有"）。 */
+async function readRaw(key: string): Promise<Blob | undefined> {
+  try { return await getRaw(key); } catch (e) { throw new Error(`读不了浏览器里的媒体文件（${(e as Error)?.message ?? e}）`); }
+}
+
 // ---------- 导入前备份 ----------
-// 备份是一条记录：{ world, swapped }。swapped 是那次导入时被覆盖掉的媒体 ID，旧内容存在 __backup__/<id>。
-// 世界和它对应的媒体清单绑在一起写，所以不会出现"世界是 B、媒体却换成 A"。
+// 备份就是导入前的那份世界。它引用的媒体文件都还在（文件从不覆盖），所以恢复只换世界。
+// 旧版备份另外记着"被覆盖的媒体"（swapped），那时文件会被覆盖；恢复这种旧备份时照旧版的办法换一次文件。
 
 const BACKUP_KEY = 'ts-map-world-backup';
-const OLD_BACKUP_MEDIA_KEY = 'ts-map-media-backup'; // 旧版把清单单独存，读到就并进来
+const OLD_BACKUP_MEDIA_KEY = 'ts-map-media-backup'; // 更旧的版本把清单单独存
 const BACKUP_MEDIA_PREFIX = '__backup__/';
-interface Backup { world: World; swapped: string[] }
+interface Backup { world: World; swapped?: string[] }
 
 function readBackup(): Backup | null {
   try {
     const s = localStorage.getItem(BACKUP_KEY);
     if (!s) return null;
     const j = JSON.parse(s);
-    if (j && Array.isArray(j.maps)) { // 旧格式：直接是世界
+    if (j && Array.isArray(j.maps)) { // 最旧的格式：直接是世界
       let swapped: string[] = [];
       try { swapped = JSON.parse(localStorage.getItem(OLD_BACKUP_MEDIA_KEY) ?? '[]'); } catch { /* 没有 */ }
       return { world: j, swapped };
@@ -532,11 +560,11 @@ function readBackup(): Backup | null {
     return j && j.world ? { world: j.world, swapped: Array.isArray(j.swapped) ? j.swapped : [] } : null;
   } catch { return null; }
 }
-/** 写备份；写不下（太大）返回 false。写不下时 localStorage 里原来那条不受影响（setItem 失败不改动旧值）。 */
-function writeBackup(b: Backup): boolean {
+/** 写备份；写不下（太大）返回 false，这时原来那条备份不受影响。 */
+function writeBackup(world: World): boolean {
   try {
-    localStorage.setItem(BACKUP_KEY, JSON.stringify(b));
-    localStorage.removeItem(OLD_BACKUP_MEDIA_KEY);
+    localStorage.setItem(BACKUP_KEY, JSON.stringify({ world }));
+    localStorage.removeItem(OLD_BACKUP_MEDIA_KEY); // 写成功了，旧格式的清单才可以丢
     return true;
   } catch { return false; }
 }
@@ -547,69 +575,41 @@ export function hasBackup() {
   try { return !!localStorage.getItem(BACKUP_KEY); } catch { return false; }
 }
 
-async function sameBytes(a: Blob, b: Blob) {
-  if (a.size !== b.size) return false;
-  const x = new Uint8Array(await a.arrayBuffer()), y = new Uint8Array(await b.arrayBuffer());
-  for (let i = 0; i < x.length; i++) if (x[i] !== y[i]) return false;
-  return true;
-}
-
-/** 读一个媒体文件。和 getBlob 不同：读出错就报错（不当作"没有"），免得把读不出来的旧文件当成不存在、直接覆盖。 */
-async function readBlob(id: string): Promise<Blob | undefined> {
-  try { return await getBlob(id); } catch (e) { throw new Error(`读不了浏览器里的媒体文件 ${id}（${(e as Error)?.message ?? e}），什么都没改`); }
-}
-
-/** 导入、恢复一次只能做一件：前一件没做完时再点，直接拒绝（否则两边会互相覆盖备份）。 */
-let importing = false;
-async function exclusive<T>(fn: () => Promise<T>): Promise<T | undefined> {
-  if (importing) { toast('上一次导入 / 恢复还没做完，请稍等'); return undefined; }
-  importing = true;
-  try { return await fn(); } finally { importing = false; }
+/** 把一批新文件存进浏览器（只添不改），给世界里的媒体写上存储名。 */
+async function storeMedia(w: World, files: { id: string; blob: Blob }[]) {
+  const keys = new Map<string, string>();
+  const ops: { id: string; blob: Blob }[] = [];
+  for (const f of files) {
+    const key = await contentKey(f.blob);
+    keys.set(f.id, key);
+    if (!(await readRaw(key)) && !ops.some((o) => o.id === key)) ops.push({ id: key, blob: f.blob });
+  }
+  await putBlobs(ops); // 一个事务：要么全写上，要么一个不写；写上的也只是新文件，不影响任何正在用的
+  for (const m of w.media) { const k = keys.get(m.id); if (k) m.key = k; }
 }
 
 /**
  * 导入的最后一步，所有导入方式（工程、JSON、Rabbithole、恢复备份）共用：
- * 1) 先把要用到的旧文件全部读出来（读出错就停，什么都没改）
- * 2) 把现在的世界和"这次会覆盖的媒体"写成一条备份；写不下就问一句，取消的话旧备份原样保留
- * 3) 换媒体：备份旧文件和写入新文件放在同一个事务里，要么全成，要么全不成
- * 4) 换世界
+ * 存新文件 → 把现在的世界写成备份（写不下就问一句，取消的话什么都不变）→ 换世界。
+ * 导入期间不能进试玩；万一进了，就不换世界（试玩结束时会还原成进试玩前的世界，换了也白换）。
  */
-async function commitImport(w: World, media: { id: string; blob: Blob }[]): Promise<boolean> {
-  const plan: { id: string; blob: Blob; old: Blob | undefined }[] = [];
-  for (const m of media) {
-    const old = await readBlob(m.id);
-    if (old && (await sameBytes(old, m.blob))) continue; // 一模一样，不用动
-    plan.push({ ...m, old });
-  }
-  const swapped = plan.filter((p) => p.old).map((p) => p.id);
-  const prevBackup = (() => { try { return localStorage.getItem(BACKUP_KEY); } catch { return null; } })();
-  if (!writeBackup({ world: getWorld(), swapped })) {
+async function commitImport(w: World, files: { id: string; blob: Blob }[]): Promise<boolean> {
+  await storeMedia(w, files);
+  if (getUI().trial) throw new Error('导入途中开始了试玩，没有替换世界。请结束试玩后重新导入');
+  if (!writeBackup(getWorld())) {
     if (!confirm('当前内容太大，没法留"导入前的备份"。继续导入的话，之后就不能一键恢复了。继续吗？')) return false;
-    dropBackup(); // 继续的话，旧备份和接下来的媒体对不上了，不能留
-  }
-  try {
-    await putBlobs([
-      ...plan.filter((p) => p.old).map((p) => ({ id: BACKUP_MEDIA_PREFIX + p.id, blob: p.old! })),
-      ...plan.map((p) => ({ id: p.id, blob: p.blob })),
-    ]);
-  } catch (e) {
-    try { if (prevBackup) localStorage.setItem(BACKUP_KEY, prevBackup); else localStorage.removeItem(BACKUP_KEY); } catch { /* 无能为力 */ }
-    throw new Error(`写媒体文件失败，什么都没改（${(e as Error)?.message ?? e}）`);
-  } finally {
-    mediaChanged();
+    dropBackup(); // 继续的话，旧备份已经不是"这次导入前"的内容了，不能留着误导
   }
   replaceWorld(w);
   return true;
 }
 
-export async function importProject(file: File) {
+async function importProject(file: File) {
   try {
     let w: World;
-    const media: { id: string; blob: Blob }[] = [];
-    let missing: string[] = [];
+    const files: { id: string; blob: Blob }[] = [];
     if (/\.json$/i.test(file.name)) {
-      w = parseWorld(await file.text());
-      missing = w.media.map((m) => m.name); // 单独的 JSON 不带媒体文件
+      w = parseWorld(await file.text()); // 单独的 JSON 不带媒体文件：浏览器里有的照用
     } else {
       const zip = await JSZip.loadAsync(file);
       const json = zip.file('world.json');
@@ -617,16 +617,12 @@ export async function importProject(file: File) {
       w = parseWorld(await json.async('string'));
       for (const m of w.media) {
         const f = zip.file(`media/${m.id}`);
-        if (f) media.push({ id: m.id, blob: new Blob([await f.async('arraybuffer')], { type: m.mime }) });
-        else missing.push(m.name);
+        if (f) files.push({ id: m.id, blob: new Blob([await f.async('arraybuffer')], { type: m.mime }) });
       }
     }
-    // JSON 或缺文件的包：浏览器里已经有同 ID 的文件就照用，真没有的才算缺
-    const have = new Set(media.map((m) => m.id));
-    const absent: string[] = [];
-    for (const m of w.media) if (!have.has(m.id) && !(await getBlob(m.id).catch(() => undefined))) absent.push(m.name);
-    missing = missing.filter((n) => absent.includes(n));
-    if (!(await commitImport(w, media))) return;
+    if (!(await commitImport(w, files))) return;
+    const missing: string[] = [];
+    for (const m of w.media) if (!(await readRaw(m.key ?? m.id))) missing.push(m.name);
     setUI({ mapId: w.maps[0].id, selection: null, views: {}, flowId: w.flows[0]?.id ?? null });
     toast(`已导入：${w.name}${missing.length ? `（缺 ${missing.length} 个媒体文件：${missing.join('、')}）` : ''}`);
   } catch (e) {
@@ -652,11 +648,11 @@ export function exportSessionMarkdown() {
   download(`${w.name}-第${s}场记录.md`, out.join('\n'), 'text/markdown');
 }
 
-export async function importRabbitholeFile(file: File) {
+async function importRabbitholeFile(file: File) {
   try {
     const { importRabbithole } = await import('./importRabbithole');
     const { world, blobs, summary } = await importRabbithole(file);
-    checkWorld(world);
+    checkWorld(world, true);
     if (!(await commitImport(world, blobs))) return;
     setUI({ mapId: world.maps[0].id, selection: null, views: {}, flowId: world.flows[0]?.id ?? null, mode: 'edit', tool: 'select' });
     toast(summary);
@@ -665,48 +661,57 @@ export async function importRabbitholeFile(file: File) {
   }
 }
 
-/** 换回上一次导入前的内容。媒体和备份那份互换，世界也互换，所以来回切换都对。 */
+/** 换回上一次导入前的内容。现在的内容又成了备份，所以可以来回切换。 */
 export async function restoreBackup() {
   if (getUI().trial) return toast('试玩中不能恢复，先结束试玩');
-  return exclusive(async () => {
-  try {
-    const b = readBackup();
-    if (!b) return;
-    const w = parseWorld(JSON.stringify(b.world));
-    // 备份里记着的旧文件必须一个不少地读出来；缺了或读不了就停下，世界和媒体都不动
-    const swap: { id: string; blob: Blob }[] = [];
-    const lost: string[] = [];
-    for (const id of b.swapped) {
-      const bak = await readBlob(BACKUP_MEDIA_PREFIX + id);
-      if (bak) swap.push({ id, blob: bak }); else lost.push(w.media.find((m) => m.id === id)?.name ?? id);
+  await exclusive('恢复', async () => {
+    try {
+      const b = readBackup();
+      if (!b) return;
+      const w = parseWorld(JSON.stringify(b.world));
+      if (b.swapped?.length) {
+        // 旧版备份：那时导入会覆盖同 ID 的文件，旧文件存在 __backup__/ 里。把它们存成新文件（不再覆盖），世界改为引用新文件
+        const files: { id: string; blob: Blob }[] = [];
+        const lost: string[] = [];
+        for (const id of b.swapped) {
+          const bak = await readRaw(BACKUP_MEDIA_PREFIX + id);
+          if (bak) files.push({ id, blob: bak }); else lost.push(w.media.find((m) => m.id === id)?.name ?? id);
+        }
+        if (lost.length) throw new Error(`备份里的这些媒体文件找不到了：${lost.join('、')}。没有恢复，现在的内容不变`);
+        await storeMedia(w, files);
+      } else {
+        // 新版备份：引用的文件都还在，检查一下
+        const lost: string[] = [];
+        for (const m of w.media) if (!(await readRaw(m.key ?? m.id))) lost.push(m.name);
+        if (lost.length && !confirm(`备份里的这些媒体文件在浏览器里找不到：${lost.join('、')}。仍然恢复吗？`)) return;
+      }
+      if (!(await commitImport(w, []))) return;
+      setUI({ mapId: w.maps[0].id, selection: null, views: {}, flowId: w.flows[0]?.id ?? null });
+      toast(`已恢复：${w.name}`);
+    } catch (e) {
+      toast('恢复失败：' + (e as Error).message);
     }
-    if (lost.length) throw new Error(`备份里的这些媒体文件找不到了：${lost.join('、')}。没有恢复，现在的内容不变`);
-    // 和导入走同一条路：现在的世界和被换下的文件存成新备份（__backup__/ 里换进现在的文件），所以可以再换回来
-    if (!(await commitImport(w, swap))) return;
-    setUI({ mapId: w.maps[0].id, selection: null, views: {}, flowId: w.flows[0]?.id ?? null });
-    toast(`已恢复：${w.name}`);
-  } catch (e) {
-    toast('恢复失败：' + (e as Error).message);
-  }
   });
 }
 
 /** 自动认出文件类型：本编辑器的工程，或 Rabbithole 的地图。 */
 export async function importAnyFile(file: File) {
   if (getUI().trial) return toast('试玩中不能导入，先结束试玩');
-  let rabbithole = false;
-  try {
-    if (/\.json$/i.test(file.name)) {
-      const j = JSON.parse(await file.text());
-      rabbithole = Array.isArray(j.levels) && !Array.isArray(j.maps);
-    } else {
-      const zip = await JSZip.loadAsync(file);
-      rabbithole = !zip.file('world.json') && !!zip.file('map.json');
+  await exclusive('导入', async () => { // 从读文件的第一步就占住：这期间不能试玩、保存、再导入
+    let rabbithole = false;
+    try {
+      if (/\.json$/i.test(file.name)) {
+        const j = JSON.parse(await file.text());
+        rabbithole = Array.isArray(j.levels) && !Array.isArray(j.maps);
+      } else {
+        const zip = await JSZip.loadAsync(file);
+        rabbithole = !zip.file('world.json') && !!zip.file('map.json');
+      }
+    } catch (e) {
+      return toast('读不了这个文件：' + (e as Error).message);
     }
-  } catch (e) {
-    return toast('读不了这个文件：' + (e as Error).message);
-  }
-  return exclusive(() => (rabbithole ? importRabbitholeFile(file) : importProject(file)));
+    await (rabbithole ? importRabbitholeFile(file) : importProject(file));
+  });
 }
 
 /** 用命令行带文件启动时（npm start -- 文件），打开页面就自动导入。 */
