@@ -272,6 +272,8 @@ export function MapCanvas({ world, map, mode, playerNumbers = false, follow, vie
     }
   };
 
+  useEffect(() => () => endBatch(), []); // 拖到一半切走了（换模式、关面板）：收尾，免得之后的修改都不进撤销
+
   const onUp = (e: React.PointerEvent) => {
     const dr = drag.current;
     drag.current = null;
@@ -315,6 +317,7 @@ export function MapCanvas({ world, map, mode, playerNumbers = false, follow, vie
         onPointerDown={onDown}
         onPointerMove={onMove}
         onPointerUp={onUp}
+        onPointerCancel={() => { drag.current = null; endBatch(); setPreview(null); }}
         onPointerLeave={() => setHover(null)}
         onContextMenu={(e) => e.preventDefault()}
       />

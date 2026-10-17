@@ -76,10 +76,13 @@ function placePlayer(mapId: string) {
   return { tokenId, pcId, name };
 }
 
+let playingBefore: UIState['nowPlaying'] = null;
+
 export function startTrial() {
   const mapId = getUI().mapId;
   if (!findMap(getWorld(), mapId)) return;
   beginSandbox();
+  playingBefore = getUI().nowPlaying;
   setUI({ trial: { mapId, players: [], current: 0, combat: false, moved: {}, turn: 1, msg: '', markSymbol: '!', markText: '', markMode: false }, selection: null, pendingConn: null });
   const p = placePlayer(mapId);
   if (!p) return endTrial();
@@ -101,7 +104,9 @@ export function switchTrialPlayer(i?: number) {
 
 export function endTrial() {
   endSandbox();
-  setUI({ trial: null, selection: null });
+  // 试玩里触发的播放只在主持人这边（没发给玩家），结束时换回试玩前在放的那个
+  setUI({ trial: null, selection: null, nowPlaying: playingBefore });
+  playingBefore = null;
 }
 
 export function trialMove(dx: number, dy: number) {

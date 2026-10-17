@@ -8,7 +8,8 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import JSZip from 'jszip';
 import crypto from 'node:crypto';
-import { checkWorld, readProject, writeFolder, zipProject } from './tsmap.mjs';
+import { checkWorld, readProject, writeFileAtomic, writeFolder, zipProject } from './tsmap.mjs';
+import { missingMedia } from '../src/schema.js';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const arg = process.argv[2];
@@ -37,6 +38,13 @@ const server = await createServer({
       // 存回硬盘：打开的是 .tsmap.zip 就覆盖它（先留一份 .bak）；否则在旁边新建 <名字>.tsmap.zip，原文件不动
       const target = !file ? null : isFolder || file.endsWith('.tsmap.zip') ? file
         : path.join(path.dirname(file), path.basename(file).replace(/\.(zip|json)$/i, '') + '.tsmap.zip');
+      // 这几个接口只回应本机地址：Host 不是 localhost 的请求（比如 DNS 重绑定，别的域名解析到 127.0.0.1）一律拒绝
+      const localHost = (req) => /^(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/.test(req.headers.host ?? '');
+      const sameOrigin = (req) => { const o = req.headers.origin; return !!o && localHost(req) && (o === `http://${req.headers.host}` || o === `https://${req.headers.host}`); };
+      s.middlewares.use((req, res, next) => {
+        if (/^\/__(save-target|load|save)(\?|\/|$)/.test(req.url ?? '') && !localHost(req)) { res.statusCode = 403; res.end('拒绝：只接受本机地址'); return; }
+        next();
+      });
       s.middlewares.use('/__save-target', (_req, res) => {
         if (!target) { res.statusCode = 404; res.end(); return; }
         res.setHeader('Content-Type', 'application/json');
@@ -44,8 +52,8 @@ const server = await createServer({
       });
       s.middlewares.use('/__save', (req, res) => {
         if (!target || req.method !== 'POST') { res.statusCode = 404; res.end(); return; }
-        const origin = req.headers.origin;
-        if (req.headers['x-save-token'] !== TOKEN || (origin && !/^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin))) {
+        // 口令对、而且 Origin 正好是这个编辑器自己（同一个主机和端口）才写
+        if (req.headers['x-save-token'] !== TOKEN || !sameOrigin(req)) {
           res.statusCode = 403; res.end('拒绝：保存请求不是编辑器发来的'); return;
         }
         const chunks = [];
@@ -59,16 +67,16 @@ const server = await createServer({
             if (!wj) throw new Error('发来的不是工程（没有 world.json）');
             const world = JSON.parse(await wj.async('string'));
             checkWorld(world);
+            const media = new Map();
+            for (const m of world.media) { const f = zip.file(`media/${m.id}`); if (f) media.set(m.id, await f.async('nodebuffer')); }
             if (isFolder) {
-              // 文件夹：写成 world.json + media/（不留 .bak，交给 git）
-              const media = new Map();
-              for (const m of world.media ?? []) { const f = zip.file(`media/${m.id}`); if (f) media.set(m.id, await f.async('nodebuffer')); }
+              // 文件夹：写成 world.json + media/（不留 .bak，交给 git）。缺的媒体如果文件夹里本来就有，writeFolder 会沿用
               writeFolder(target, world, media);
             } else {
-              if (fs.existsSync(target)) fs.copyFileSync(target, target + '.bak');
-              const tmp = `${target}.tmp-${process.pid}`;
-              fs.writeFileSync(tmp, body);
-              fs.renameSync(tmp, target);
+              const missing = missingMedia(world, (id) => media.has(id));
+              if (missing.length) throw new Error(`缺少媒体文件：${missing.map((m) => m.name).join('、')}`);
+              if (fs.existsSync(target)) writeFileAtomic(target + '.bak', fs.readFileSync(target));
+              writeFileAtomic(target, await zipProject(world, media));
             }
             console.log(`  已保存：${target}`);
             res.setHeader('Content-Type', 'application/json');
@@ -81,10 +89,15 @@ const server = await createServer({
       });
       s.middlewares.use('/__load', async (_req, res) => {
         if (!file) { res.statusCode = 404; res.end(); return; }
-        res.setHeader('Content-Type', 'application/octet-stream');
-        if (!isFolder) { fs.createReadStream(file).pipe(res); return; }
-        const { world, media } = await readProject(file); // 文件夹：临时打成 zip 交给浏览器
-        res.end(await zipProject(world, media));
+        if (!isFolder) { res.setHeader('Content-Type', 'application/octet-stream'); fs.createReadStream(file).pipe(res); return; }
+        try {
+          const { world, media } = await readProject(file); // 文件夹：临时打成 zip 交给浏览器（缺媒体就报错，不悄悄少文件）
+          res.setHeader('Content-Type', 'application/octet-stream');
+          res.end(await zipProject(world, media));
+        } catch (e) {
+          res.statusCode = 500;
+          res.end(String((e && e.message) || e));
+        }
       });
     },
   }],

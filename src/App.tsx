@@ -2,7 +2,7 @@ import { useEffect, useRef } from 'react';
 import { canEditMap, getUI, getWorld, redo, replaceWorld, setUI, undo, update, useUI, useWorld, type Mode, type Tab } from './store';
 import { autoLoadFromLauncher, checkDiskTarget, exportProject, findMap, hasBackup, importAnyFile, restoreBackup, saveToDisk } from './actions';
 import { demoWorld, emptyWorld } from './defaults';
-import { broadcastWorld, listen, openPlayerWindow, send } from './sync';
+import { broadcastWorld, listenAsEditor, openPlayerWindow, send } from './sync';
 import { storageOK } from './store';
 import { MapCanvas } from './components/MapCanvas';
 import { cellName } from './util';
@@ -65,7 +65,7 @@ function Editor() {
     if (f) setUI({ flowId: f.id });
   }, [ui.mapId]);
   useEffect(() => {
-    return listen((m) => { if (m.type === 'hello') send({ type: 'world', world: getWorld() }); });
+    return listenAsEditor(() => send({ type: 'world', world: getWorld() }));
   }, []);
 
   useEffect(() => {

@@ -4,3 +4,4 @@ release-build/
 release/
 .DS_Store
 *.local
+审查/*运行日志*.txt

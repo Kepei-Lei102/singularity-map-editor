@@ -5,7 +5,7 @@ import type { Connection, GameMap, MapObject, Secret, Token, World } from '../ty
 import { CONN_LABEL, TIERS, TIER_LABEL } from '../types';
 import {
   deleteMap, duplicateMap, fillEmptyCells, findMap, giveMapKnowledge, reshapeMaps, setVisionMode, findObj, fireAttach, hideSecret, itemsAt, jumpTo, resizeMap, revealSecret,
-  sameSel, setObjectState,
+  sameSel, setObjectState, setObjectStates,
 } from '../actions';
 import { nearestPc, type Nearest } from '../perception';
 import { cellName, parseCell, rangeName, uid } from '../util';
@@ -227,7 +227,7 @@ function ObjectInspector({ world, mapId, o, ui }: { world: World; mapId: string;
             ))}
           </div>
           {edit && <Area rows={2} placeholder="一行一个状态" value={o.states.join('\n')}
-            onChange={(v) => up((x) => { x.states = v.split('\n'); if (x.state >= x.states.length) x.state = 0; }, 'states')} />}
+            onChange={(v) => setObjectStates(mapId, o.id, v.split('\n'))} />}
           {run && <div className="hint">带团时切换状态会写进记录。</div>}
         </Section>
       )}

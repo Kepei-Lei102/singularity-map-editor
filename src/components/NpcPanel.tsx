@@ -39,8 +39,12 @@ export function NpcPanel() {
         <input ref={fileRef} type="file" accept=".json" hidden onChange={async (e) => {
           const f = e.target.files?.[0]; e.target.value = '';
           if (!f) return;
-          try { const data = JSON.parse(await f.text()); importNpcs(Array.isArray(data) ? data : data.npcs ?? []); toast('NPC 已导入'); }
-          catch { toast('这个文件读不出来'); }
+          let data: unknown;
+          try { data = JSON.parse(await f.text()); } catch { return toast('这个文件不是有效的 JSON'); }
+          const list = Array.isArray(data) ? data : (data as { npcs?: unknown })?.npcs;
+          if (!Array.isArray(list)) return toast('文件里没有 NPC 列表（应该是一个数组，或者 { "npcs": [...] }）');
+          try { const warn = importNpcs(list); toast(`已导入 ${list.length} 位 NPC${warn.length ? '。注意：' + warn.join('；') : ''}`); }
+          catch (err) { toast('NPC 导入失败：' + (err as Error).message); }
         }} />
       </span>
     }>

@@ -216,6 +216,8 @@ export interface FlowNode {
   status: 'predicted' | 'happened';
   at?: number;
   session?: number;
+  via?: Id; // 发生时实际是从哪条连线过来的（记下来，不靠时间去猜）
+  applied?: { mapId: Id; objectId: Id; from: number; to: number }; // 发生时真的改了哪个物件（撤销时改回去）
 }
 
 export interface FlowEdge {
@@ -331,4 +333,5 @@ export interface World {
   visionMode: 'shared' | 'individual'; // 视野：全队共享 / 各自独立（A 看到的，B 默认看不到）
   marks: Mark[];
   npcs: Npc[];
+  labels?: Record<Id, string>; // 只在发给玩家窗口的世界里有：删东西之前算好的编号，保证和主持人那边一致
 }

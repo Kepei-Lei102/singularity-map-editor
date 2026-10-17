@@ -2,7 +2,7 @@ import type { Draft } from 'immer';
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { beginBatch, canEditLines, endBatch, getWorld, setUI, update, useUI, useWorld } from '../store';
 import type { Flow, FlowEdge, FlowNode, World } from '../types';
-import { NODE_H, NODE_W, addChildNode, autoLayout, findObj, partyTags, reachable, setNodeStatus } from '../actions';
+import { NODE_H, NODE_W, addChildNode, autoLayout, findObj, incomingCandidates, partyTags, reachable, setNodeStatus, setNodeVia } from '../actions';
 import { PATHWAY_SUGGESTIONS } from '../defaults';
 import { uid } from '../util';
 import { Area, Row, Txt } from './fields';
@@ -131,12 +131,12 @@ export function FlowPanel() {
   const tags = partyTags(w);
   const ok = reachable(flow, tags);
   const byId = new Map(flow.nodes.map((n) => [n.id, n]));
+  // 走过的连线：发生时记下的那条（via）；旧存档没记的，按 incomingCandidates 的规则补一条（条件满足的优先）
   const takenEdges = new Set<string>();
   for (const n of flow.nodes) {
     if (n.status !== 'happened') continue;
-    const best = flow.edges
-      .filter((e) => e.to === n.id && byId.get(e.from)?.status === 'happened' && (byId.get(e.from)!.at ?? 0) <= (n.at ?? 0))
-      .sort((a, b) => (byId.get(b.from)!.at ?? 0) - (byId.get(a.from)!.at ?? 0))[0];
+    const via = n.via && flow.edges.find((e) => e.id === n.via && byId.get(e.from)?.status === 'happened');
+    const best = via || incomingCandidates(flow, n.id, tags).find((e) => (byId.get(e.from)!.at ?? 0) <= (n.at ?? 0));
     if (best) takenEdges.add(best.id);
   }
   const toGraph = (e: { clientX: number; clientY: number }) => {
@@ -218,7 +218,7 @@ export function FlowPanel() {
     <div className="flow-panel" style={{ height }}>
       {head}
       <div className="flow-body">
-        <svg ref={svg} className="flow-svg" onPointerDown={onBgDown} onPointerMove={onMove} onPointerUp={onUp} onDoubleClick={onDouble}>
+        <svg ref={svg} className="flow-svg" onPointerDown={onBgDown} onPointerMove={onMove} onPointerUp={onUp} onPointerCancel={() => { drag.current = null; endBatch(); setLink(null); }} onDoubleClick={onDouble}>
           <defs>
             {(['pred', 'taken', 'lock'] as const).map((c) => (
               <marker key={c} id={`arrow-${c}`} viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
@@ -341,6 +341,18 @@ function NodeSide({ world, flow, n, editable, run, locked, onSelect }: {
           {eo && n.effect && <div className="muted">→ {eo.name}：{eo.states[n.effect.toState]}</div>}
         </>
       )}
+      {n.status === 'happened' && (() => {
+        const cands = incomingCandidates(flow, n.id, partyTags(world));
+        if (cands.length < 2) return null;
+        return (
+          <Row label="从哪里来">
+            <select value={n.via ?? ''} onChange={(e) => setNodeVia(flow.id, n.id, e.target.value)}>
+              {!n.via && <option value="">（没记）</option>}
+              {cands.map((e) => <option key={e.id} value={e.id}>{byId.get(e.from)?.title}{e.label ? ` · ${e.label}` : ''}{e.condition && !partyTags(world).has(e.condition) ? ' 🔒' : ''}</option>)}
+            </select>
+          </Row>
+        );
+      })()}
       <div className="btns">
         {run && !locked && (n.status === 'predicted'
           ? <button className="on" onClick={() => setNodeStatus(flow.id, n.id, 'happened')}>发生了</button>

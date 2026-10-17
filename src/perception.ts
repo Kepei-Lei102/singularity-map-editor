@@ -39,14 +39,34 @@ export function sightCosts(world: World, map: GameMap) {
   return cost;
 }
 
+/**
+ * 视线：沿 Bresenham 线累加路上格子的衰减（起点和目标格不算）。
+ * 斜着跨一步时，如果两侧的两格都挡视线（两堵墙在拐角处碰在一起），视线过不去——墙角没有缝。
+ */
 export function canSee(cost: Float32Array, width: number, x0: number, y0: number, x1: number, y1: number) {
   const line = cellLine(x0, y0, x1, y1);
   let sum = 0;
-  for (let i = 1; i < line.length - 1; i++) {
-    sum += cost[line[i][1] * width + line[i][0]];
+  for (let i = 1; i < line.length; i++) {
+    const [px, py] = line[i - 1], [x, y] = line[i];
+    if (px !== x && py !== y && cost[py * width + x] >= 1 && cost[y * width + px] >= 1) return false;
+    if (i === line.length - 1) break;
+    sum += cost[y * width + x];
     if (sum >= 1) return false;
   }
   return true;
+}
+
+/** 某个角色看这个物件：物件上任何一格在视线里都算看得见；返回看得见的格子里最近的距离（都看不见就返回最近那格、los=false）。 */
+function sightToObject(cost: Float32Array, width: number, t: { x: number; y: number }, o: MapObject) {
+  let best: { d: number; los: boolean } | null = null;
+  const cells: [number, number, number][] = [];
+  for (let y = o.y; y < o.y + o.h; y++) for (let x = o.x; x < o.x + o.w; x++) cells.push([gridDist(x - t.x, y - t.y), x, y]);
+  cells.sort((a, b) => a[0] - b[0]);
+  for (const [d, x, y] of cells) {
+    if (canSee(cost, width, t.x, t.y, x, y)) return { d, los: true };
+    best ??= { d, los: false };
+  }
+  return best ?? { ...distToRect(t.x, t.y, o), los: false };
 }
 
 /** 从这些棋子的眼睛看出去，能看见的格子（1 = 看得见）。 */
@@ -88,13 +108,15 @@ export function withVision(next: World, prev: World): World {
     const n = m.width * m.height;
     const views: Record<string, VisionLayer> = { ...m.views };
     let vchanged = false;
-    for (const t of m.tokens) {
-      if (!t.pcId) continue;
-      const vis = visionFrom(next, m, [t]);
-      const L = views[t.pcId] ?? emptyLayer(n);
-      let ch = !m.views[t.pcId];
+    // 按角色分组：同一个角色在这张图上有几个棋子（比如分身、附身），几双眼睛看到的合在一起
+    const eyes = new Map<string, typeof m.tokens>();
+    for (const t of m.tokens) if (t.pcId) eyes.set(t.pcId, [...(eyes.get(t.pcId) ?? []), t]);
+    for (const [pc, ts] of eyes) {
+      const vis = visionFrom(next, m, ts);
+      const L = views[pc] ?? emptyLayer(n);
+      let ch = !m.views[pc];
       const fog = L.fog.map((f, k) => { const nf = step(f, vis[k]); if (nf !== f) ch = true; return nf; });
-      if (ch) { views[t.pcId] = { ...L, fog }; vchanged = true; }
+      if (ch) { views[pc] = { ...L, fog }; vchanged = true; }
     }
     // 不在这张图上的人：之前看得见的都变成记忆
     for (const [pc, L] of Object.entries(m.views))
@@ -122,8 +144,7 @@ export function nearestPc(world: World, map: GameMap, o: MapObject): Nearest | n
   let best: Nearest | null = null;
   for (const t of map.tokens) {
     if (!t.pcId) continue;
-    const { d, nx, ny } = distToRect(t.x, t.y, o);
-    const los = canSee(cost, map.width, t.x, t.y, nx, ny);
+    const { d, los } = sightToObject(cost, map.width, t, o);
     const better = !best || (los && !best.los) || (los === best.los && d < best.d);
     if (better) best = { tokenId: t.id, name: t.name, d, los };
   }
@@ -135,8 +156,10 @@ export function pcWithin(world: World, map: GameMap, o: MapObject, range: number
   const cost = sightCosts(world, map);
   return map.tokens.find((t) => {
     if (!t.pcId) return false;
-    const { d, nx, ny } = distToRect(t.x, t.y, o);
-    return d <= range && canSee(cost, map.width, t.x, t.y, nx, ny);
+    // 范围内的格子里有一格看得见就行（大件家具的另一头露在外面也算）
+    for (let y = o.y; y < o.y + o.h; y++) for (let x = o.x; x < o.x + o.w; x++)
+      if (gridDist(x - t.x, y - t.y) <= range && canSee(cost, map.width, t.x, t.y, x, y)) return true;
+    return false;
   });
 }
 
@@ -149,7 +172,12 @@ export function canHear(world: World, map: GameMap, a: { x: number; y: number },
   if (gridDist(a.x - b.x, a.y - b.y) > HEAR_RANGE) return false;
   const walls = new Set(world.terrains.filter((t) => t.blocksMove && t.visionCoef >= 99).map((t) => t.id));
   const line = cellLine(a.x, a.y, b.x, b.y);
-  for (let i = 1; i < line.length - 1; i++) if (walls.has(map.cells[line[i][1] * map.width + line[i][0]])) return false;
+  const wall = (x: number, y: number) => walls.has(map.cells[y * map.width + x]);
+  for (let i = 1; i < line.length; i++) {
+    const [px, py] = line[i - 1], [x, y] = line[i];
+    if (px !== x && py !== y && wall(x, py) && wall(px, y)) return false; // 墙角碰在一起，声音也过不去
+    if (i < line.length - 1 && wall(x, y)) return false;
+  }
   return true;
 }
 

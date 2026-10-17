@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { listen, send } from '../sync';
+import { listenAsPlayer } from '../sync';
 import type { World } from '../types';
 import { TIER_LABEL } from '../types';
 import { MapCanvas } from './MapCanvas';
@@ -14,12 +14,11 @@ export function PlayerView() {
   const [viewer, setViewer] = useState('');
 
   useEffect(() => {
-    const off = listen((m) => {
+    const off = listenAsPlayer((m) => {
       if (m.type === 'world') setWorld(m.world);
       else if (m.type === 'play') setMedia({ mediaId: m.mediaId, label: m.label, mime: m.mime, blob: m.blob });
       else if (m.type === 'stop') setMedia(null);
     });
-    send({ type: 'hello' });
     document.title = '奇点之后 · 玩家视角';
     return off;
   }, []);

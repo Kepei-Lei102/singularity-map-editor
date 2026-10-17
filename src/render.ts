@@ -24,20 +24,65 @@ export interface RenderOpts {
 
 export interface Numbered { label: string; kind: 'object' | 'zone' | 'token' | 'conn'; id: string; x: number; y: number; w: number; h: number; name: string }
 
-/** 编号规则（主编辑器、玩家窗口、给 AI 的图都用这一套）：物件和触发区按顺序 O/Z，棋子 T，连接点 C。 */
+/** 编号规则（主编辑器、玩家窗口、给 AI 的图都用这一套）：物件和触发区按顺序 O/Z，棋子 T，连接点 C。
+ * 发给玩家的世界删过东西，编号以它带来的 labels 为准（删之前算好的），保证和主持人那边一致。 */
 export function numbering(world: World, map: GameMap, player = false): Numbered[] {
   const out: Numbered[] = [];
+  const L = (id: string, fallback: string) => world.labels?.[id] ?? fallback;
   map.objects.forEach((o, i) => {
     if (player && (o.kind === 'zone' || o.hidden)) return;
-    out.push({ label: `${o.kind === 'zone' ? 'Z' : 'O'}${i + 1}`, kind: o.kind, id: o.id, x: o.x, y: o.y, w: o.w, h: o.h, name: o.name });
+    out.push({ label: L(o.id, `${o.kind === 'zone' ? 'Z' : 'O'}${i + 1}`), kind: o.kind, id: o.id, x: o.x, y: o.y, w: o.w, h: o.h, name: o.name });
   });
-  map.tokens.forEach((t, i) => out.push({ label: `T${i + 1}`, kind: 'token', id: t.id, x: t.x, y: t.y, w: 1, h: 1, name: t.name }));
+  map.tokens.forEach((t, i) => out.push({ label: L(t.id, `T${i + 1}`), kind: 'token', id: t.id, x: t.x, y: t.y, w: 1, h: 1, name: t.name }));
   world.connections.filter((c) => c.a.mapId === map.id || c.b.mapId === map.id).forEach((c, i) => {
     if (player && c.hidden) return;
     const p = c.a.mapId === map.id ? c.a : c.b;
-    out.push({ label: `C${i + 1}`, kind: 'conn', id: c.id, x: p.x, y: p.y, w: 1, h: 1, name: c.label || CONN_LABEL[c.kind] });
+    out.push({ label: L(c.id, `C${i + 1}`), kind: 'conn', id: c.id, x: p.x, y: p.y, w: 1, h: 1, name: c.label || CONN_LABEL[c.kind] });
   });
   return out;
+}
+
+export interface PlayerNumbered extends Numbered { state: string | null; height: number; icon: string; memory: boolean }
+
+/**
+ * 玩家看得到的编号（玩家窗口、试玩、给 AI 的"玩家视角"图都用这一份）。map 是这个人眼里的那张图（fog / seen 已换成他的）。
+ * - 物件：现在看得见的按实时的样子；看不见、但记得的按记忆（位置、尺寸、名字、状态都是记忆里的）；
+ *   主持人后来删掉的物件，记忆里还在，但主持人那边已经没有编号，就不标号（编号对不上任何东西）。
+ * - 棋子：玩家角色总标；其余的看得见才标。连接点：没隐藏、看得见才标（连接点不进记忆）。
+ */
+export function playerNumbering(world: World, map: GameMap): PlayerNumbered[] {
+  const W = map.width;
+  const liveRect = (n: { x: number; y: number; w: number; h: number }) => {
+    for (let y = Math.max(0, n.y); y < Math.min(map.height, n.y + n.h); y++)
+      for (let x = Math.max(0, n.x); x < Math.min(W, n.x + n.w); x++) if (map.fog[y * W + x] === 1) return true;
+    return false;
+  };
+  const all = numbering(world, map, false);
+  const label = new Map([...all.map((n) => [n.id, n.label] as const), ...Object.entries(world.labels ?? {})]); // 玩家世界里删掉的（隐藏的）物件，编号在 labels 里
+  const out: PlayerNumbered[] = [];
+  const shown = new Set<string>();
+  for (const o of map.objects) {
+    if (o.kind !== 'object' || o.hidden || !liveRect(o)) continue;
+    shown.add(o.id);
+    out.push({ label: label.get(o.id)!, kind: 'object', id: o.id, x: o.x, y: o.y, w: o.w, h: o.h, name: o.name, icon: o.icon, height: o.height,
+      state: o.states.length > 1 ? o.states[o.state] : null, memory: false });
+  }
+  for (const r of map.seen.objects) {
+    const lb = label.get(r.id);
+    if (shown.has(r.id) || !lb || liveRect(r)) continue;
+    out.push({ label: lb, kind: 'object', id: r.id, x: r.x, y: r.y, w: r.w, h: r.h, name: r.name, icon: r.icon, height: r.height, state: r.stateLabel, memory: true });
+  }
+  for (const n of all) {
+    if (n.kind === 'token') {
+      const t = map.tokens.find((x) => x.id === n.id);
+      if (t && (t.pcId || map.fog[t.y * W + t.x] === 1)) out.push({ ...n, state: null, height: 0, icon: '', memory: false });
+    } else if (n.kind === 'conn') {
+      const c = world.connections.find((x) => x.id === n.id);
+      if (c && !c.hidden && map.fog[n.y * W + n.x] === 1) out.push({ ...n, state: null, height: 0, icon: '', memory: false });
+    }
+  }
+  const order = (l: string) => [l[0] === 'O' ? 0 : l[0] === 'T' ? 1 : 2, Number(l.slice(1))];
+  return out.sort((a, b) => { const x = order(a.label), y = order(b.label); return x[0] - y[0] || x[1] - y[1]; });
 }
 
 const BADGE_COLOR: Record<Numbered['kind'], string> = { object: '#ffd166', zone: '#9ec1ff', token: '#b5e6b8', conn: '#d9b8ff' };
@@ -477,25 +522,7 @@ export function render(
   }
   // 屏幕坐标里的叠加层：编号、坐标尺
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  if (o.numbers) {
-    const visible = (n: { x: number; y: number; w: number; h: number }) => {
-      for (let y = n.y; y < n.y + n.h; y++) for (let x = n.x; x < n.x + n.w; x++) if (map.fog[y * W + x] === 1) return true;
-      return false;
-    };
-    let list = numbering(world, map, player);
-    if (player) {
-      // 玩家：看得见的按现在的位置；灰区里的按记忆里的位置（没记住的就不标）；连接点只在看得见时标
-      const mem = new Map(map.seen.objects.map((r) => [r.id, r]));
-      list = list.flatMap((n) => {
-        if (n.kind === 'token') return map.tokens.find((t) => t.id === n.id)?.pcId || map.fog[n.y * W + n.x] === 1 ? [n] : [];
-        if (n.kind === 'conn') return map.fog[n.y * W + n.x] === 1 ? [n] : [];
-        if (visible(n)) return [n];
-        const r = mem.get(n.id);
-        return r ? [{ ...n, x: r.x, y: r.y, w: r.w, h: r.h }] : [];
-      });
-    }
-    drawBadges(ctx, list, view, () => true);
-  }
+  if (o.numbers) drawBadges(ctx, player ? playerNumbering(world, map) : numbering(world, map), view, () => true);
   if (!player && map.rooms.length) drawRoomLabels(ctx, map, view);
   drawMarks(ctx, world, map, view, player ? o.viewer ?? null : null);
   if (!player && map.spawn) {

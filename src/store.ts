@@ -33,7 +33,7 @@ const listeners = new Set<() => void>();
 let saveTimer: number | undefined;
 // 沙盒（试玩）：开始时记下世界和撤销记录的长度，结束时整个换回来
 let sandbox: { world: World; past: World[]; future: World[] } | null = null;
-let batchFuture: World[] | null = null; // 拖动开始前的重做记录：拖动没改东西就还回去
+let batchStart: World | null = null; // 拖动开始时的世界：拖动中第一次真的改了东西才把它记进撤销
 
 function emit() {
   listeners.forEach((l) => l());
@@ -49,9 +49,11 @@ function emit() {
 }
 
 export const getWorld = () => world;
+/** 真正的世界：试玩中是试玩开始前那份（发给玩家、保存都用它）。 */
+export const getRealWorld = () => sandbox?.world ?? world;
 
-function pushHistory() {
-  past.push(world);
+function pushHistory(at: World = world) {
+  past.push(at);
   if (past.length > 200) past.shift();
   future = [];
 }
@@ -63,7 +65,8 @@ export function update(fn: (d: Draft<World>) => void, opts: { coalesce?: string;
   let next = produce(world, fn);
   if (next === world) return;
   next = produce(withVision(next, world), syncMemory);
-  if (!batching && opts.history !== false) {
+  if (batching && batchStart) { pushHistory(batchStart); batchStart = null; } // 拖动里第一次真的改了东西，才记一步撤销
+  else if (!batching && opts.history !== false) {
     const now = Date.now();
     const merge = opts.coalesce && lastCoalesce && lastCoalesce.key === opts.coalesce && now - lastCoalesce.at < 1000;
     if (!merge) pushHistory();
@@ -73,19 +76,16 @@ export function update(fn: (d: Draft<World>) => void, opts: { coalesce?: string;
   emit();
 }
 
-/** 拖动开始时调用：整次拖动只占一步撤销。 */
+/** 拖动开始时调用：整次拖动只占一步撤销。只是点一下、没拖动，撤销和重做记录都不碰。 */
 export function beginBatch() {
   if (batching) return;
-  batchFuture = future;
-  pushHistory();
+  batchStart = world;
   batching = true;
   lastCoalesce = null;
 }
 export function endBatch() {
-  if (!batching) return;
   batching = false;
-  if (past[past.length - 1] === world) { past.pop(); if (batchFuture) future = batchFuture; } // 只是点了一下，没拖：撤销和重做都原样
-  batchFuture = null;
+  batchStart = null;
 }
 
 export function undo() {
@@ -222,6 +222,7 @@ export const canEditMap = (s: UIState) => s.mode === 'edit' || s.unlock;
 export const canEditLines = (s: UIState) => s.mode === 'prep' || (s.mode === 'run' && s.unlock);
 
 export function beginSandbox() {
+  endBatch(); // 万一还有没收尾的拖动
   if (!sandbox) sandbox = { world, past: [...past], future: [...future] };
 }
 export function endSandbox() {
@@ -230,6 +231,8 @@ export function endSandbox() {
   past = sandbox.past; // 完整还回试玩前的撤销/重做记录（试玩中被挤掉的、被撤销掉的都回来）
   future = sandbox.future;
   sandbox = null;
+  batching = false;
+  batchStart = null;
   lastCoalesce = null;
   emit();
 }

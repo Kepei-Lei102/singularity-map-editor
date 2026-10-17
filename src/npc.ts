@@ -1,3 +1,4 @@
+import { current } from 'immer';
 import type { Npc, NpcProgress, World } from './types';
 import { update } from './store';
 import { log } from './actions';
@@ -93,29 +94,80 @@ export const npcReset = (id: string) =>
 export const npcSkipWait = (id: string, at: number) =>
   setProgress(id, (p) => { if (p.advisedAt) p.advisedAt -= Math.max(0, at - Date.now()); }, '主持人跳过了等待');
 
-/** 导入：一份 NPC 的 JSON 数组（别的模组也能用这个格式）。同名的覆盖，进度保留。 */
-export function importNpcs(list: Partial<Npc>[]) {
+/** 导入前检查一位 NPC：缺名字、字段类型不对就报错（一位都不导入）。 */
+function checkNpc(raw: unknown, i: number): asserts raw is Partial<Npc> & { name: string } {
+  const bad = (what: string) => { throw new Error(`第 ${i + 1} 位 NPC ${what}`); };
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) bad('不是对象');
+  const r = raw as Record<string, unknown>;
+  if (typeof r.name !== 'string' || !r.name.trim()) bad('没有名字');
+  for (const k of ['summary', 'icon', 'color', 'persona', 'request', 'notes', 'extra'])
+    if (r[k] !== undefined && typeof r[k] !== 'string') bad(`的 ${k} 应该是文字`);
+  if (r.months !== undefined && (!Array.isArray(r.months) || !r.months.every((m) => Number.isInteger(m) && m >= 1 && m <= 12))) bad('的 months 应该是 1–12 的整数列表');
+  if (r.returnAfterDays !== undefined && !(typeof r.returnAfterDays === 'number' && r.returnAfterDays >= 0)) bad('的 returnAfterDays 应该是不小于 0 的数字');
+  if (r.place != null) {
+    const p = r.place as Record<string, unknown>;
+    if (typeof p !== 'object' || typeof p.mapId !== 'string' || !Number.isInteger(p.x) || !Number.isInteger(p.y)) bad('的 place 应该是 { mapId, x, y }（整数格子）');
+  }
+  for (const k of ['topics', 'beats', 'outcomes'])
+    if (r[k] !== undefined && (!Array.isArray(r[k]) || !(r[k] as unknown[]).every((x) => x && typeof x === 'object'))) bad(`的 ${k} 应该是对象列表`);
+  if (Array.isArray(r.beats) && !r.beats.every((b) => typeof b.afterDays === 'number' && typeof (b.text ?? '') === 'string')) bad('的 beats 每一条都要有 afterDays（天数）和 text');
+}
+
+/**
+ * 导入：一份 NPC 的 JSON 数组（别的模组也能用这个格式）。同名的覆盖，进度保留。
+ * 进度里记着结果和近况的 ID，所以覆盖时要把新内容对到旧 ID 上：
+ *   有 ID 的按 ID（导出再导入、改了顺序都对得上）；没 ID 的，结果按名字、近况按原文，必须唯一才对上；对不上的算新的。
+ * 旧进度引用的结果或近况在新内容里没了：近况从"已讲过"里去掉，结果清掉并在返回的提示里说一声。
+ */
+export function importNpcs(input: unknown[]): string[] {
+  input.forEach(checkNpc);
+  const list = input as (Partial<Npc> & { name: string })[];
+  const warnings: string[] = [];
   update((d) => {
     for (const raw of list) {
       const base = newNpc();
+      const fresh = <T extends { id?: string }>(xs: T[]) => { const seen = new Set<string>(); return xs.map((x) => { const id = typeof x.id === 'string' && x.id && !seen.has(x.id) ? x.id : uid(); seen.add(id); return { ...x, id }; }); };
       const n: Npc = {
-        ...base, ...raw, id: raw.id ?? base.id,
-        topics: (raw.topics ?? []).map((t) => ({ ...t, id: t.id ?? uid() })),
-        beats: (raw.beats ?? []).map((b) => ({ ...b, id: b.id ?? uid() })),
-        outcomes: (raw.outcomes ?? base.outcomes).map((o) => ({ ...o, id: o.id ?? uid() })),
-        progress: raw.progress ?? base.progress,
+        ...base, ...raw, id: base.id,
+        topics: fresh(raw.topics ?? []),
+        beats: fresh(raw.beats ?? []),
+        outcomes: fresh(raw.outcomes ?? base.outcomes),
+        progress: raw.progress && typeof raw.progress === 'object' ? { ...base.progress, ...raw.progress, beatsDone: Array.isArray(raw.progress.beatsDone) ? raw.progress.beatsDone : [] } : base.progress,
       };
       const i = d.npcs.findIndex((x) => x.name === n.name);
-      if (i >= 0) {
-        const old = d.npcs[i];
-        // 进度里记着结果和近况的 ID：结果按名字（好结果 / 漂亮解……）、近况按顺序沿用旧 ID，引用就不会断
-        n.outcomes = n.outcomes.map((o) => ({ ...o, id: old.outcomes.find((x) => x.label === o.label)?.id ?? o.id }));
-        n.beats = n.beats.map((b, k) => ({ ...b, id: old.beats[k]?.id ?? b.id }));
-        d.npcs[i] = { ...n, id: old.id, progress: old.progress };
-      } else d.npcs.push(n);
+      if (i < 0) {
+        if (raw.id && !d.npcs.some((x) => x.id === raw.id)) n.id = raw.id;
+        d.npcs.push(n);
+        continue;
+      }
+      const old = d.npcs[i];
+      const match = <T extends { id: string }>(news: T[], olds: T[], given: (x: T) => boolean, key: (x: T) => string) => {
+        const taken = new Set<string>();
+        return news.map((x) => {
+          if (given(x) && olds.some((o) => o.id === x.id)) { taken.add(x.id); return x; } // 带着旧 ID 来的
+          const same = olds.filter((o) => key(o) === key(x) && !taken.has(o.id));
+          const others = news.filter((y) => y !== x && key(y) === key(x));
+          if (same.length === 1 && !others.length) { taken.add(same[0].id); return { ...x, id: same[0].id }; }
+          return x;
+        });
+      };
+      const hadId = (xs: { id?: string }[] | undefined) => new Set((xs ?? []).map((x) => x.id).filter(Boolean));
+      const outIds = hadId(raw.outcomes), beatIds = hadId(raw.beats);
+      n.outcomes = match(n.outcomes, old.outcomes, (o) => outIds.has(o.id), (o) => o.label);
+      n.beats = match(n.beats, old.beats, (b) => beatIds.has(b.id), (b) => (b.text ?? '').trim());
+      const progress = structuredClone(current(old.progress)) as NpcProgress; // old 是 immer 的草稿，先取出普通对象
+      const lostBeats = progress.beatsDone.filter((id) => !n.beats.some((b) => b.id === id));
+      if (lostBeats.length) { progress.beatsDone = progress.beatsDone.filter((id) => !lostBeats.includes(id)); warnings.push(`${n.name}：${lostBeats.length} 条已讲过的近况在新内容里找不到了`); }
+      if (progress.outcomeId && !n.outcomes.some((o) => o.id === progress.outcomeId)) {
+        const label = old.outcomes.find((o) => o.id === progress.outcomeId)?.label ?? '';
+        delete progress.outcomeId;
+        warnings.push(`${n.name}：之前判的结果「${label}」在新内容里没有了，需要重新判`);
+      }
+      d.npcs[i] = { ...n, id: old.id, progress };
     }
     log(d, 'note', `导入了 ${list.length} 位 NPC`);
   });
+  return warnings;
 }
 
 export function exportNpcs(w: World) {

@@ -64,6 +64,38 @@ function extractJSON(text: string): { nodes?: AINode[]; edges?: AIEdge[] } {
   return JSON.parse(body);
 }
 
+/** AI 交回的东西先整份检查一遍：字段类型、ID 唯一。有问题就报错，一样都不合并。 */
+function checkReply(nodes: unknown[], edges: unknown[]) {
+  const bad = (what: string) => { throw new Error(`AI 交回的 JSON 有问题：${what}。请让 AI 按说明里的格式重新交一份。`); };
+  const optStr = (v: unknown, what: string) => { if (v !== undefined && v !== null && typeof v !== 'string') bad(`${what} 应该是文字`); };
+  const ids = new Set<string>();
+  nodes.forEach((n, i) => {
+    if (!n || typeof n !== 'object') bad(`第 ${i + 1} 个事件不是对象`);
+    const x = n as Record<string, unknown>;
+    if (typeof x.id !== 'string' || !x.id) bad(`第 ${i + 1} 个事件没有文字的 id`);
+    const id = x.id as string;
+    if (ids.has(id)) bad(`事件 id「${id}」出现了两次`);
+    ids.add(id);
+    optStr(x.title, `事件「${id}」的 title`);
+    optStr(x.kind, `事件「${id}」的 kind`);
+    if (x.effect !== undefined && x.effect !== null) {
+      const e = x.effect as Record<string, unknown>;
+      if (typeof e !== 'object') bad(`事件「${id}」的 effect 应该是对象或 null`);
+      optStr(e.mapId, `事件「${id}」的 effect.mapId`);
+      optStr(e.objectId, `事件「${id}」的 effect.objectId`);
+      if (e.toState !== undefined && typeof e.toState !== 'string' && !Number.isInteger(e.toState)) bad(`事件「${id}」的 effect.toState 应该是状态序号（整数）或状态名`);
+    }
+  });
+  edges.forEach((e, i) => {
+    if (!e || typeof e !== 'object') bad(`第 ${i + 1} 条连线不是对象`);
+    const x = e as Record<string, unknown>;
+    if (typeof x.from !== 'string' || typeof x.to !== 'string') bad(`第 ${i + 1} 条连线的 from / to 应该是事件 id（文字）`);
+    optStr(x.label, `第 ${i + 1} 条连线的 label`);
+    optStr(x.condition, `第 ${i + 1} 条连线的 condition`);
+    if (x.chance !== undefined && x.chance !== null && (typeof x.chance !== 'number' || !Number.isFinite(x.chance))) bad(`第 ${i + 1} 条连线的 chance 应该是数字或 null`);
+  });
+}
+
 /**
  * 合并 AI 交回的整份预测分支：
  * - 已有事件：更新文字/类型/物件变化，保留位置和带团状态；AI 漏掉的不删，提示一下。
@@ -76,6 +108,7 @@ export function applyAIReply(w: World, flowId: string, text: string): { added: n
   let data: ReturnType<typeof extractJSON>;
   try { data = extractJSON(text); } catch { throw new Error('没读出 JSON。请粘贴 AI 回复里的 json 代码块。'); }
   if (!Array.isArray(data.nodes) || !Array.isArray(data.edges)) throw new Error('JSON 里需要有 nodes 和 edges 两个数组。');
+  checkReply(data.nodes, data.edges); // 类型不对、ID 重复：整份不合并，世界不动
 
   const warnings: string[] = [];
   const objects = new Map(w.maps.flatMap((m) => m.objects.map((o) => [o.id, { m, o }] as const)));
@@ -88,7 +121,7 @@ export function applyAIReply(w: World, flowId: string, text: string): { added: n
     const e = n.effect;
     if (!e) return null;
     const hit = e.objectId ? objects.get(e.objectId) : undefined;
-    const idx = !hit ? -1 : typeof e.toState === 'number' ? e.toState : hit.o.states.indexOf(String(e.toState));
+    const idx = !hit ? -1 : typeof e.toState === 'number' ? e.toState : hit.o.states.indexOf(String(e.toState)); // 已经检查过：数字一定是整数
     if (hit && idx >= 0 && idx < hit.o.states.length) return { mapId: hit.m.id, objectId: hit.o.id, toState: idx };
     warnings.push(`「${n.title}」的物件变化对不上，已忽略`);
     return null;
@@ -121,6 +154,7 @@ export function applyAIReply(w: World, flowId: string, text: string): { added: n
   for (const e of data.edges) {
     const from = idMap.get(e?.from), to = idMap.get(e?.to);
     if (!from || !to) { warnings.push(`跳过连线 ${e?.from} → ${e?.to}：找不到事件`); continue; }
+    if (edges.some((x) => x.from === from && x.to === to)) { warnings.push(`连线 ${e.from} → ${e.to} 重复了，只留第一条`); continue; }
     const old = f.edges.find((x) => x.from === from && x.to === to);
     const chance = typeof e.chance === 'number' ? Math.max(0, Math.min(100, Math.round(e.chance))) : null;
     edges.push({ id: old?.id ?? uid(), from, to, label: e.label ?? '', condition: (e.condition ?? '').trim(), chance });

@@ -1,6 +1,7 @@
 import type { GameMap, World } from './types';
 import { CONN_LABEL } from './types';
-import { numbering, render, type Numbered } from './render';
+import { numbering, playerNumbering, render, type Numbered, type PlayerNumbered } from './render';
+import { playerWorld } from './sync';
 import { CS, cellName, colName, rangeName } from './util';
 
 // 给 AI 看的地图：四周标坐标，每样东西打编号（和主编辑器的"显示编号"一致），旁边附图例（编号 ↔ 名字/状态/坐标/id）。
@@ -10,21 +11,13 @@ const CELL = 40;
 const M = 34;
 const LEGEND_W = 440;
 
-export function renderMapForAI(world: World, map: GameMap, view: 'kp' | 'player' = 'kp'): HTMLCanvasElement {
+export function renderMapForAI(world0: World, map0: GameMap, view: 'kp' | 'player' = 'kp'): HTMLCanvasElement {
   const player = view === 'player';
+  // 玩家视角：先换成发给玩家窗口的那份世界（主持人才知道的已经删掉），地图和图例都只从它取，图例里灰区的东西用记忆
+  const world = player ? playerWorld(world0, map0.id) : world0;
+  const map = player ? world.maps[0] : map0;
   const mw = map.width * CELL, mh = map.height * CELL;
-  const W0 = map.width;
-  const seenAt = (n: Numbered) => {
-    let any = false, live = false;
-    for (let y = n.y; y < n.y + n.h; y++) for (let x = n.x; x < n.x + n.w; x++) { const f = map.fog[y * W0 + x]; if (f) any = true; if (f === 1) live = true; }
-    return { any, live };
-  };
-  const items = numbering(world, map, player).filter((n) => {
-    if (!player) return true;
-    if (n.kind === 'token') return !!map.tokens.find((t) => t.id === n.id)?.pcId || map.fog[n.y * W0 + n.x] === 1;
-    if (n.kind === 'object') return seenAt(n).live || map.seen.objects.some((r) => r.id === n.id);
-    return seenAt(n).any;
-  });
+  const items: (Numbered & Partial<PlayerNumbered>)[] = player ? playerNumbering(world, map) : numbering(world, map);
   const H = Math.max(M + mh + 16, 60 + (items.length * 2 + 10) * 17);
   const W = M + mw + 16 + LEGEND_W;
   const c = document.createElement('canvas');
@@ -65,19 +58,15 @@ export function renderMapForAI(world: World, map: GameMap, view: 'kp' | 'player'
   line(`map id: ${map.id}`, '#8d8a82');
   ly += 4;
   for (const n of items) {
-    if (n.kind === 'object' || n.kind === 'zone') {
+    if (player && n.kind === 'object') {
+      line(`${n.label} ${n.icon} ${n.name}${n.state != null ? ` [${n.state}]` : ''}${n.memory ? '（记忆）' : ''}`, '#ffd166');
+      line(`    ${rangeName(n)} ${n.w}×${n.h} 高${n.height}m · id ${n.id}`, '#8d8a82');
+    } else if (n.kind === 'object' || n.kind === 'zone') {
       const o = map.objects.find((x) => x.id === n.id)!;
-      let state = o.states.length > 1 ? o.states[o.state] : null;
-      let note = '';
-      if (player && !seenAt(n).live) {
-        const mem = map.seen.objects.find((r) => r.id === o.id);
-        state = mem?.stateLabel ?? null;
-        note = '（记忆）';
-      }
-      const st = state !== null ? ` [${state}]` : '';
-      const all = !player && o.states.length > 1 ? `（状态：${o.states.join(' / ')}）` : '';
-      line(`${n.label} ${o.icon} ${o.name}${st}${note}${all}`, n.kind === 'zone' ? '#9ec1ff' : '#ffd166');
-      const extra = player ? '' : `${o.hidden ? ' 对玩家隐藏' : ''}${o.secrets.length ? ` · 隐藏信息 ${o.secrets.length} 条` : ''}`;
+      const st = o.states.length > 1 ? ` [${o.states[o.state]}]` : '';
+      const all = o.states.length > 1 ? `（状态：${o.states.join(' / ')}）` : '';
+      line(`${n.label} ${o.icon} ${o.name}${st}${all}`, n.kind === 'zone' ? '#9ec1ff' : '#ffd166');
+      const extra = `${o.hidden ? ' 对玩家隐藏' : ''}${o.secrets.length ? ` · 隐藏信息 ${o.secrets.length} 条` : ''}`;
       line(`    ${rangeName(o)} ${o.w}×${o.h}${o.kind === 'object' ? ` 高${o.height}m` : ''}${extra} · id ${o.id}`, '#8d8a82');
     } else if (n.kind === 'token') {
       const t = map.tokens.find((x) => x.id === n.id)!;
@@ -85,12 +74,14 @@ export function renderMapForAI(world: World, map: GameMap, view: 'kp' | 'player'
     } else {
       const cn = world.connections.find((x) => x.id === n.id)!;
       const here = cn.a.mapId === map.id ? cn.a : cn.b, there = cn.a.mapId === map.id ? cn.b : cn.a;
-      const tm = world.maps.find((m) => m.id === there.mapId);
-      line(`${n.label} ${CONN_LABEL[cn.kind]}${cn.label ? `「${cn.label}」` : ''} ${cellName(here.x, here.y)} → ${tm ? `${tm.layer}·${tm.name}` : '?'} ${cellName(there.x, there.y)}`, '#d9b8ff');
+      const dest = world0.maps.find((m) => m.id === there.mapId);
+      const tm = player && dest && !dest.fog.some(Boolean) ? undefined : dest; // 玩家视角：那张图去过（或拿到过地图）才写名字
+      line(`${n.label} ${CONN_LABEL[cn.kind]}${cn.label ? `「${cn.label}」` : ''} ${cellName(here.x, here.y)} → ${tm ? `${tm.layer}·${tm.name}` : '?'}${player ? '' : ` ${cellName(there.x, there.y)}`}`, '#d9b8ff');
     }
   }
   ly += 6;
-  const used = [...new Set(map.cells.filter(Boolean))].map((id) => world.terrains.find((t) => t.id === id)).filter(Boolean);
+  const known = player ? map.cells.map((c, i) => (map.fog[i] === 1 ? c : map.fog[i] === 2 ? map.seen.cells[i] : '')) : map.cells;
+  const used = [...new Set(known.filter(Boolean))].map((id) => world.terrains.find((t) => t.id === id)).filter(Boolean);
   line('地形：' + used.map((t) => `${t!.name}${t!.blocksMove ? '(不可通行)' : ''}`).join('、'), '#cfcabd');
   if (!player && map.d100.some(Boolean)) line('红色半透明 = D100 区域', '#e88');
   line(player ? '物件越高影子越长' : '物件越高影子越长；虚线框 = 触发区（玩家看不见）', '#8d8a82');
