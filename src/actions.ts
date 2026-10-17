@@ -319,33 +319,46 @@ export const clearPendingFocus = () => { pendingFocus = null; };
 
 // ---------- 导入 / 导出 ----------
 
-async function buildProjectZip() {
+/** 打包工程。缺了哪个媒体文件就列出来（不再悄悄跳过）。 */
+async function buildProjectZip(allowMissing = false) {
   const w = getWorld();
   const zip = new JSZip();
   zip.file('world.json', JSON.stringify(w, null, 2));
+  const missing: string[] = [];
   for (const m of w.media) {
     const b = await getBlob(m.id).catch(() => undefined);
     if (b) zip.file(`media/${m.id}`, b);
+    else missing.push(m.name);
   }
+  if (missing.length && !allowMissing) throw new Error(`这几个媒体文件在浏览器里找不到：${missing.join('、')}`);
   return zip.generateAsync({ type: 'blob' });
 }
 
 export async function exportProject() {
-  download(`${getWorld().name || '世界'}.tsmap.zip`, await buildProjectZip());
+  if (getUI().trial) return toast('试玩中不能导出，先结束试玩');
+  try {
+    download(`${getWorld().name || '世界'}.tsmap.zip`, await buildProjectZip());
+  } catch (e) {
+    if (confirm(`${(e as Error).message}\n\n还要导出吗？（导出的工程里会缺这些文件）`))
+      download(`${getWorld().name || '世界'}.tsmap.zip`, await buildProjectZip(true));
+  }
 }
 
 /** 用命令行带文件启动时才有：存回硬盘（见 scripts/open.mjs）。 */
 export async function checkDiskTarget() {
   try {
     const r = await fetch('/__save-target');
-    if (r.ok) setUI({ diskTarget: (await r.json()).path as string });
+    if (r.ok) { const j = await r.json(); saveToken = j.token ?? ''; setUI({ diskTarget: j.path as string }); }
   } catch { /* 不是用启动器开的 */ }
 }
 
+let saveToken = '';
+
 export async function saveToDisk() {
+  if (getUI().trial) return toast('试玩中不能保存（试玩的改动不该进正式工程），先结束试玩');
   if (!getUI().diskTarget) return exportProject();
   try {
-    const r = await fetch('/__save', { method: 'POST', body: await buildProjectZip() });
+    const r = await fetch('/__save', { method: 'POST', headers: { 'X-Save-Token': saveToken }, body: await buildProjectZip() });
     if (!r.ok) throw new Error(await r.text());
     const { path } = await r.json();
     setUI({ diskTarget: path });
@@ -355,23 +368,34 @@ export async function saveToDisk() {
   }
 }
 
+/** 导入前的校验：任何写入（媒体、世界）之前先过这一关。 */
+function checkWorld(w: World) {
+  if (!w || w.version !== 1 || !Array.isArray(w.maps) || w.maps.length === 0) throw new Error('不是这个编辑器的工程文件（或者没有地图）');
+  for (const m of w.maps) {
+    if (!(m.width > 0 && m.height > 0) || !Array.isArray(m.cells) || m.cells.length !== m.width * m.height)
+      throw new Error(`地图「${m.name}」的尺寸和格子数对不上`);
+  }
+  if (!Array.isArray(w.media ?? [])) throw new Error('媒体列表坏了');
+}
+
 export async function importProject(file: File) {
   try {
     let w: World;
+    let zip: JSZip | null = null;
     if (file.name.endsWith('.json')) {
       w = JSON.parse(await file.text());
     } else {
-      const zip = await JSZip.loadAsync(file);
+      zip = await JSZip.loadAsync(file);
       const json = zip.file('world.json');
       if (!json) throw new Error('压缩包里没有 world.json');
       w = JSON.parse(await json.async('string'));
-      for (const m of w.media) {
-        const f = zip.file(`media/${m.id}`);
-        if (f) await putBlob(m.id, new Blob([await f.async('arraybuffer')], { type: m.mime }));
-      }
     }
-    if (w.version !== 1 || !Array.isArray(w.maps)) throw new Error('不是这个编辑器的工程文件');
+    checkWorld(w);
     migrateWorld(w);
+    if (zip) for (const m of w.media) {  // 校验通过才写媒体
+      const f = zip.file(`media/${m.id}`);
+      if (f) await putBlob(m.id, new Blob([await f.async('arraybuffer')], { type: m.mime }));
+    }
     replaceWorld(w);
     setUI({ mapId: w.maps[0].id, selection: null, views: {} });
     toast(`已导入：${w.name}`);

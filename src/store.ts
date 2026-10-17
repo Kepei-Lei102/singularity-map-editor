@@ -32,7 +32,8 @@ let lastCoalesce: { key: string; at: number } | null = null;
 const listeners = new Set<() => void>();
 let saveTimer: number | undefined;
 // 沙盒（试玩）：开始时记下世界和撤销记录的长度，结束时整个换回来
-let sandbox: { world: World; pastLen: number } | null = null;
+let sandbox: { world: World; past: World[]; future: World[] } | null = null;
+let batchFuture: World[] | null = null; // 拖动开始前的重做记录：拖动没改东西就还回去
 
 function emit() {
   listeners.forEach((l) => l());
@@ -75,6 +76,7 @@ export function update(fn: (d: Draft<World>) => void, opts: { coalesce?: string;
 /** 拖动开始时调用：整次拖动只占一步撤销。 */
 export function beginBatch() {
   if (batching) return;
+  batchFuture = future;
   pushHistory();
   batching = true;
   lastCoalesce = null;
@@ -82,7 +84,8 @@ export function beginBatch() {
 export function endBatch() {
   if (!batching) return;
   batching = false;
-  if (past[past.length - 1] === world) past.pop();
+  if (past[past.length - 1] === world) { past.pop(); if (batchFuture) future = batchFuture; } // 只是点了一下，没拖：撤销和重做都原样
+  batchFuture = null;
 }
 
 export function undo() {
@@ -219,13 +222,13 @@ export const canEditMap = (s: UIState) => s.mode === 'edit' || s.unlock;
 export const canEditLines = (s: UIState) => s.mode === 'prep' || (s.mode === 'run' && s.unlock);
 
 export function beginSandbox() {
-  if (!sandbox) sandbox = { world, pastLen: past.length };
+  if (!sandbox) sandbox = { world, past: [...past], future: [...future] };
 }
 export function endSandbox() {
   if (!sandbox) return;
   world = sandbox.world;
-  past.length = sandbox.pastLen;
-  future = [];
+  past = sandbox.past; // 完整还回试玩前的撤销/重做记录（试玩中被挤掉的、被撤销掉的都回来）
+  future = sandbox.future;
   sandbox = null;
   lastCoalesce = null;
   emit();

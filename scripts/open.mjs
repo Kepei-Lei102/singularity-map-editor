@@ -7,7 +7,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import JSZip from 'jszip';
-import { readProject, writeFolder, zipProject } from './tsmap.mjs';
+import crypto from 'node:crypto';
+import { checkWorld, readProject, writeFolder, zipProject } from './tsmap.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const arg = process.argv[2];
@@ -19,6 +20,8 @@ if (file && !fs.existsSync(file)) {
 }
 
 const isFolder = !!file && fs.statSync(file).isDirectory();
+// 保存口令：每次启动随机生成。别的网页可以往 localhost 发请求，但读不到 /__save-target 的回应，所以拿不到口令。
+const TOKEN = crypto.randomBytes(16).toString('hex');
 if (isFolder && !fs.existsSync(path.join(file, 'world.json'))) {
   console.error(`这个文件夹里没有 world.json：${file}`);
   process.exit(1);
@@ -37,25 +40,35 @@ const server = await createServer({
       s.middlewares.use('/__save-target', (_req, res) => {
         if (!target) { res.statusCode = 404; res.end(); return; }
         res.setHeader('Content-Type', 'application/json');
-        res.end(JSON.stringify({ path: target }));
+        res.end(JSON.stringify({ path: target, token: TOKEN }));
       });
       s.middlewares.use('/__save', (req, res) => {
         if (!target || req.method !== 'POST') { res.statusCode = 404; res.end(); return; }
+        const origin = req.headers.origin;
+        if (req.headers['x-save-token'] !== TOKEN || (origin && !/^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin))) {
+          res.statusCode = 403; res.end('拒绝：保存请求不是编辑器发来的'); return;
+        }
         const chunks = [];
         req.on('data', (c) => chunks.push(c));
         req.on('end', async () => {
           try {
             const body = Buffer.concat(chunks);
+            // 先把浏览器发来的 zip 解开、校验，确认是完整的工程再写
+            const zip = await JSZip.loadAsync(body);
+            const wj = zip.file('world.json');
+            if (!wj) throw new Error('发来的不是工程（没有 world.json）');
+            const world = JSON.parse(await wj.async('string'));
+            checkWorld(world);
             if (isFolder) {
-              // 文件夹：解开浏览器发来的 zip，写成 world.json + media/（不留 .bak，交给 git）
-              const zip = await JSZip.loadAsync(body);
-              const world = JSON.parse(await zip.file('world.json').async('string'));
+              // 文件夹：写成 world.json + media/（不留 .bak，交给 git）
               const media = new Map();
               for (const m of world.media ?? []) { const f = zip.file(`media/${m.id}`); if (f) media.set(m.id, await f.async('nodebuffer')); }
               writeFolder(target, world, media);
             } else {
               if (fs.existsSync(target)) fs.copyFileSync(target, target + '.bak');
-              fs.writeFileSync(target, body);
+              const tmp = `${target}.tmp-${process.pid}`;
+              fs.writeFileSync(tmp, body);
+              fs.renameSync(tmp, target);
             }
             console.log(`  已保存：${target}`);
             res.setHeader('Content-Type', 'application/json');

@@ -1,5 +1,5 @@
 import { stopMedia, playMedia } from '../actions';
-import { delBlob, putBlob, useBlobUrl } from '../media';
+import { putBlob, useBlobUrl } from '../media';
 import { toast, update, useUI, useWorld } from '../store';
 import { uid } from '../util';
 import { Section } from './fields';
@@ -38,7 +38,7 @@ export function MediaPanel() {
             <button className="small" title="同步给玩家窗口" onClick={() => playMedia(m.id, m.name, true)}>📡</button>
             <button className="danger small" onClick={() => {
               if (!confirm(`删除「${m.name}」？挂在物件上的引用也会一起删掉。`)) return;
-              delBlob(m.id);
+              // 文件本身先不删：撤销、试玩结束恢复时还要用到。浏览器里多留一份不碍事，导出的工程只带还在用的。
               update((d) => {
                 d.media = d.media.filter((x) => x.id !== m.id);
                 d.maps.forEach((mp) => mp.objects.forEach((o) => { o.media = o.media.filter((a) => a.mediaId !== m.id); }));
