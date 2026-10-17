@@ -8,7 +8,7 @@ export { NODE_H, NODE_W, reachable } from './flow';
 import { CONN_LABEL } from './types';
 import { TIER_LABEL } from './types';
 import { download, uid } from './util';
-import { getBlob, putBlob } from './media';
+import { getBlob, mediaChanged, putBlob } from './media';
 import { send } from './sync';
 import { emptyLayer, migrateWorld } from './memory';
 
@@ -401,9 +401,18 @@ export async function importProject(file: File) {
     }
     checkWorld(w);
     migrateWorld(w);
-    if (zip) for (const m of w.media) {  // 校验通过才写媒体
-      const f = zip.file(`media/${m.id}`);
-      if (f) await putBlob(m.id, new Blob([await f.async('arraybuffer')], { type: m.mime }));
+    if (zip) {  // 校验通过才写媒体；同 ID 但内容不同的旧文件先存一份，"恢复导入前的内容"时换回来
+      const swapped: string[] = [];
+      for (const m of w.media) {
+        const f = zip.file(`media/${m.id}`);
+        if (!f) continue;
+        const buf = await f.async('arraybuffer');
+        const old = await getBlob(m.id).catch(() => undefined);
+        if (old && !(await sameBytes(old, buf))) { await putBlob(BACKUP_MEDIA_PREFIX + m.id, old); swapped.push(m.id); }
+        await putBlob(m.id, new Blob([buf], { type: m.mime }));
+      }
+      try { localStorage.setItem(BACKUP_MEDIA_KEY, JSON.stringify(swapped)); } catch { /* 存不下就算了 */ }
+      mediaChanged();
     }
     replaceWorld(w);
     setUI({ mapId: w.maps[0].id, selection: null, views: {} });
@@ -436,6 +445,8 @@ export async function importRabbitholeFile(file: File) {
     const { importRabbithole } = await import('./importRabbithole');
     const { world, blobs, summary } = await importRabbithole(file);
     for (const b of blobs) await putBlob(b.id, b.blob);
+    try { localStorage.setItem(BACKUP_MEDIA_KEY, '[]'); } catch { /* 存不下就算了 */ } // Rabbithole 导入的都是新 ID，没覆盖任何文件
+    mediaChanged();
     replaceWorld(world);
     setUI({ mapId: world.maps[0].id, selection: null, views: {}, flowId: world.flows[0]?.id ?? null, mode: 'edit', tool: 'select' });
     toast(summary);
@@ -447,6 +458,29 @@ export async function importRabbitholeFile(file: File) {
 // ---------- 导入前备份 / 自动导入 ----------
 
 const BACKUP_KEY = 'ts-map-world-backup';
+const BACKUP_MEDIA_KEY = 'ts-map-media-backup'; // 上一次导入时被覆盖掉的媒体 ID
+const BACKUP_MEDIA_PREFIX = '__backup__/';
+
+async function sameBytes(a: Blob, b: ArrayBuffer) {
+  if (a.size !== b.byteLength) return false;
+  const x = new Uint8Array(await a.arrayBuffer()), y = new Uint8Array(b);
+  for (let i = 0; i < x.length; i++) if (x[i] !== y[i]) return false;
+  return true;
+}
+
+/** 导入时被覆盖的媒体：和备份那份互换（来回切换都对）。 */
+async function swapBackupMedia() {
+  let ids: string[] = [];
+  try { ids = JSON.parse(localStorage.getItem(BACKUP_MEDIA_KEY) ?? '[]'); } catch { /* 没有 */ }
+  for (const id of ids) {
+    const cur = await getBlob(id).catch(() => undefined);
+    const bak = await getBlob(BACKUP_MEDIA_PREFIX + id).catch(() => undefined);
+    if (!bak) continue;
+    await putBlob(id, bak);
+    if (cur) await putBlob(BACKUP_MEDIA_PREFIX + id, cur);
+  }
+  mediaChanged();
+}
 
 /** 导入会替换当前内容，所以先把当前内容存一份，"文件"菜单里可以恢复。 */
 export function backupCurrent() {
@@ -455,10 +489,11 @@ export function backupCurrent() {
 export function hasBackup() {
   try { return !!localStorage.getItem(BACKUP_KEY); } catch { return false; }
 }
-export function restoreBackup() {
+export async function restoreBackup() {
   try {
     const s = localStorage.getItem(BACKUP_KEY);
     if (!s) return;
+    await swapBackupMedia();
     const w = migrateWorld(JSON.parse(s));
     localStorage.setItem(BACKUP_KEY, JSON.stringify(getWorld())); // 来回切换：恢复后，被替换掉的那份又成了备份
     replaceWorld(w);

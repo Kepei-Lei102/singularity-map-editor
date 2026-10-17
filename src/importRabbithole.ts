@@ -28,24 +28,23 @@ const ICON: Record<string, string> = { 苹果树: '🍎', 书架: '📚', 柜子
 
 export interface RabbitholeImport { world: World; blobs: { id: string; blob: Blob }[]; summary: string }
 
-/** 把同一个 id 占的格子按上下左右连通分块，每块一个外接矩形。 */
-function components(cells: [number, number][]) {
+/**
+ * 把同一个 id 占的格子拆成几个矩形，正好盖住这些格子、一格不多（L 形、带洞的家具不会被填成外接矩形）。
+ * 做法：每次取最上、最左的一格，先往右伸到头，再整行往下伸，能伸多少伸多少。
+ */
+export function rectangles(cells: [number, number][]) {
   const left = new Set(cells.map(([x, y]) => `${x},${y}`));
+  const has = (x: number, y: number) => left.has(`${x},${y}`);
   const out: { x: number; y: number; w: number; h: number }[] = [];
-  for (const [sx, sy] of cells) {
-    if (!left.has(`${sx},${sy}`)) continue;
-    const stack = [[sx, sy]];
-    left.delete(`${sx},${sy}`);
-    let x0 = sx, x1 = sx, y0 = sy, y1 = sy;
-    while (stack.length) {
-      const [x, y] = stack.pop()!;
-      x0 = Math.min(x0, x); x1 = Math.max(x1, x); y0 = Math.min(y0, y); y1 = Math.max(y1, y);
-      for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
-        const k = `${x + dx},${y + dy}`;
-        if (left.has(k)) { left.delete(k); stack.push([x + dx, y + dy]); }
-      }
-    }
-    out.push({ x: x0, y: y0, w: x1 - x0 + 1, h: y1 - y0 + 1 });
+  const order = [...cells].sort((a, b) => a[1] - b[1] || a[0] - b[0]);
+  for (const [sx, sy] of order) {
+    if (!has(sx, sy)) continue;
+    let w = 1;
+    while (has(sx + w, sy)) w++;
+    let h = 1;
+    while ([...Array(w).keys()].every((dx) => has(sx + dx, sy + h))) h++;
+    for (let y = sy; y < sy + h; y++) for (let x = sx; x < sx + w; x++) left.delete(`${x},${y}`);
+    out.push({ x: sx, y: sy, w, h });
   }
   return out;
 }
@@ -85,6 +84,7 @@ export async function importRabbithole(file: File): Promise<RabbitholeImport> {
   const blobs: { id: string; blob: Blob }[] = [];
   const mediaByPath = new Map<string, string>();
   let nObj = 0, nInt = 0;
+  const missing: string[] = []; // 附件在包里找不到的，导完要说出来
 
   const maps: GameMap[] = rh.levels.map((L, li) => {
     const m = newMap(L.name, '现实', floorOf(L.name, li), W, H, '', false);
@@ -113,36 +113,47 @@ export async function importRabbithole(file: File): Promise<RabbitholeImport> {
       if (cell.interactiveId) intCells.set(cell.interactiveId, [...(intCells.get(cell.interactiveId) ?? []), [x, y]]);
     }
     if (m.floor === 1) m.cells = m.cells.map((c) => c || 'yard');
+    // 备注（带分组名）和附件：家具和可交互物都要带上，不能只管可交互物
+    const notesOf = (it: RHItem) => {
+      const group = it.groupId ? groupName.get(it.groupId) : undefined;
+      return (group ? `【${group}】\n` : '') + (it.note ?? '').trim();
+    };
+    const attach = (o: MapObject, it: RHItem) => {
+      for (const a of it.attachments ?? []) {
+        if (!a.path) continue;
+        const blob = files.get(a.path);
+        if (!blob) { missing.push(`${it.name}：${a.name || a.path}`); continue; }
+        let mediaId = mediaByPath.get(a.path);
+        if (!mediaId) {
+          mediaId = uid();
+          mediaByPath.set(a.path, mediaId);
+          const ext = a.path.split('.').pop()?.toLowerCase() ?? '';
+          const mime = blob.type || ({ png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp', pdf: 'application/pdf', mp3: 'audio/mpeg', m4a: 'audio/mp4', wav: 'audio/wav', mp4: 'video/mp4' } as Record<string, string>)[ext] || 'application/octet-stream';
+          const typed = blob.type ? blob : new Blob([blob], { type: mime });
+          blobs.push({ id: mediaId, blob: typed });
+          media.push({ id: mediaId, name: a.name || it.name, mime: typed.type, size: typed.size });
+        }
+        o.media.push({ id: uid(), mediaId, label: a.name || it.name, trigger: 'manual', broadcast: true, once: false });
+      }
+    };
     for (const [id, cells] of objCells) {
       const ob = objById.get(id)!;
-      for (const r of components(cells)) {
-        m.objects.push({ ...newObject('object', r.x, r.y, r.w, r.h), name: ob.name, color: ob.color || '#b08968', icon: ICON[ob.name] ?? '', height: HEIGHT[ob.name] ?? 1 });
+      for (const r of rectangles(cells)) {
+        const o: MapObject = { ...newObject('object', r.x, r.y, r.w, r.h), name: ob.name, color: ob.color || '#b08968', icon: ICON[ob.name] ?? '', height: HEIGHT[ob.name] ?? 1, notes: notesOf(ob) };
+        attach(o, ob);
+        m.objects.push(o);
         nObj++;
       }
     }
     for (const [id, cells] of intCells) {
       const it = intById.get(id);
       if (!it) continue;
-      const group = it.groupId ? groupName.get(it.groupId) : undefined;
-      for (const r of components(cells)) {
+      for (const r of rectangles(cells)) {
         const o: MapObject = {
           ...newObject('object', r.x, r.y, r.w, r.h), name: it.name, color: it.color || '#c0510a', icon: '✦', height: 0, // 可查看的东西，不挡路
-          notes: (group ? `【${group}】\n` : '') + (it.note ?? '').trim(),
+          notes: notesOf(it),
         };
-        for (const a of it.attachments ?? []) {
-          if (!a.path) continue;
-          const blob = files.get(a.path);
-          if (!blob) continue;
-          let mediaId = mediaByPath.get(a.path);
-          if (!mediaId) {
-            mediaId = uid();
-            mediaByPath.set(a.path, mediaId);
-            const typed = blob.type ? blob : new Blob([blob], { type: a.path.endsWith('.png') ? 'image/png' : 'image/jpeg' });
-            blobs.push({ id: mediaId, blob: typed });
-            media.push({ id: mediaId, name: a.name || it.name, mime: typed.type, size: typed.size });
-          }
-          o.media.push({ id: uid(), mediaId, label: a.name || it.name, trigger: 'manual', broadcast: true, once: false });
-        }
+        attach(o, it);
         m.objects.push(o);
         nInt++;
       }
@@ -168,6 +179,7 @@ export async function importRabbithole(file: File): Promise<RabbitholeImport> {
     npcs: [],
   };
   const nRooms = maps.reduce((s, m) => s + m.rooms.length, 0);
-  const summary = `导入了 ${maps.length} 层（${W}×${H} 格）、${nRooms} 个房间、${nObj} 件家具、${nInt} 个可交互物、${media.length} 张配图。楼梯之间的连接点要手动加。`;
+  const summary = `导入了 ${maps.length} 层（${W}×${H} 格）、${nRooms} 个房间、${nObj} 件家具、${nInt} 个可交互物、${media.length} 个附件。楼梯之间的连接点要手动加。` +
+    (missing.length ? `有 ${missing.length} 个附件在包里找不到：${missing.slice(0, 5).join('；')}${missing.length > 5 ? '……' : ''}` : '');
   return { world, blobs, summary };
 }

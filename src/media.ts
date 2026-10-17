@@ -29,6 +29,11 @@ export const getBlob = (id: string) => tx<Blob | undefined>('readonly', (s) => s
 export const delBlob = (id: string) => tx('readwrite', (s) => s.delete(id));
 
 const urlCache = new Map<string, string>();
+/** 文件被换掉以后（导入、恢复备份），把缓存的地址作废，下次重新取。 */
+export function mediaChanged() {
+  urlCache.forEach((u) => URL.revokeObjectURL(u));
+  urlCache.clear();
+}
 export async function blobUrl(id: string): Promise<string | null> {
   const hit = urlCache.get(id);
   if (hit) return hit;
