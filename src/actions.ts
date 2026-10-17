@@ -265,6 +265,14 @@ export function reshapeMaps(mapIds: string[], left: number, top: number, right: 
     }
     for (const c of d.connections)
       for (const e of [c.a, c.b]) if (ids.has(e.mapId)) { e.x += left; e.y += top; }
+    const fits = (mapId: string, x: number, y: number) => { const m = findMap(d, mapId); return !!m && x >= 0 && y >= 0 && x < m.width && y < m.height; };
+    for (const n of d.npcs ?? [])
+      if (n.place && ids.has(n.place.mapId)) {
+        n.place.x += left; n.place.y += top;
+        if (!fits(n.place.mapId, n.place.x, n.place.y)) n.place = null;
+      }
+    for (const k of d.marks) if (ids.has(k.mapId)) { k.x += left; k.y += top; }
+    d.marks = d.marks.filter((k) => !ids.has(k.mapId) || fits(k.mapId, k.x, k.y));
   });
   setUI((s) => { const v = { ...s.views }; ids.forEach((i) => delete v[i]); return { views: v, selection: null }; });
 }
@@ -292,6 +300,7 @@ export function duplicateMap(mapId: string, layer?: string) {
   copy.tokens = [];
   copy.fog = copy.fog.map(() => 0);
   copy.seen = { cells: copy.cells.map(() => ''), objects: [] };
+  copy.views = {}; // 每个人的旧记忆也不能带过去（物件已经换了 ID）
   if (layer) copy.layer = layer;
   else copy.name = src.name + '（副本）';
   update((d) => { d.maps.push(copy); });

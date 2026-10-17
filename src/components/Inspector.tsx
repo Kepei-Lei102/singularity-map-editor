@@ -202,8 +202,8 @@ function ObjectInspector({ world, mapId, o, ui }: { world: World; mapId: string;
             <Row label="位置"><CellInput x={o.x} y={o.y} onChange={(p) => up((x) => { x.x = p.x; x.y = p.y; })} /></Row>
             <Row label="大小">
               <span className="inline">
-                <Num value={o.w} min={1} onChange={(v) => up((x) => { x.w = Math.max(1, v); })} />×
-                <Num value={o.h} min={1} onChange={(v) => up((x) => { x.h = Math.max(1, v); })} />
+                <Num value={o.w} min={1} onChange={(v) => up((x) => { x.w = Math.max(1, Math.round(v)); })} />×
+                <Num value={o.h} min={1} onChange={(v) => up((x) => { x.h = Math.max(1, Math.round(v)); })} />
               </span>
             </Row>
             {!isZone && <Row label="高度 (m)"><Num value={o.height} step={0.1} min={0} onChange={(v) => up((x) => { x.height = Math.max(0, v); })} /></Row>}

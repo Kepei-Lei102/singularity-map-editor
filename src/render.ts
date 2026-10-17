@@ -1,6 +1,6 @@
 import type { Selection, Tool, View } from './store';
 import type { GameMap, MapObject, SeenObject, World } from './types';
-import { staleMemories } from './memory';
+import { staleMemories, emptyLayer } from './memory';
 import { CONN_ICON, CONN_LABEL } from './types';
 import { CS, colName, distToRect, gridDist } from './util';
 import { CLEAR_BANDS, canSee, sightCosts, visibleMarks } from './perception';
@@ -227,7 +227,7 @@ export function render(
   world: World, map0: GameMap, view: View, o: RenderOpts,
 ) {
   // 视野各自独立时，玩家视角换成这个人自己的那份迷雾和记忆；后面的代码照常读 map.fog / map.seen
-  const own = o.mode === 'player' && o.viewer && world.visionMode === 'individual' ? map0.views[o.viewer] : undefined;
+  const own = o.mode === 'player' && o.viewer && world.visionMode === 'individual' ? map0.views[o.viewer] ?? emptyLayer(map0.width * map0.height) : undefined; // 这个人还没有视野层：什么都没看过
   const map: GameMap = own ? { ...map0, fog: own.fog, seen: own.seen } : map0;
   const player = o.mode === 'player';
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
@@ -332,7 +332,7 @@ export function render(
   // 连接点
   for (const c of world.connections) {
     for (const end of [c.a, c.b]) {
-      if (end.mapId !== map.id || (player && (c.hidden || !map.fog[end.y * W + end.x]))) continue;
+      if (end.mapId !== map.id || (player && (c.hidden || map.fog[end.y * W + end.x] !== 1))) continue; // 连接点不进记忆，玩家只在看得见时看到
       const cx = (end.x + 0.5) * CS, cy = (end.y + 0.5) * CS;
       ctx.beginPath();
       ctx.arc(cx, cy, CS * 0.36, 0, Math.PI * 2);
@@ -478,13 +478,23 @@ export function render(
   // 屏幕坐标里的叠加层：编号、坐标尺
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   if (o.numbers) {
-    const fogOK = (n: Numbered) => {
-      if (!player) return true;
-      if (n.kind === 'token') return !!map.tokens.find((t) => t.id === n.id)?.pcId || map.fog[n.y * W + n.x] === 1;
-      for (let y = n.y; y < n.y + n.h; y++) for (let x = n.x; x < n.x + n.w; x++) if (map.fog[y * W + x]) return true;
+    const visible = (n: { x: number; y: number; w: number; h: number }) => {
+      for (let y = n.y; y < n.y + n.h; y++) for (let x = n.x; x < n.x + n.w; x++) if (map.fog[y * W + x] === 1) return true;
       return false;
     };
-    drawBadges(ctx, numbering(world, map, player), view, fogOK);
+    let list = numbering(world, map, player);
+    if (player) {
+      // 玩家：看得见的按现在的位置；灰区里的按记忆里的位置（没记住的就不标）；连接点只在看得见时标
+      const mem = new Map(map.seen.objects.map((r) => [r.id, r]));
+      list = list.flatMap((n) => {
+        if (n.kind === 'token') return map.tokens.find((t) => t.id === n.id)?.pcId || map.fog[n.y * W + n.x] === 1 ? [n] : [];
+        if (n.kind === 'conn') return map.fog[n.y * W + n.x] === 1 ? [n] : [];
+        if (visible(n)) return [n];
+        const r = mem.get(n.id);
+        return r ? [{ ...n, x: r.x, y: r.y, w: r.w, h: r.h }] : [];
+      });
+    }
+    drawBadges(ctx, list, view, () => true);
   }
   if (!player && map.rooms.length) drawRoomLabels(ctx, map, view);
   drawMarks(ctx, world, map, view, player ? o.viewer ?? null : null);

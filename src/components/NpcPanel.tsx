@@ -99,7 +99,7 @@ function NpcRun({ n }: { n: Npc }) {
         </div>}
         {n.notes && <details><summary>主持人备注（坑、书里查得到的、好答案）</summary><p className="pre">{n.notes}</p></details>}
       </>}
-      {p.status === 'waiting' && <div className="btns"><button onClick={() => npcMet(n.id)}>出现了</button>{!p.cast && <span className="hint">（这一场没安排）</span>}</div>}
+      {p.status === 'waiting' && <div className="btns"><button onClick={() => (inSeason(n) || confirm(`${n.name}这个月不在季节里。主持人破例让 ta 出现吗？`)) && npcMet(n.id)}>出现了</button>{!p.cast && <span className="hint">（这一场没安排）</span>}</div>}
       {p.status === 'met' && <>
         <Row label="玩家的主意"><Area value={advice} onChange={setAdvice} rows={2} placeholder="玩家最后建议送什么、怎么送" /></Row>
         <Row label="会是">

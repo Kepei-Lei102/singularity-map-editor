@@ -106,8 +106,13 @@ export function importNpcs(list: Partial<Npc>[]) {
         progress: raw.progress ?? base.progress,
       };
       const i = d.npcs.findIndex((x) => x.name === n.name);
-      if (i >= 0) d.npcs[i] = { ...n, id: d.npcs[i].id, progress: d.npcs[i].progress };
-      else d.npcs.push(n);
+      if (i >= 0) {
+        const old = d.npcs[i];
+        // 进度里记着结果和近况的 ID：结果按名字（好结果 / 漂亮解……）、近况按顺序沿用旧 ID，引用就不会断
+        n.outcomes = n.outcomes.map((o) => ({ ...o, id: old.outcomes.find((x) => x.label === o.label)?.id ?? o.id }));
+        n.beats = n.beats.map((b, k) => ({ ...b, id: old.beats[k]?.id ?? b.id }));
+        d.npcs[i] = { ...n, id: old.id, progress: old.progress };
+      } else d.npcs.push(n);
     }
     log(d, 'note', `导入了 ${list.length} 位 NPC`);
   });

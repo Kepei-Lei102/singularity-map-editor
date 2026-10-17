@@ -106,7 +106,7 @@ export function Sidebar() {
             </div>
             <Check label="自动视野（按玩家角色的视线）" value={cur.autoFog} onChange={(v) => update((d) => { d.maps.find((m) => m.id === cur.id)!.autoFog = v; })} />
             <div className="btns">
-              <button className="small" onClick={() => update((d) => { const m = d.maps.find((x) => x.id === cur.id)!; m.fog = m.fog.map((f) => (f === 1 ? 2 : f)); })}>可见的全部变灰</button>
+              <button className="small" onClick={() => update((d) => { const m = d.maps.find((x) => x.id === cur.id)!; for (const L of [m, ...Object.values(m.views)]) L.fog = L.fog.map((f) => (f === 1 ? 2 : f)); })}>可见的全部变灰</button>
               <button className="small" onClick={() => update((d) => { d.maps.find((m) => m.id === cur.id)!.fog.fill(1); })}>全部看得见</button>
               <button className="small" onClick={() => update((d) => { const m = d.maps.find((x) => x.id === cur.id)!; m.fog.fill(0); m.seen = { cells: m.cells.map(() => ''), objects: [] }; })}>全部抹黑</button>
             </div>

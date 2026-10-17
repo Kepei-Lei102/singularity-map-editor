@@ -21,6 +21,7 @@ export function fmtTime(t: number) {
 
 /** 两格之间的格子（Bresenham），画笔拖动时防止断线。 */
 export function cellLine(x0: number, y0: number, x1: number, y1: number): [number, number][] {
+  x0 = Math.round(x0); y0 = Math.round(y0); x1 = Math.round(x1); y1 = Math.round(y1); // 只走整数格，小数会让循环停不下来
   const out: [number, number][] = [];
   const dx = Math.abs(x1 - x0), dy = -Math.abs(y1 - y0);
   const sx = x0 < x1 ? 1 : -1, sy = y0 < y1 ? 1 : -1;

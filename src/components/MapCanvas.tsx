@@ -138,9 +138,14 @@ export function MapCanvas({ world, map, mode, playerNumbers = false, follow, vie
         else if (tool === 'erase') m.cells[i] = '';
         else if (tool === 'd100') m.d100[i] = value;
         else if (tool === 'room') m.roomCells[i] = roomId;
-        else if (tool === 'fogReveal') m.fog[i] = 1;
-        else if (tool === 'fogHide') { if (m.fog[i] === 1) m.fog[i] = 2; }
-        else if (tool === 'fogBlack') { m.fog[i] = 0; m.seen.cells[i] = ''; }
+        else if (tool.startsWith('fog')) {
+          // 各自独立时，主持人改迷雾是改所有人的（全队那份 + 每个人自己那份）
+          for (const L of [m, ...Object.values(m.views)]) {
+            if (tool === 'fogReveal') L.fog[i] = 1;
+            else if (tool === 'fogHide') { if (L.fog[i] === 1) L.fog[i] = 2; }
+            else { L.fog[i] = 0; L.seen.cells[i] = ''; }
+          }
+        }
       }
     });
   };

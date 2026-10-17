@@ -1,5 +1,5 @@
 import { beginSandbox, endSandbox, getUI, getWorld, setUI, toast, update, type UIState } from './store';
-import { addMark, findMap } from './actions';
+import { addMark, autoReveal, checkEnterTriggers, findMap } from './actions';
 import type { GameMap, World } from './types';
 import { uid } from './util';
 import { ROUND_MINUTES } from './perception';
@@ -126,6 +126,8 @@ export function trialMove(dx: number, dy: number) {
     dt.x = nx; dt.y = ny;
   });
   setTr({ moved: { ...t.moved, [pl.tokenId]: used + 1 }, msg: '' });
+  checkEnterTriggers(t.mapId, pl.tokenId, tok.x, tok.y); // 和正式带团一样：走进触发区就播，范围里的线索自动浮现（试玩结束都会复原）
+  autoReveal(t.mapId);
 }
 
 /** 空格（只在战斗中）：结束这一回合。重置每人的移动力；"暂时不能行动"的回合数减一，减到 0 就恢复。 */
