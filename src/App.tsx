@@ -1,6 +1,6 @@
 import { useEffect, useRef } from 'react';
-import { canEditMap, getUI, getWorld, redo, replaceWorld, setUI, undo, update, useUI, useWorld, type Mode, type Tab } from './store';
-import { autoLoadFromLauncher, checkDiskTarget, exportProject, findMap, hasBackup, importAnyFile, restoreBackup, saveToDisk } from './actions';
+import { canEditMap, getUI, getWorld, redo, setUI, undo, update, useUI, useWorld, type Mode, type Tab } from './store';
+import { autoLoadFromLauncher, checkDiskTarget, exportProject, findMap, hasBackup, importAnyFile, restoreBackup, saveToDisk, startFreshWorld } from './actions';
 import { demoWorld, emptyWorld } from './defaults';
 import { broadcastWorld, listenAsEditor, openPlayerWindow, send } from './sync';
 import { storageOK } from './store';
@@ -140,8 +140,8 @@ function Editor() {
             <button onClick={exportProject}>导出工程（.zip，含媒体）</button>
             <button onClick={() => fileRef.current?.click()}>导入工程…</button>
             <button onClick={() => confirm('导入 Rabbithole 地图会替换当前内容，当前内容请先导出。继续？') && rhRef.current?.click()}>导入 Rabbithole 地图（.zip / .json）…</button>
-            <button onClick={() => confirm('新建空白世界？当前内容请先导出。') && (replaceWorld(emptyWorld()), setUI({ selection: null, views: {} }))}>新建空白世界</button>
-            <button onClick={() => confirm('载入示例数据？当前内容请先导出。') && (replaceWorld(demoWorld()), setUI({ selection: null, views: {} }))}>载入示例</button>
+            <button onClick={() => startFreshWorld(emptyWorld(), '新建空白世界')}>新建空白世界</button>
+            <button onClick={() => startFreshWorld(demoWorld(), '载入示例数据')}>载入示例</button>
             {hasBackup() && <button onClick={() => confirm('换回上一次导入前的内容？（现在的内容会存成备份，可以再换回来）') && restoreBackup()}>恢复导入前的内容</button>}
             <div className="menu-ver">奇点之后 · 地图编辑器 v{__APP_VERSION__}</div>
           </div>

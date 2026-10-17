@@ -139,7 +139,7 @@ export function importNpcs(input: unknown[]): string[] {
       const match = <T extends { id: string }>(news: T[], olds: T[], given: (x: T) => boolean, key: (x: T) => string) => {
         const taken = new Set(news.filter((x) => given(x) && olds.some((o) => o.id === x.id)).map((x) => x.id));
         const out = news.map((x) => {
-          if (given(x) && taken.has(x.id)) return x;
+          if (given(x)) return x; // 带着 ID 来的：对得上旧的就是旧的，对不上就是新的——不再按文字去套旧 ID
           const same = olds.filter((o) => key(o) === key(x) && !taken.has(o.id));
           const others = news.filter((y) => y !== x && !(given(y) && taken.has(y.id)) && key(y) === key(x));
           if (same.length === 1 && !others.length) { taken.add(same[0].id); return { ...x, id: same[0].id }; }

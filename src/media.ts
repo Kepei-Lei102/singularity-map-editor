@@ -39,7 +39,11 @@ export const delBlob = (key: string) => tx('readwrite', (s) => s.delete(key));
 
 // 当前世界里媒体 ID → 存储名（世界一变，store 就调用 setMediaIndex）
 let keyOf = new Map<string, string>();
-export function setMediaIndex(list: MediaMeta[]) { keyOf = new Map(list.map((m) => [m.id, m.key ?? m.id])); }
+let mimeOf = new Map<string, string>();
+export function setMediaIndex(list: MediaMeta[]) {
+  keyOf = new Map(list.map((m) => [m.id, m.key ?? m.id]));
+  mimeOf = new Map(list.map((m) => [m.id, m.mime]));
+}
 /** 这个媒体 ID 在当前世界里存在哪。 */
 export const storageKey = (id: string) => keyOf.get(id) ?? id;
 export const getBlob = (id: string) => getRaw(storageKey(id));
@@ -93,13 +97,16 @@ export function mediaChanged() {
   versionListeners.forEach((l) => l());
 }
 export async function blobUrl(id: string): Promise<string | null> {
-  const key = storageKey(id); // 按存储名缓存：同一个 ID 换了内容就是另一个存储名，不会拿到旧的
-  const hit = urlCache.get(key);
+  // 按存储名 + 类型缓存：同一个 ID 换了内容就是另一个存储名；同样的字节可能被当成不同类型导入过（比如先是未知类型、后来是 PDF），按当前的类型重新包一下
+  const key = storageKey(id), mime = mimeOf.get(id);
+  const ck = `${key}|${mime ?? ''}`;
+  const hit = urlCache.get(ck);
   if (hit) return hit;
-  const b = await getRaw(key);
-  if (!b) return null;
+  const raw = await getRaw(key);
+  if (!raw) return null;
+  const b = mime && raw.type !== mime ? new Blob([raw], { type: mime }) : raw;
   const u = URL.createObjectURL(b);
-  urlCache.set(key, u);
+  urlCache.set(ck, u);
   return u;
 }
 const useMediaVersion = () => useSyncExternalStore((l) => { versionListeners.add(l); return () => versionListeners.delete(l); }, () => version);

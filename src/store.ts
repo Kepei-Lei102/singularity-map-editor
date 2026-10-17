@@ -52,6 +52,12 @@ function emit() {
 }
 
 export const getWorld = () => world;
+/**
+ * 当前世界的"上下文编号"：换了工程（导入、恢复、新建、载入示例）或者进出试玩都会变。
+ * 异步操作（导入、上传、播放）开始时记下它，完成时对不上就不再动世界——结果属于一个已经不在的上下文。
+ */
+let epoch = 0;
+export const worldContext = () => `${epoch}${sandbox ? ':trial' : ''}`;
 /** 真正的世界：试玩中是试玩开始前那份（发给玩家、保存都用它）。 */
 export const getRealWorld = () => sandbox?.world ?? world;
 
@@ -124,6 +130,7 @@ export function redo() {
 }
 
 export function replaceWorld(w: World) {
+  epoch++;
   past = [];
   future = [];
   batching = false;
@@ -244,7 +251,7 @@ export const canEditLines = (s: UIState) => s.mode === 'prep' || (s.mode === 'ru
 
 export function beginSandbox() {
   endBatch(); // 万一还有没收尾的拖动
-  if (!sandbox) sandbox = { world, past: [...past], future: [...future] };
+  if (!sandbox) { sandbox = { world, past: [...past], future: [...future] }; epoch++; }
 }
 export function endSandbox() {
   if (!sandbox) return;
@@ -252,6 +259,7 @@ export function endSandbox() {
   past = sandbox.past; // 完整还回试玩前的撤销/重做记录（试玩中被挤掉的、被撤销掉的都回来）
   future = sandbox.future;
   sandbox = null;
+  epoch++;
   batching = false;
   batchStart = null;
   lastCoalesce = null;

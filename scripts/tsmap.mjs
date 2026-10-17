@@ -23,12 +23,43 @@ function writeNew(file, data) {
 
 const warnRepairs = (fixed) => { if (fixed.length) console.warn(`旧版的超范围数值已夹回范围：\n  ${fixed.join('\n  ')}`); };
 
+/**
+ * 上一次文件夹保存被打断（进程被杀、断电）时留下的暂存文件夹：读写之前先收拾掉。
+ * 规则和提交顺序对应：world.json 最后才换。
+ *   - new/world.json 已经不在了 → 提交其实做完了，只差删暂存：直接删；
+ *   - new/world.json 还在 → 提交没做完：把 old/ 里挪出去的旧文件放回原处（覆盖已经换上的新文件），回到保存之前的样子。
+ *     已经换上、但原来没有旧文件的新配图留着（旧 world.json 不引用它们，下次保存会当作没用的删掉）。
+ */
+export function recoverInterrupted(dir) {
+  if (!fs.existsSync(dir) || !fs.statSync(dir).isDirectory()) return [];
+  const notes = [];
+  for (const name of fs.readdirSync(dir)) {
+    if (!name.startsWith('.tsmap-stage-')) continue;
+    const stage = path.join(dir, name);
+    if (isLink(stage)) continue;
+    const neu = path.join(stage, 'new'), old = path.join(stage, 'old');
+    if (fs.existsSync(path.join(neu, 'world.json')) && fs.existsSync(old)) {
+      for (const f of fs.readdirSync(old)) {
+        const target = f === 'world.json' ? path.join(dir, 'world.json') : path.join(dir, 'media', f);
+        if (isLink(target)) continue;
+        fs.rmSync(target, { force: true });
+        fs.renameSync(path.join(old, f), target);
+      }
+      notes.push(`上次保存没做完，已还原到保存之前（${name}）`);
+    } else notes.push(`上次保存已经完成，清掉了留下的暂存（${name}）`);
+    fs.rmSync(stage, { recursive: true, force: true });
+  }
+  if (notes.length) console.warn(notes.join('\n'));
+  return notes;
+}
+
 /** 读工程：文件夹或 zip 都行，返回 { world, media: Map<id, Buffer> }。
  * 校验结构；工程里声明了的媒体缺文件就报错（allowMissing 时只跳过）。 */
 export async function readProject(p, { allowMissing = false } = {}) {
   const media = new Map();
   let world;
   if (fs.statSync(p).isDirectory()) {
+    recoverInterrupted(p);
     const wj = path.join(p, 'world.json'), mediaDir = path.join(p, 'media');
     if (isLink(wj) || isLink(mediaDir)) throw new Error('world.json 或 media 文件夹是符号链接，拒绝读取');
     world = JSON.parse(fs.readFileSync(wj, 'utf8'));
@@ -65,6 +96,7 @@ export async function readProject(p, { allowMissing = false } = {}) {
  */
 export function writeFolder(dir, world, media) {
   checkWorld(world);
+  recoverInterrupted(dir);
   const mediaDir = path.join(dir, 'media'), wj = path.join(dir, 'world.json');
   if (isLink(dir) || isLink(mediaDir) || isLink(wj)) throw new Error('目标里有符号链接，拒绝写入');
   fs.mkdirSync(mediaDir, { recursive: true });

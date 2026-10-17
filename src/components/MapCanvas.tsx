@@ -246,14 +246,13 @@ export function MapCanvas({ world, map, mode, playerNumbers = false, follow, vie
     if (!hover || hover.x !== cx || hover.y !== cy) setHover({ x: cx, y: cy });
     const dr = drag.current;
     if (!dr) return;
+    if (dr.k === 'pan') { setView({ ...viewRef.current, panX: dr.px + sx - dr.sx, panY: dr.py + sy - dr.sy }); return; } // 平移只看画面，不碰世界（玩家窗口没有编辑器的世界）
     const m = findMap(getWorld(), map.id);
     const gone = () => { drag.current = null; endBatch(); setPreview(null); }; // 拖着的东西没了（被撤销掉了、地图删了）：取消这次拖动
     if (!m) return gone();
     const clampX = (x: number, w = 1) => Math.max(0, Math.min(m.width - w, x));
     const clampY = (y: number, h = 1) => Math.max(0, Math.min(m.height - h, y));
-    if (dr.k === 'pan') {
-      setView({ ...viewRef.current, panX: dr.px + sx - dr.sx, panY: dr.py + sy - dr.sy });
-    } else if (dr.k === 'paint') {
+    if (dr.k === 'paint') {
       if (cx === dr.lx && cy === dr.ly) return;
       const n = getUI().brush;
       paintCells(cellLine(dr.lx, dr.ly, cx, cy).flatMap(([x, y]) => brushCells(x, y, n)), dr.value);
@@ -324,7 +323,7 @@ export function MapCanvas({ world, map, mode, playerNumbers = false, follow, vie
         onPointerMove={onMove}
         onPointerUp={onUp}
         onPointerCancel={() => { drag.current = null; endBatch(); setPreview(null); }}
-        onLostPointerCapture={() => { if (drag.current && drag.current.k !== 'pan') { drag.current = null; endBatch(); setPreview(null); } }}
+        onLostPointerCapture={() => { if (drag.current) { drag.current = null; endBatch(); setPreview(null); } }}
         onPointerLeave={() => setHover(null)}
         onContextMenu={(e) => e.preventDefault()}
       />

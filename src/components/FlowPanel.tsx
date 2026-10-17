@@ -92,7 +92,8 @@ export function FlowPanel() {
     }} onPointerMove={(e) => {
       const dr = drag.current;
       if (dr?.k === 'resize') setHeight(Math.max(140, Math.min(window.innerHeight - 200, dr.h - (e.clientY - dr.sy))));
-    }} onPointerUp={() => { if (drag.current?.k === 'resize') drag.current = null; }}>
+    }} onPointerUp={() => { if (drag.current?.k === 'resize') drag.current = null; }}
+      onLostPointerCapture={() => { if (drag.current?.k === 'resize') drag.current = null; }}>
       <span className="flow-title">{run ? '流程图 · 带团' : '流程图 · 预测'}</span>
       {flow && (
         <select value={flow.id} onChange={(e) => setUI({ flowId: e.target.value })}>
@@ -120,7 +121,7 @@ export function FlowPanel() {
   );
 
   useEffect(() => () => endBatch(), []); // 拖着事件时面板被关掉：收尾
-  useEffect(() => { drag.current = null; endBatch(); }, [flow?.id, run, collapsed]); // 换了流程图、换了模式、折叠：丢掉这次拖动
+  useEffect(() => { drag.current = null; endBatch(); setLink(null); }, [flow?.id, run, collapsed]); // 换了流程图、换了模式、折叠：丢掉这次拖动和没连完的线
 
   if (collapsed || !flow) {
     return (
@@ -223,7 +224,7 @@ export function FlowPanel() {
     <div className="flow-panel" style={{ height }}>
       {head}
       <div className="flow-body">
-        <svg ref={svg} className="flow-svg" onPointerDown={onBgDown} onPointerMove={onMove} onPointerUp={onUp} onPointerCancel={() => { drag.current = null; endBatch(); setLink(null); }} onLostPointerCapture={() => { if (drag.current?.k === 'node') { drag.current = null; endBatch(); } }} onDoubleClick={onDouble}>
+        <svg ref={svg} className="flow-svg" onPointerDown={onBgDown} onPointerMove={onMove} onPointerUp={onUp} onPointerCancel={() => { drag.current = null; endBatch(); setLink(null); }} onLostPointerCapture={() => { if (drag.current && drag.current.k !== 'resize') { drag.current = null; endBatch(); setLink(null); } }} onDoubleClick={onDouble}>
           <defs>
             {(['pred', 'taken', 'lock'] as const).map((c) => (
               <marker key={c} id={`arrow-${c}`} viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">

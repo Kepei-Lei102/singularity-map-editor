@@ -1,6 +1,6 @@
 import type { Draft } from 'immer';
 import JSZip from 'jszip';
-import { getUI, getWorld, replaceWorld, setUI, toast, update, type Selection } from './store';
+import { getUI, getWorld, replaceWorld, setUI, toast, update, worldContext, type Selection } from './store';
 import { pcWithin } from './perception';
 import type { Flow, GameMap, LogEntry, MapObject, MediaAttach, Tier, World } from './types';
 import { NODE_H, NODE_W } from './flow';
@@ -8,7 +8,7 @@ export { NODE_H, NODE_W, reachable } from './flow';
 import { CONN_LABEL } from './types';
 import { TIER_LABEL } from './types';
 import { download, uid } from './util';
-import { contentKey, getRaw, putBlobs, storageKey } from './media';
+import { contentKey, getRaw, mediaChanged, putBlobs, storageKey } from './media';
 import { checkWorld, repairWorld } from './schema.js';
 import { send } from './sync';
 import { emptyLayer, migrateWorld } from './memory';
@@ -91,10 +91,11 @@ export function playMedia(mediaId: string, label: string, broadcast: boolean) {
   if (!meta) return toast('找不到这个媒体文件');
   const seq = ++playSeq;
   const key = storageKey(mediaId); // 按开始播放那一刻的版本
+  const ctx = worldContext();
   setUI({ nowPlaying: { mediaId, label, broadcast } });
   // 文件本身也一起发过去：玩家窗口不一定能读到本地存储（例如双击 html 打开时）。试玩里的播放只在主持人这边，根本不发
   if (broadcast && !getUI().trial)
-    getRaw(key).catch(() => undefined).then((blob) => { if (seq === playSeq && !getUI().trial) send({ type: 'play', mediaId: key, label, mime: meta.mime, blob }); }); // 玩家窗口没有媒体表，直接给存储名
+    getRaw(key).catch(() => undefined).then((blob) => { if (seq === playSeq && ctx === worldContext() && !getUI().trial) send({ type: 'play', mediaId: key, label, mime: meta.mime, blob: blob && blob.type !== meta.mime ? new Blob([blob], { type: meta.mime }) : blob }); }); // 玩家窗口没有媒体表，直接给存储名
   update((d) => log(d, 'media', `播放：${label || meta.name}${broadcast ? '（同步给玩家）' : '（仅主持人）'}`), { history: false });
 }
 
@@ -454,6 +455,16 @@ export const clearPendingFocus = () => { pendingFocus = null; };
 let busy: string | null = null;
 /** 正在导入 / 恢复 / 保存吗（试玩按钮看这个）。 */
 export const ioBusy = () => busy;
+
+/** 新建空白世界 / 载入示例：也要等导入、保存做完（否则做完的导入会把新世界换掉）。 */
+export function startFreshWorld(w: World, what: string) {
+  if (busy) return toast(`正在${busy}，完成后再${what}`);
+  if (getUI().trial) return toast(`试玩中不能${what}，先结束试玩`);
+  if (!confirm(`${what}？当前内容请先导出。`)) return;
+  cancelPendingPlay(); stopMedia();
+  replaceWorld(w);
+  setUI({ mapId: w.maps[0].id, selection: null, views: {}, flowId: w.flows[0]?.id ?? null });
+}
 async function exclusive<T>(what: string, fn: () => Promise<T>): Promise<T | undefined> {
   if (busy) { toast(`正在${busy}，请稍等`); return undefined; }
   busy = what;
@@ -585,6 +596,7 @@ async function storeMedia(w: World, files: { id: string; blob: Blob }[]) {
     if (!(await readRaw(key)) && !ops.some((o) => o.id === key)) ops.push({ id: key, blob: f.blob });
   }
   await putBlobs(ops); // 一个事务：要么全写上，要么一个不写；写上的也只是新文件，不影响任何正在用的
+  if (ops.length) mediaChanged(); // 原来缺的文件现在有了：正在等它的预览重新读
   for (const m of w.media) { const k = keys.get(m.id); if (k) m.key = k; }
 }
 
@@ -593,18 +605,20 @@ async function storeMedia(w: World, files: { id: string; blob: Blob }[]) {
  * 存新文件 → 把现在的世界写成备份（写不下就问一句，取消的话什么都不变）→ 换世界。
  * 导入期间不能进试玩；万一进了，就不换世界（试玩结束时会还原成进试玩前的世界，换了也白换）。
  */
-async function commitImport(w: World, files: { id: string; blob: Blob }[]): Promise<boolean> {
+async function commitImport(w: World, files: { id: string; blob: Blob }[], ctx = worldContext()): Promise<boolean> {
   await storeMedia(w, files);
   if (getUI().trial) throw new Error('导入途中开始了试玩，没有替换世界。请结束试玩后重新导入');
+  if (ctx !== worldContext()) throw new Error('导入途中换了工程，没有替换世界');
   if (!writeBackup(getWorld())) {
     if (!confirm('当前内容太大，没法留"导入前的备份"。继续导入的话，之后就不能一键恢复了。继续吗？')) return false;
     dropBackup(); // 继续的话，旧备份已经不是"这次导入前"的内容了，不能留着误导
   }
+  cancelPendingPlay(); stopMedia(); // 旧世界正在放的、还没发出去的，都停掉
   replaceWorld(w);
   return true;
 }
 
-async function importProject(file: File) {
+async function importProject(file: File, ctx: string) {
   try {
     let w: World;
     const files: { id: string; blob: Blob }[] = [];
@@ -620,9 +634,11 @@ async function importProject(file: File) {
         if (f) files.push({ id: m.id, blob: new Blob([await f.async('arraybuffer')], { type: m.mime }) });
       }
     }
-    if (!(await commitImport(w, files))) return;
+    // 缺哪些文件，提交之前就算好（提交以后只做不会失败的事）
+    const have = new Set(files.map((f) => f.id));
     const missing: string[] = [];
-    for (const m of w.media) if (!(await readRaw(m.key ?? m.id))) missing.push(m.name);
+    for (const m of w.media) if (!have.has(m.id) && !(await readRaw(m.key ?? m.id))) missing.push(m.name);
+    if (!(await commitImport(w, files, ctx))) return;
     setUI({ mapId: w.maps[0].id, selection: null, views: {}, flowId: w.flows[0]?.id ?? null });
     toast(`已导入：${w.name}${missing.length ? `（缺 ${missing.length} 个媒体文件：${missing.join('、')}）` : ''}`);
   } catch (e) {
@@ -648,12 +664,12 @@ export function exportSessionMarkdown() {
   download(`${w.name}-第${s}场记录.md`, out.join('\n'), 'text/markdown');
 }
 
-async function importRabbitholeFile(file: File) {
+async function importRabbitholeFile(file: File, ctx: string) {
   try {
     const { importRabbithole } = await import('./importRabbithole');
     const { world, blobs, summary } = await importRabbithole(file);
     checkWorld(world, true);
-    if (!(await commitImport(world, blobs))) return;
+    if (!(await commitImport(world, blobs, ctx))) return;
     setUI({ mapId: world.maps[0].id, selection: null, views: {}, flowId: world.flows[0]?.id ?? null, mode: 'edit', tool: 'select' });
     toast(summary);
   } catch (e) {
@@ -665,6 +681,7 @@ async function importRabbitholeFile(file: File) {
 export async function restoreBackup() {
   if (getUI().trial) return toast('试玩中不能恢复，先结束试玩');
   await exclusive('恢复', async () => {
+    const ctx = worldContext();
     try {
       const b = readBackup();
       if (!b) return;
@@ -685,7 +702,7 @@ export async function restoreBackup() {
         for (const m of w.media) if (!(await readRaw(m.key ?? m.id))) lost.push(m.name);
         if (lost.length && !confirm(`备份里的这些媒体文件在浏览器里找不到：${lost.join('、')}。仍然恢复吗？`)) return;
       }
-      if (!(await commitImport(w, []))) return;
+      if (!(await commitImport(w, [], ctx))) return;
       setUI({ mapId: w.maps[0].id, selection: null, views: {}, flowId: w.flows[0]?.id ?? null });
       toast(`已恢复：${w.name}`);
     } catch (e) {
@@ -698,6 +715,7 @@ export async function restoreBackup() {
 export async function importAnyFile(file: File) {
   if (getUI().trial) return toast('试玩中不能导入，先结束试玩');
   await exclusive('导入', async () => { // 从读文件的第一步就占住：这期间不能试玩、保存、再导入
+    const ctx = worldContext();
     let rabbithole = false;
     try {
       if (/\.json$/i.test(file.name)) {
@@ -710,7 +728,7 @@ export async function importAnyFile(file: File) {
     } catch (e) {
       return toast('读不了这个文件：' + (e as Error).message);
     }
-    await (rabbithole ? importRabbitholeFile(file) : importProject(file));
+    await (rabbithole ? importRabbitholeFile(file, ctx) : importProject(file, ctx));
   });
 }
 

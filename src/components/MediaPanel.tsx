@@ -1,6 +1,6 @@
 import { stopMedia, playMedia } from '../actions';
 import { storeBlob, useBlobUrl } from '../media';
-import { toast, update, useUI, useWorld } from '../store';
+import { toast, update, useUI, useWorld, worldContext } from '../store';
 import { uid } from '../util';
 import { Section } from './fields';
 
@@ -11,12 +11,14 @@ export function MediaPanel() {
   const w = useWorld();
   const upload = async (files: FileList | null) => {
     if (!files) return;
+    const ctx = worldContext(); // 上传途中换了工程、进出了试玩：传完的文件不挂到那时恰好打开的世界上
     for (const f of Array.from(files)) {
       const id = uid();
       try {
         // 有的系统给 PDF 的类型是空的，按扩展名补上
         const mime = f.type || (/\.pdf$/i.test(f.name) ? 'application/pdf' : 'application/octet-stream');
         const key = await storeBlob(mime === f.type ? f : new Blob([f], { type: mime })); // 存成新文件（不覆盖任何已有的）
+        if (ctx !== worldContext()) { toast(`「${f.name}」传完时工程已经换了（或试玩开始 / 结束了），没有加进去`); return; }
         update((d) => { d.media.push({ id, name: f.name, mime, size: f.size, key }); });
       } catch (e) {
         toast(`上传失败：${f.name}`);

@@ -15,7 +15,8 @@ export type SyncBody =
   | { type: 'play'; mediaId: string; label: string; mime: string; blob?: Blob }
   | { type: 'stop' }
   | { type: 'claim' } // 编辑器启动时：这个会话标识有人在用吗？
-  | { type: 'taken' }; // 回答：在用（复制标签页时会碰上），换一个
+  | { type: 'taken' } // 回答：在用（复制标签页时会碰上），换一个
+  | { type: 'alive' }; // 编辑器每两秒报一声"我还在"：玩家窗口靠它判断原来那个编辑器是不是已经关了 / 刷新了
 /** from：发送方的会话；to：只给某个会话（玩家窗口打招呼时用）。 */
 /** inst / born：发送的是哪个页面实例、什么时候打开的（同一个会话标识出现在两个实例上时，后打开的让）。 */
 export type SyncMsg = SyncBody & { __ts: 'ts-map'; seq: string; from: string; to?: string; inst: string; born: number };
@@ -193,13 +194,14 @@ export function listenAsEditor(onHello: () => void) {
       else { send({ type: 'taken' }); onHello(); } // 我是原来那个：叫对方换号，并重推一次世界（万一玩家窗口刚才收到了对方的）
       return;
     }
-    if (m.type === 'claim' || m.type === 'taken') return;
+    if (m.type === 'claim' || m.type === 'taken' || m.type === 'alive') return;
     if (m.type !== 'hello' || (m.to && m.to !== SESSION)) return;
     if (source && source !== window && 'postMessage' in source) playerWin = source as Window;
     onHello();
   });
   if (channel) { quietUntil = Date.now() + 250; send({ type: 'claim' }); }
-  return off;
+  const beat = window.setInterval(() => send({ type: 'alive' }), 2000);
+  return () => { off(); clearInterval(beat); };
 }
 
 /**
@@ -210,9 +212,13 @@ export function listenAsEditor(onHello: () => void) {
 export function listenAsPlayer(fn: (m: SyncMsg) => void) {
   const url = new URL(location.href);
   let bound = url.searchParams.get('session');
+  // 只认一个编辑器实例：同一个会话标识出现第二个实例（复制了标签页、还没来得及换号）时不理它；
+  // 只有原来那个实例安静了一阵（关了、刷新了），才改认新的实例
+  let inst: string | null = null;
   let lastHeard = 0;
+  const QUIET = 5000;
   const off = listen((m) => {
-    if (m.type !== 'world' && m.type !== 'play' && m.type !== 'stop') return;
+    if (m.type !== 'world' && m.type !== 'play' && m.type !== 'stop' && m.type !== 'alive') return;
     if (!bound) {
       if (m.type !== 'world') return;
       bound = m.from;
@@ -220,8 +226,13 @@ export function listenAsPlayer(fn: (m: SyncMsg) => void) {
       try { history.replaceState(null, '', url.toString()); } catch { /* file:// 下可能不让改 */ }
     }
     if (m.from !== bound) return;
+    if (inst && m.inst !== inst) {
+      if (Date.now() - lastHeard < QUIET) return; // 原来那个还活着：这是复制出来的，不认
+      if (m.type !== 'world') { send({ type: 'hello' }, bound); return; } // 换认新实例：先请它推一整份世界，从世界开始认
+    }
+    inst = m.inst;
     lastHeard = Date.now();
-    fn(m);
+    if (m.type !== 'alive') fn(m);
   });
   send({ type: 'hello' }, bound ?? undefined);
   const beat = window.setInterval(() => { if (Date.now() - lastHeard > 10000) send({ type: 'hello' }, bound ?? undefined); }, 5000);

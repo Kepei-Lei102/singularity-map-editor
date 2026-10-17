@@ -97,6 +97,13 @@ export function repairWorld(w) {
       clampNum(o, 'h', 1, MAX_SIDE, `「${o?.name}」的高`, true);
       for (const s of Array.isArray(o?.secrets) ? o.secrets : []) clampNum(s, 'range', 0, MAX_SIDE * 2, `「${o?.name}」线索的距离`, true);
     }
+    // 记忆里的快照（全队的、每个人的）是旧版本存下的，同样可能超范围
+    const memories = [m.seen, ...Object.values(m.views && typeof m.views === 'object' ? m.views : {}).map((L) => L?.seen)];
+    for (const mem of memories) for (const r of Array.isArray(mem?.objects) ? mem.objects : []) {
+      clampNum(r, 'height', 0, 1000, `记忆里「${r?.name}」的高度`);
+      clampNum(r, 'w', 1, MAX_SIDE, `记忆里「${r?.name}」的宽`, true);
+      clampNum(r, 'h', 1, MAX_SIDE, `记忆里「${r?.name}」的高`, true);
+    }
   }
   for (const n of Array.isArray(w.npcs) ? w.npcs : []) {
     clampNum(n, 'returnAfterDays', 0, 36500, `NPC「${n?.name}」的回访天数`);
