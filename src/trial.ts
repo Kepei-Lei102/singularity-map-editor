@@ -1,5 +1,5 @@
 import { beginSandbox, endSandbox, getUI, getWorld, setUI, toast, update, type UIState } from './store';
-import { addMark, autoReveal, checkEnterTriggers, findMap } from './actions';
+import { addMark, autoReveal, cancelPendingPlay, checkEnterTriggers, findMap } from './actions';
 import type { GameMap, World } from './types';
 import { uid } from './util';
 import { ROUND_MINUTES } from './perception';
@@ -82,6 +82,7 @@ export function startTrial() {
   const mapId = getUI().mapId;
   if (!findMap(getWorld(), mapId)) return;
   beginSandbox();
+  cancelPendingPlay();
   playingBefore = getUI().nowPlaying;
   setUI({ trial: { mapId, players: [], current: 0, combat: false, moved: {}, turn: 1, msg: '', markSymbol: '!', markText: '', markMode: false }, selection: null, pendingConn: null });
   const p = placePlayer(mapId);
@@ -103,6 +104,7 @@ export function switchTrialPlayer(i?: number) {
 }
 
 export function endTrial() {
+  cancelPendingPlay();
   endSandbox();
   // 试玩里触发的播放只在主持人这边（没发给玩家），结束时换回试玩前在放的那个
   setUI({ trial: null, selection: null, nowPlaying: playingBefore });

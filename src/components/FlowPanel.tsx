@@ -119,6 +119,9 @@ export function FlowPanel() {
     </div>
   );
 
+  useEffect(() => () => endBatch(), []); // 拖着事件时面板被关掉：收尾
+  useEffect(() => { drag.current = null; endBatch(); }, [flow?.id, run]); // 换了流程图、换了模式：丢掉这次拖动
+
   if (collapsed || !flow) {
     return (
       <div className="flow-panel collapsed">

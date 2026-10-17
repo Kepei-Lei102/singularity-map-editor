@@ -23,12 +23,13 @@ export function fmtTime(t: number) {
 export function cellLine(x0: number, y0: number, x1: number, y1: number): [number, number][] {
   x0 = Math.round(x0); y0 = Math.round(y0); x1 = Math.round(x1); y1 = Math.round(y1); // 只走整数格，小数会让循环停不下来
   const out: [number, number][] = [];
-  if (![x0, y0, x1, y1].every(Number.isFinite)) return out; // 坏坐标（NaN、无穷）：一格也不走，也不会死循环
-  if (Math.abs(x1 - x0) + Math.abs(y1 - y0) > 4000) return [[x0, y0], [x1, y1]]; // 地图最大 200×200，再远一定是坏数据
+  // 坏坐标（NaN、无穷、大到 +1 都不变的数）：一格也不走。地图最大 200×200，坐标绝对值过万一定是坏数据
+  if (![x0, y0, x1, y1].every((v) => Number.isFinite(v) && Math.abs(v) <= 10000)) return out;
+  if (Math.abs(x1 - x0) + Math.abs(y1 - y0) > 4000) return [[x0, y0], [x1, y1]];
   const dx = Math.abs(x1 - x0), dy = -Math.abs(y1 - y0);
   const sx = x0 < x1 ? 1 : -1, sy = y0 < y1 ? 1 : -1;
   let err = dx + dy;
-  for (;;) {
+  for (let guard = 0; guard < 10000; guard++) { // 有上限：怎么都不会卡死
     out.push([x0, y0]);
     if (x0 === x1 && y0 === y1) break;
     const e2 = 2 * err;

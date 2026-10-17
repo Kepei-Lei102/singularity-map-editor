@@ -52,6 +52,18 @@ export const getWorld = () => world;
 /** 真正的世界：试玩中是试玩开始前那份（发给玩家、保存都用它）。 */
 export const getRealWorld = () => sandbox?.world ?? world;
 
+/** 物件的状态每变一次，stateRev 加一（不管是谁改的）。流程图撤销靠它判断"之后有没有别人动过"。 */
+function bumpStateRevs(prev: World, next: World) {
+  const changed: [number, number][] = [];
+  next.maps.forEach((m, mi) => {
+    const pm = prev.maps.find((x) => x.id === m.id);
+    if (!pm || pm.objects === m.objects) return;
+    m.objects.forEach((o, oi) => { const po = pm.objects.find((x) => x.id === o.id); if (po && po.state !== o.state && (o.stateRev ?? 0) === (po.stateRev ?? 0)) changed.push([mi, oi]); });
+  });
+  if (!changed.length) return next;
+  return produce(next, (d) => { for (const [mi, oi] of changed) { const o = d.maps[mi].objects[oi]; o.stateRev = (o.stateRev ?? 0) + 1; } });
+}
+
 function pushHistory(at: World = world) {
   past.push(at);
   if (past.length > 200) past.shift();
@@ -65,6 +77,7 @@ export function update(fn: (d: Draft<World>) => void, opts: { coalesce?: string;
   let next = produce(world, fn);
   if (next === world) return;
   next = produce(withVision(next, world), syncMemory);
+  next = bumpStateRevs(world, next);
   if (batching && batchStart) { pushHistory(batchStart); batchStart = null; } // 拖动里第一次真的改了东西，才记一步撤销
   else if (!batching && opts.history !== false) {
     const now = Date.now();
@@ -93,6 +106,7 @@ export function undo() {
   if (!prev) return;
   future.push(world);
   world = prev;
+  if (batching) batchStart = world; // 拖动中途撤销：之后接着拖的部分算新的一步（从撤销后的样子开始）
   lastCoalesce = null;
   emit();
 }
@@ -101,6 +115,7 @@ export function redo() {
   if (!next) return;
   past.push(world);
   world = next;
+  if (batching) batchStart = world;
   lastCoalesce = null;
   emit();
 }
@@ -108,6 +123,8 @@ export function redo() {
 export function replaceWorld(w: World) {
   past = [];
   future = [];
+  batching = false;
+  batchStart = null;
   world = w;
   emit();
 }

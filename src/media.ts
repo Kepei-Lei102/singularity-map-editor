@@ -31,6 +31,20 @@ export const putBlob = (id: string, blob: Blob) => tx('readwrite', (s) => s.put(
 export const getBlob = (id: string) => tx<Blob | undefined>('readonly', (s) => s.get(id));
 export const delBlob = (id: string) => tx('readwrite', (s) => s.delete(id));
 
+/** 一批写入放在同一个事务里：要么全部生效，要么（任何一步出错、空间不够）一个都不生效。blob = null 表示删除。 */
+export async function putBlobs(ops: { id: string; blob: Blob | null }[]): Promise<void> {
+  if (!ops.length) return;
+  const db = await open();
+  return new Promise((resolve, reject) => {
+    const t = db.transaction(STORE, 'readwrite');
+    const s = t.objectStore(STORE);
+    for (const o of ops) { if (o.blob) s.put(o.blob, o.id); else s.delete(o.id); }
+    t.oncomplete = () => { db.close(); resolve(); };
+    t.onerror = () => { db.close(); reject(t.error ?? new Error('写媒体文件失败')); };
+    t.onabort = () => { db.close(); reject(t.error ?? new Error('写媒体文件被中止（可能是空间不够）')); };
+  });
+}
+
 const urlCache = new Map<string, string>();
 let version = 0;
 const versionListeners = new Set<() => void>();

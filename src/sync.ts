@@ -1,4 +1,5 @@
-import type { GameMap, World } from './types';
+import type { Endpoint, GameMap, PlayerClue, World } from './types';
+import { visibleMarks } from './perception';
 import { numbering } from './render';
 import { getRealWorld, getUI } from './store';
 
@@ -12,22 +13,30 @@ export type SyncBody =
   | { type: 'world'; world: World }
   | { type: 'hello' }
   | { type: 'play'; mediaId: string; label: string; mime: string; blob?: Blob }
-  | { type: 'stop' };
+  | { type: 'stop' }
+  | { type: 'claim' } // 编辑器启动时：这个会话标识有人在用吗？
+  | { type: 'taken' }; // 回答：在用（复制标签页时会碰上），换一个
 /** from：发送方的会话；to：只给某个会话（玩家窗口打招呼时用）。 */
 export type SyncMsg = SyncBody & { __ts: 'ts-map'; seq: string; from: string; to?: string };
 
 const rand = () => Math.random().toString(36).slice(2) + Date.now().toString(36);
+const SESSION_KEY = 'ts-sync-session';
 /**
  * 这个编辑器窗口的会话标识。同时开着两个编辑器（两场团）时，玩家窗口只认打开它的那一个。
- * 存在 sessionStorage：刷新页面不变（玩家窗口不用重开），换一个标签页就是新的。
+ * 存在 sessionStorage：刷新页面不变（玩家窗口不用重开）。复制标签页会把 sessionStorage 一起复制，
+ * 所以编辑器启动时先问一句（claim），还有活着的编辑器在用同一个标识，就换一个新的。
  */
-export const SESSION = (() => {
+export let SESSION = (() => {
   try {
-    let s = sessionStorage.getItem('ts-sync-session');
-    if (!s) { s = rand(); sessionStorage.setItem('ts-sync-session', s); }
+    let s = sessionStorage.getItem(SESSION_KEY);
+    if (!s) { s = rand(); sessionStorage.setItem(SESSION_KEY, s); }
     return s;
   } catch { return rand(); }
 })();
+function renewSession() {
+  SESSION = rand();
+  try { sessionStorage.setItem(SESSION_KEY, SESSION); } catch { /* 存不了就只在这次有效 */ }
+}
 
 let channel: BroadcastChannel | null = null;
 try { channel = new BroadcastChannel('ts-map-sync'); } catch { /* 不支持就只走 postMessage */ }
@@ -42,19 +51,28 @@ const isMsg = (d: unknown): d is SyncMsg => !!d && typeof d === 'object' && (d a
 /**
  * 发给玩家窗口的"玩家版"世界：主持人才能看的东西在发出去之前就删掉，而不只是不画。
  * 只留推给玩家的那一张图，而且只留"有人看得见"或"有人记得"的部分：
- * - 地形：现在有人看得见的格子才带实时地形；灰区靠各人的记忆（seen）画，黑区什么都没有；
- * - 物件：没隐藏、现在有人看得见的才带，备注、挂的媒体、没公开的线索删掉，其他状态的名字也删掉（只留当前这个）；
- * - 棋子：玩家角色的都带，其余的只在有人看得见时带；连接点：没隐藏、端点有人看得见的才带；
+ * - 地形：现在有人看得见的格子才带实时地形；灰区靠各人的记忆（seen）画，黑区什么都没有；地形定义也只带用得上的；
+ * - 物件：没隐藏、现在有人看得见的才带，备注、挂的媒体、线索删掉，其他状态的名字也删掉（只留当前这个）；
+ *   记忆里的物件只留至少还有一格在灰区或看得见的（抹黑了的就不带）；
+ * - 棋子：玩家角色的都带，其余的只在有人看得见时带；
+ * - 连接点：没隐藏、这一头有人看得见的才带；另一头只在那张图去过时留下图的 ID，坐标一律不带；
+ * - 线索：全队公开过的单独列在 clues 里（只带揭示到的那一档）；
+ * - 标记：谁能看到（听得见）在完整的世界里算好，写进 audience（玩家窗口没有完整地形，自己算会算错）；
  * - 房间、D100、出生点、备注、流程图、记录、NPC、媒体列表都不带。
  * 编号（O/Z/T/C）在删之前按完整的世界算好放进 labels，所以玩家和主持人看到的编号一样。
  */
 export function playerWorld(w: World, mapId: string | null = w.playerMapId): World {
   const src = w.maps.find((m) => m.id === mapId);
   const pm = src && playerMap(src);
-  const connections = src ? w.connections.filter((c) => {
-    if (c.hidden) return false;
-    return [c.a, c.b].some((e) => e.mapId === src.id && liveAt(src, e.y * src.width + e.x));
-  }) : [];
+  const known = (id: string) => { const m = w.maps.find((x) => x.id === id); return !!m && [m, ...Object.values(m.views ?? {})].some((L) => L.fog.some(Boolean)); };
+  const hidden = { mapId: '', x: 0, y: 0 };
+  const connections = !src ? [] : w.connections.flatMap((c) => {
+    if (c.hidden) return [];
+    const show = (e: Endpoint) => e.mapId === src.id && liveAt(src, e.y * src.width + e.x);
+    if (!show(c.a) && !show(c.b)) return [];
+    const far = (e: Endpoint) => (show(e) ? e : e.mapId !== src.id && known(e.mapId) ? { mapId: e.mapId, x: 0, y: 0 } : hidden);
+    return [{ ...c, a: far(c.a), b: far(c.b) }];
+  });
   // 编号表也只带玩家碰得到的东西（发出去的、记得的），不然从编号的空缺能数出有几个隐藏物件
   const keep = new Set<string>([
     ...(pm ? [...pm.objects, ...pm.tokens, ...pm.seen.objects, ...Object.values(pm.views).flatMap((L) => L.seen.objects)].map((x) => x.id) : []),
@@ -62,12 +80,18 @@ export function playerWorld(w: World, mapId: string | null = w.playerMapId): Wor
   ]);
   const labels: Record<string, string> = {};
   if (src) numbering(w, src).forEach((n) => { if (keep.has(n.id)) labels[n.id] = n.label; });
+  const usedTerrains = new Set(pm ? [...pm.cells, ...pm.seen.cells, ...Object.values(pm.views).flatMap((L) => L.seen.cells)] : []);
+  const clues: PlayerClue[] = w.maps.flatMap((m) => m.objects.flatMap((o) => o.secrets.filter((s) => s.revealed?.scope === 'party').map((s) => ({
+    id: s.id, object: o.name, label: s.label, kind: s.kind, check: s.check, tier: s.revealed!.tier, text: s.tiers[s.revealed!.tier], at: s.revealed!.at,
+  }))));
+  const marks = w.marks.filter((k) => k.mapId === mapId).map((k) => ({
+    ...k, audience: w.party.filter((p) => visibleMarks(w, k.mapId, p.id).some((x) => x.id === k.id)).map((p) => p.id),
+  }));
   return {
     ...w,
+    terrains: w.terrains.filter((t) => usedTerrains.has(t.id)),
     flows: [], log: [], npcs: [], media: [],
-    labels,
-    marks: w.marks.filter((k) => k.mapId === mapId),
-    connections,
+    labels, clues, marks, connections,
     maps: pm ? [pm] : [],
   };
 }
@@ -79,13 +103,24 @@ function liveAt(m: GameMap, i: number) {
 
 function playerMap(m: GameMap): GameMap {
   const live = m.fog.map((_, i) => liveAt(m, i));
-  const seenRect = (r: { x: number; y: number; w: number; h: number }) => {
+  const touches = (r: { x: number; y: number; w: number; h: number }, ok: (i: number) => boolean) => {
     for (let y = Math.max(0, r.y); y < Math.min(m.height, r.y + r.h); y++)
-      for (let x = Math.max(0, r.x); x < Math.min(m.width, r.x + r.w); x++) if (live[y * m.width + x]) return true;
+      for (let x = Math.max(0, r.x); x < Math.min(m.width, r.x + r.w); x++) if (ok(y * m.width + x)) return true;
     return false;
   };
+  // 记忆：只留还落在"去过"的格子里的物件；没去过（黑）的格子不留地形记忆
+  const mem = <L extends { fog: number[]; seen: GameMap['seen'] }>(L: L): L => ({
+    ...L,
+    seen: {
+      cells: L.seen.cells.map((c, i) => (L.fog[i] ? c : '')),
+      objects: L.seen.objects.filter((r) => touches(r, (i) => L.fog[i] !== 0)),
+    },
+  });
+  const base = mem(m);
   return {
     ...m,
+    seen: base.seen,
+    views: Object.fromEntries(Object.entries(m.views).map(([pc, L]) => [pc, mem(L)])),
     notes: '',
     spawn: null,
     cells: m.cells.map((c, i) => (live[i] ? c : '')),
@@ -93,15 +128,12 @@ function playerMap(m: GameMap): GameMap {
     rooms: [],
     roomCells: m.roomCells.map(() => ''),
     tokens: m.tokens.filter((t) => t.pcId || live[t.y * m.width + t.x]),
-    objects: m.objects.filter((o) => o.kind === 'object' && !o.hidden && seenRect(o)).map((o) => ({
+    objects: m.objects.filter((o) => o.kind === 'object' && !o.hidden && touches(o, (i) => live[i])).map((o) => ({
       ...o,
       notes: '',
       media: [],
       states: o.states.map((s, k) => (k === o.state ? s : '')),
-      secrets: o.secrets.filter((s) => s.revealed?.scope === 'party').map((s) => ({
-        ...s,
-        tiers: { crit: '', success: '', fail: '', fumble: '', [s.revealed!.tier]: s.tiers[s.revealed!.tier] },
-      })),
+      secrets: [],
     })),
   };
 }
@@ -109,7 +141,13 @@ function playerMap(m: GameMap): GameMap {
 // 只发给自己的同源窗口（双击 html 用 file:// 打开时没有正经的 origin，只能用 '*'）
 const target = () => (location.origin && location.origin !== 'null' ? location.origin : '*');
 
+let quietUntil = 0; // 编辑器刚启动、还在确认会话标识没撞车时，先不往外推
+
 export function send(body: SyncBody, to?: string) {
+  if ((body.type === 'world' || body.type === 'play' || body.type === 'stop') && Date.now() < quietUntil) {
+    window.setTimeout(() => send(body, to), quietUntil - Date.now() + 5);
+    return;
+  }
   // 试玩是主持人自己的测试：试玩期间不往玩家窗口推播放；世界一律推真正的那份（试玩前的）
   if ((body.type === 'play' || body.type === 'stop') && getUI().trial) return;
   const out: SyncBody = body.type === 'world' ? { type: 'world', world: playerWorld(getRealWorld()) } : body;
@@ -137,29 +175,48 @@ export function listen(fn: (m: SyncMsg, source: MessageEventSource | null) => vo
   };
 }
 
-/** 编辑器这边：只回应找自己的玩家窗口（没指定找谁的也回应），顺便记下它，之后直接 postMessage。 */
+/**
+ * 编辑器这边：
+ * - 启动时先问一句会话标识有没有人在用（复制标签页），有就换新的；
+ * - 别的编辑器来问、而且问的正是自己的标识，就回答"在用"；
+ * - 只回应找自己的玩家窗口（没指定找谁的也回应），顺便记下它，之后直接 postMessage。
+ */
 export function listenAsEditor(onHello: () => void) {
-  return listen((m, source) => {
+  const off = listen((m, source) => {
+    if (m.type === 'claim') { if (m.from === SESSION) send({ type: 'taken' }, m.from); return; }
+    if (m.type === 'taken') { if (m.to === SESSION && Date.now() < quietUntil) renewSession(); return; }
     if (m.type !== 'hello' || (m.to && m.to !== SESSION)) return;
     if (source && source !== window && 'postMessage' in source) playerWin = source as Window;
     onHello();
   });
+  if (channel) { quietUntil = Date.now() + 250; send({ type: 'claim' }); }
+  return off;
 }
 
 /**
- * 玩家窗口这边：只接收绑定的那个编辑器的消息。
- * 从编辑器的按钮打开的，网址里带着会话；手动打开的，认第一个推来世界的编辑器。
+ * 玩家窗口这边：只接收绑定的那个编辑器的世界和播放。
+ * 从编辑器的按钮打开的，网址里带着会话；手动打开的，认第一个推来世界的编辑器，并把它写进网址（刷新后还认它）。
+ * 一段时间没收到消息就再打个招呼（编辑器刷新过、只能走 postMessage 时靠这个重新连上）。
  */
 export function listenAsPlayer(fn: (m: SyncMsg) => void) {
-  let bound = new URLSearchParams(location.search).get('session');
+  const url = new URL(location.href);
+  let bound = url.searchParams.get('session');
+  let lastHeard = 0;
   const off = listen((m) => {
-    if (m.type === 'hello') return;
-    if (!bound) { if (m.type !== 'world') return; bound = m.from; }
+    if (m.type !== 'world' && m.type !== 'play' && m.type !== 'stop') return;
+    if (!bound) {
+      if (m.type !== 'world') return;
+      bound = m.from;
+      url.searchParams.set('session', bound);
+      try { history.replaceState(null, '', url.toString()); } catch { /* file:// 下可能不让改 */ }
+    }
     if (m.from !== bound) return;
+    lastHeard = Date.now();
     fn(m);
   });
   send({ type: 'hello' }, bound ?? undefined);
-  return off;
+  const beat = window.setInterval(() => { if (Date.now() - lastHeard > 10000) send({ type: 'hello' }, bound ?? undefined); }, 5000);
+  return () => { off(); clearInterval(beat); };
 }
 
 let timer: number | undefined;

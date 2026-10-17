@@ -59,6 +59,7 @@ export interface MapObject {
   icon: string;
   states: string[];
   state: number;
+  stateRev?: number; // 状态改过几次（自动加一）：流程图撤销时用来判断之后有没有被别人改过
   notes: string; // 只有主持人看得到
   hidden: boolean; // 对玩家隐藏
   secrets: Secret[];
@@ -217,7 +218,7 @@ export interface FlowNode {
   at?: number;
   session?: number;
   via?: Id; // 发生时实际是从哪条连线过来的（记下来，不靠时间去猜）
-  applied?: { mapId: Id; objectId: Id; from: number; to: number }; // 发生时真的改了哪个物件（撤销时改回去）
+  applied?: { mapId: Id; objectId: Id; from: number; to: number; rev?: number }; // 发生时真的改了哪个物件（撤销时改回去）；rev = 改完后的 stateRev
 }
 
 export interface FlowEdge {
@@ -264,6 +265,7 @@ export interface Mark {
   text: string;
   createdAt: number; // 真实时间（毫秒）。奇点之后的时间和现实绑定，直接读真实时钟
   life: number; // 能留多少分钟
+  audience?: Id[]; // 只在发给玩家窗口的世界里有：哪些角色看得到这个标记（在完整的世界里算好的）
 }
 
 /**
@@ -334,4 +336,8 @@ export interface World {
   marks: Mark[];
   npcs: Npc[];
   labels?: Record<Id, string>; // 只在发给玩家窗口的世界里有：删东西之前算好的编号，保证和主持人那边一致
+  clues?: PlayerClue[]; // 只在发给玩家窗口的世界里有：全队公开过的线索（物件看不见了也不会忘）
 }
+
+/** 玩家窗口的线索列表里的一条（只带揭示到的那一档）。 */
+export interface PlayerClue { id: Id; object: string; label: string; kind: 'auto' | 'roll'; check: string; tier: Tier; text: string; at: number }

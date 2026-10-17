@@ -8,7 +8,7 @@ export { NODE_H, NODE_W, reachable } from './flow';
 import { CONN_LABEL } from './types';
 import { TIER_LABEL } from './types';
 import { download, uid } from './util';
-import { delBlob, getBlob, mediaChanged, putBlob } from './media';
+import { getBlob, mediaChanged, putBlobs } from './media';
 import { checkWorld } from './schema.js';
 import { send } from './sync';
 import { emptyLayer, migrateWorld } from './memory';
@@ -84,16 +84,24 @@ export function hideSecret(mapId: string, objId: string, secretId: string) {
 
 // ---------- 媒体 ----------
 
+let playSeq = 0; // 每次播放 / 停止都加一：读文件是异步的，读完时如果已经停了、换了别的、或者试玩开始 / 结束了，就不再发
+
 export function playMedia(mediaId: string, label: string, broadcast: boolean) {
   const meta = getWorld().media.find((m) => m.id === mediaId);
   if (!meta) return toast('找不到这个媒体文件');
+  const seq = ++playSeq;
   setUI({ nowPlaying: { mediaId, label, broadcast } });
-  // 文件本身也一起发过去：玩家窗口不一定能读到本地存储（例如双击 html 打开时）
-  if (broadcast) getBlob(mediaId).catch(() => undefined).then((blob) => send({ type: 'play', mediaId, label, mime: meta.mime, blob }));
+  // 文件本身也一起发过去：玩家窗口不一定能读到本地存储（例如双击 html 打开时）。试玩里的播放只在主持人这边，根本不发
+  if (broadcast && !getUI().trial)
+    getBlob(mediaId).catch(() => undefined).then((blob) => { if (seq === playSeq && !getUI().trial) send({ type: 'play', mediaId, label, mime: meta.mime, blob }); });
   update((d) => log(d, 'media', `播放：${label || meta.name}${broadcast ? '（同步给玩家）' : '（仅主持人）'}`), { history: false });
 }
 
+/** 试玩开始 / 结束时调用：作废还在读文件的播放。 */
+export function cancelPendingPlay() { playSeq++; }
+
 export function stopMedia() {
+  playSeq++;
   const np = getUI().nowPlaying;
   if (np?.broadcast) send({ type: 'stop' });
   setUI({ nowPlaying: null });
@@ -189,8 +197,13 @@ export function setObjectStates(mapId: string, objId: string, states: string[]) 
     if (states.length === before.length) before.forEach((_, i) => { if (!map.has(i) && !used.has(i)) { map.set(i, i); used.add(i); } });
     const to = (i: number) => map.get(i) ?? -1;
     o.states = states.length ? states : [''];
-    o.state = Math.max(0, to(o.state));
+    // 当前状态只是换了序号（还是同一个状态）：不算"状态被改过"，流程图里记的版本跟着走
+    const rev0 = o.stateRev ?? 0, cur = to(o.state);
+    const renumbered = cur >= 0 && cur !== o.state;
+    o.state = Math.max(0, cur);
+    if (renumbered) o.stateRev = rev0 + 1;
     for (const f of d.flows) for (const n of f.nodes) {
+      if (renumbered && n.applied && n.applied.mapId === mapId && n.applied.objectId === objId && n.applied.rev === rev0) n.applied.rev = rev0 + 1;
       if (n.effect && n.effect.mapId === mapId && n.effect.objectId === objId) {
         const j = to(n.effect.toState);
         if (j < 0) lost.push(n.title);
@@ -230,11 +243,13 @@ export function setNodeStatus(flowId: string, nodeId: string, status: 'predicted
     n.session = d.session;
     if (status === 'happened') {
       log(d, 'step', `［${f.name}］${n.title}`);
-      n.via = via ?? incomingCandidates(f, n.id, partyTags(d as World))[0]?.id;
+      // 自动只选条件满足的；只有锁着的连线可选时不替主持人决定（侧栏可以手动指定，算破例）
+      const tags = partyTags(d as World);
+      n.via = via ?? incomingCandidates(f, n.id, tags).find((e) => !e.condition || tags.has(e.condition))?.id;
       const e = n.effect;
       const o = e && findObj(d, e.mapId, e.objectId);
       if (e && o && o.state !== e.toState && o.states[e.toState] !== undefined) {
-        n.applied = { mapId: e.mapId, objectId: e.objectId, from: o.state, to: e.toState };
+        n.applied = { mapId: e.mapId, objectId: e.objectId, from: o.state, to: e.toState, rev: (o.stateRev ?? 0) + 1 }; // 这次改完后 stateRev 会加一
         log(d, 'state', `${o.name}：${o.states[o.state]} → ${o.states[e.toState]}`, e.mapId);
         o.state = e.toState;
       }
@@ -243,10 +258,12 @@ export function setNodeStatus(flowId: string, nodeId: string, status: 'predicted
       const a = n.applied;
       const o = a && findObj(d, a.mapId, a.objectId);
       if (a && o) {
-        if (o.state === a.to && o.states[a.from] !== undefined) {
+        // 之后没人动过（版本还是这次改完的那个）才改回去；只比状态值的话，"关了又开"会被误认成没动过
+        const untouched = a.rev !== undefined ? (o.stateRev ?? 0) === a.rev : o.state === a.to;
+        if (untouched && o.state === a.to && o.states[a.from] !== undefined) {
           o.state = a.from;
           log(d, 'state', `${o.name}：${o.states[a.to]} → ${o.states[a.from]}（撤销「${n.title}」）`, a.mapId);
-        } else log(d, 'note', `撤销「${n.title}」：${o.name}后来又变过（现在是${o.states[o.state]}），没有改回去`, a.mapId);
+        } else log(d, 'note', `撤销「${n.title}」：${o.name}后来又被改过（现在是${o.states[o.state]}），没有改回去`, a.mapId);
       }
       delete n.applied;
       delete n.via;
@@ -325,6 +342,7 @@ export function reshapeMaps(mapIds: string[], left: number, top: number, right: 
   if (bad.length) return toast(`改不了：${bad.map((m) => `「${m.name}」`).join('')}改完会小于 2 格或大于 200 格，整批都没改`);
   if (!maps.length || (left === 0 && top === 0 && right === 0 && bottom === 0)) return;
   const ids = new Set(maps.map((m) => m.id));
+  let droppedConns: string[] = [];
   update((d) => {
     for (const id of ids) {
       const m = findMap(d, id)!;
@@ -343,13 +361,14 @@ export function reshapeMaps(mapIds: string[], left: number, top: number, right: 
       m.roomCells = remap(m.roomCells, '');
       m.fog = remap(m.fog, 0);
       m.seen.cells = remap(m.seen.cells, '');
+      const inside = (r: { x: number; y: number; w?: number; h?: number }) => r.x >= 0 && r.y >= 0 && r.x + (r.w ?? 1) <= W && r.y + (r.h ?? 1) <= H;
       for (const L of Object.values(m.views)) {
         L.fog = remap(L.fog, 0);
         L.seen.cells = remap(L.seen.cells, '');
         for (const o of L.seen.objects) { o.x += left; o.y += top; }
+        L.seen.objects = L.seen.objects.filter(inside);
       }
-      if (m.spawn) m.spawn = { x: m.spawn.x + left, y: m.spawn.y + top };
-      const inside = (r: { x: number; y: number; w?: number; h?: number }) => r.x >= 0 && r.y >= 0 && r.x + (r.w ?? 1) <= W && r.y + (r.h ?? 1) <= H;
+      if (m.spawn) { m.spawn = { x: m.spawn.x + left, y: m.spawn.y + top }; if (!inside(m.spawn)) m.spawn = null; } // 出生点被裁掉了：回到"自动"
       for (const o of [...m.objects, ...m.tokens, ...m.seen.objects]) { o.x += left; o.y += top; }
       m.objects = m.objects.filter(inside);
       m.tokens = m.tokens.filter(inside);
@@ -360,6 +379,9 @@ export function reshapeMaps(mapIds: string[], left: number, top: number, right: 
     for (const c of d.connections)
       for (const e of [c.a, c.b]) if (ids.has(e.mapId)) { e.x += left; e.y += top; }
     const fits = (mapId: string, x: number, y: number) => { const m = findMap(d, mapId); return !!m && x >= 0 && y >= 0 && x < m.width && y < m.height; };
+    // 端点被裁到图外的连接点没法再用了：删掉，并提示
+    const cut = d.connections.filter((c) => [c.a, c.b].some((e) => ids.has(e.mapId) && !fits(e.mapId, e.x, e.y)));
+    if (cut.length) { d.connections = d.connections.filter((c) => !cut.includes(c)); droppedConns = cut.map((c) => c.label || CONN_LABEL[c.kind]); }
     for (const n of d.npcs ?? [])
       if (n.place && ids.has(n.place.mapId)) {
         n.place.x += left; n.place.y += top;
@@ -369,6 +391,7 @@ export function reshapeMaps(mapIds: string[], left: number, top: number, right: 
     d.marks = d.marks.filter((k) => !ids.has(k.mapId) || fits(k.mapId, k.x, k.y));
   });
   setUI((s) => { const v = { ...s.views }; ids.forEach((i) => delete v[i]); return { views: v, selection: null }; });
+  if (droppedConns.length) toast(`这些连接点被裁到图外，已删除（可以撤销）：${droppedConns.join('、')}`);
 }
 
 export function resizeMap(mapId: string, w: number, h: number) {
@@ -422,28 +445,34 @@ export const clearPendingFocus = () => { pendingFocus = null; };
 
 // ---------- 导入 / 导出 ----------
 
-/** 打包工程。缺了哪个媒体文件就列出来（不再悄悄跳过）。 */
+class MissingMedia extends Error {}
+
+/** 打包工程。先过一遍和导入一样的校验（存出去的东西一定能再导进来）；缺了哪个媒体文件就列出来（不再悄悄跳过）。 */
 async function buildProjectZip(allowMissing = false) {
   const w = getWorld();
+  checkWorld(w);
   const zip = new JSZip();
   zip.file('world.json', JSON.stringify(w, null, 2));
   const missing: string[] = [];
   for (const m of w.media) {
-    const b = await getBlob(m.id).catch(() => undefined);
+    const b = await readBlob(m.id);
     if (b) zip.file(`media/${m.id}`, b);
     else missing.push(m.name);
   }
-  if (missing.length && !allowMissing) throw new Error(`这几个媒体文件在浏览器里找不到：${missing.join('、')}`);
+  if (missing.length && !allowMissing) throw new MissingMedia(`这几个媒体文件在浏览器里找不到：${missing.join('、')}`);
   return zip.generateAsync({ type: 'blob' });
 }
 
 export async function exportProject() {
   if (getUI().trial) return toast('试玩中不能导出，先结束试玩');
+  const name = `${getWorld().name || '世界'}.tsmap.zip`;
   try {
-    download(`${getWorld().name || '世界'}.tsmap.zip`, await buildProjectZip());
+    download(name, await buildProjectZip());
   } catch (e) {
-    if (confirm(`${(e as Error).message}\n\n还要导出吗？（导出的工程里会缺这些文件）`))
-      download(`${getWorld().name || '世界'}.tsmap.zip`, await buildProjectZip(true));
+    if (!(e instanceof MissingMedia)) return toast('导出失败：' + (e as Error).message);
+    if (confirm(`${e.message}\n\n还要导出吗？（导出的工程里会缺这些文件）`)) {
+      try { download(name, await buildProjectZip(true)); } catch (e2) { toast('导出失败：' + (e2 as Error).message); }
+    }
   }
 }
 
@@ -503,16 +532,16 @@ function readBackup(): Backup | null {
     return j && j.world ? { world: j.world, swapped: Array.isArray(j.swapped) ? j.swapped : [] } : null;
   } catch { return null; }
 }
-/** 写备份；写不下（太大）返回 false，并把旧备份删掉——旧备份和接下来的媒体已经对不上了。 */
+/** 写备份；写不下（太大）返回 false。写不下时 localStorage 里原来那条不受影响（setItem 失败不改动旧值）。 */
 function writeBackup(b: Backup): boolean {
   try {
     localStorage.setItem(BACKUP_KEY, JSON.stringify(b));
     localStorage.removeItem(OLD_BACKUP_MEDIA_KEY);
     return true;
-  } catch {
-    try { localStorage.removeItem(BACKUP_KEY); localStorage.removeItem(OLD_BACKUP_MEDIA_KEY); } catch { /* 无能为力 */ }
-    return false;
-  }
+  } catch { return false; }
+}
+function dropBackup() {
+  try { localStorage.removeItem(BACKUP_KEY); localStorage.removeItem(OLD_BACKUP_MEDIA_KEY); } catch { /* 无能为力 */ }
 }
 export function hasBackup() {
   try { return !!localStorage.getItem(BACKUP_KEY); } catch { return false; }
@@ -525,58 +554,49 @@ async function sameBytes(a: Blob, b: Blob) {
   return true;
 }
 
-/**
- * 换上一批媒体文件，要么全换上，要么一个都不换：
- * 先把同 ID、内容不同的旧文件存到 __backup__/<id>，再写新文件；中途任何一步失败，已写的全部还原。
- * 返回被覆盖掉的 ID（备份里要记下，恢复时换回来）。
- */
-async function commitMedia(incoming: { id: string; blob: Blob }[]): Promise<string[]> {
-  const plan: { id: string; blob: Blob; old: Blob | undefined }[] = [];
-  for (const m of incoming) {
-    const old = await getBlob(m.id).catch(() => undefined);
-    if (old && (await sameBytes(old, m.blob))) continue; // 一模一样，不用动
-    plan.push({ ...m, old });
-  }
-  const done: typeof plan = [];
-  const backedUp: { key: string; prev: Blob | undefined }[] = [];
-  try {
-    for (const p of plan) if (p.old) {
-      const key = BACKUP_MEDIA_PREFIX + p.id;
-      backedUp.push({ key, prev: await getBlob(key).catch(() => undefined) });
-      await putBlob(key, p.old);
-    }
-    for (const p of plan) { await putBlob(p.id, p.blob); done.push(p); }
-  } catch (e) {
-    for (const p of done) await (p.old ? putBlob(p.id, p.old) : delBlob(p.id)).catch(() => undefined);
-    for (const b of backedUp) await (b.prev ? putBlob(b.key, b.prev) : delBlob(b.key)).catch(() => undefined);
-    throw new Error(`写媒体文件失败，已经还原（${(e as Error).message || e}）`);
-  } finally {
-    mediaChanged();
-  }
-  return plan.filter((p) => p.old).map((p) => p.id);
+/** 读一个媒体文件。和 getBlob 不同：读出错就报错（不当作"没有"），免得把读不出来的旧文件当成不存在、直接覆盖。 */
+async function readBlob(id: string): Promise<Blob | undefined> {
+  try { return await getBlob(id); } catch (e) { throw new Error(`读不了浏览器里的媒体文件 ${id}（${(e as Error)?.message ?? e}），什么都没改`); }
+}
+
+/** 导入、恢复一次只能做一件：前一件没做完时再点，直接拒绝（否则两边会互相覆盖备份）。 */
+let importing = false;
+async function exclusive<T>(fn: () => Promise<T>): Promise<T | undefined> {
+  if (importing) { toast('上一次导入 / 恢复还没做完，请稍等'); return undefined; }
+  importing = true;
+  try { return await fn(); } finally { importing = false; }
 }
 
 /**
- * 导入的最后一步，所有导入方式共用：
- * 1) 把现在的世界和"这次会覆盖的媒体"写成一条备份；写不下就先问一句
- * 2) 换媒体（失败全部还原，备份也换回原来那条）
- * 3) 换世界
+ * 导入的最后一步，所有导入方式（工程、JSON、Rabbithole、恢复备份）共用：
+ * 1) 先把要用到的旧文件全部读出来（读出错就停，什么都没改）
+ * 2) 把现在的世界和"这次会覆盖的媒体"写成一条备份；写不下就问一句，取消的话旧备份原样保留
+ * 3) 换媒体：备份旧文件和写入新文件放在同一个事务里，要么全成，要么全不成
+ * 4) 换世界
  */
 async function commitImport(w: World, media: { id: string; blob: Blob }[]): Promise<boolean> {
-  const prevBackup = (() => { try { return localStorage.getItem(BACKUP_KEY); } catch { return null; } })();
-  // 先按"会覆盖哪些"算出备份清单（真正写入时再算一遍，结果一样）
-  const willSwap: string[] = [];
+  const plan: { id: string; blob: Blob; old: Blob | undefined }[] = [];
   for (const m of media) {
-    const old = await getBlob(m.id).catch(() => undefined);
-    if (old && !(await sameBytes(old, m.blob))) willSwap.push(m.id);
+    const old = await readBlob(m.id);
+    if (old && (await sameBytes(old, m.blob))) continue; // 一模一样，不用动
+    plan.push({ ...m, old });
   }
-  if (!writeBackup({ world: getWorld(), swapped: willSwap })
-    && !confirm('当前内容太大，没法留"导入前的备份"。继续导入的话，之后就不能一键恢复了。继续吗？')) return false;
+  const swapped = plan.filter((p) => p.old).map((p) => p.id);
+  const prevBackup = (() => { try { return localStorage.getItem(BACKUP_KEY); } catch { return null; } })();
+  if (!writeBackup({ world: getWorld(), swapped })) {
+    if (!confirm('当前内容太大，没法留"导入前的备份"。继续导入的话，之后就不能一键恢复了。继续吗？')) return false;
+    dropBackup(); // 继续的话，旧备份和接下来的媒体对不上了，不能留
+  }
   try {
-    await commitMedia(media);
+    await putBlobs([
+      ...plan.filter((p) => p.old).map((p) => ({ id: BACKUP_MEDIA_PREFIX + p.id, blob: p.old! })),
+      ...plan.map((p) => ({ id: p.id, blob: p.blob })),
+    ]);
   } catch (e) {
     try { if (prevBackup) localStorage.setItem(BACKUP_KEY, prevBackup); else localStorage.removeItem(BACKUP_KEY); } catch { /* 无能为力 */ }
-    throw e;
+    throw new Error(`写媒体文件失败，什么都没改（${(e as Error)?.message ?? e}）`);
+  } finally {
+    mediaChanged();
   }
   replaceWorld(w);
   return true;
@@ -648,15 +668,19 @@ export async function importRabbitholeFile(file: File) {
 /** 换回上一次导入前的内容。媒体和备份那份互换，世界也互换，所以来回切换都对。 */
 export async function restoreBackup() {
   if (getUI().trial) return toast('试玩中不能恢复，先结束试玩');
+  return exclusive(async () => {
   try {
     const b = readBackup();
     if (!b) return;
     const w = parseWorld(JSON.stringify(b.world));
+    // 备份里记着的旧文件必须一个不少地读出来；缺了或读不了就停下，世界和媒体都不动
     const swap: { id: string; blob: Blob }[] = [];
+    const lost: string[] = [];
     for (const id of b.swapped) {
-      const bak = await getBlob(BACKUP_MEDIA_PREFIX + id).catch(() => undefined);
-      if (bak) swap.push({ id, blob: bak });
+      const bak = await readBlob(BACKUP_MEDIA_PREFIX + id);
+      if (bak) swap.push({ id, blob: bak }); else lost.push(w.media.find((m) => m.id === id)?.name ?? id);
     }
+    if (lost.length) throw new Error(`备份里的这些媒体文件找不到了：${lost.join('、')}。没有恢复，现在的内容不变`);
     // 和导入走同一条路：现在的世界和被换下的文件存成新备份（__backup__/ 里换进现在的文件），所以可以再换回来
     if (!(await commitImport(w, swap))) return;
     setUI({ mapId: w.maps[0].id, selection: null, views: {}, flowId: w.flows[0]?.id ?? null });
@@ -664,6 +688,7 @@ export async function restoreBackup() {
   } catch (e) {
     toast('恢复失败：' + (e as Error).message);
   }
+  });
 }
 
 /** 自动认出文件类型：本编辑器的工程，或 Rabbithole 的地图。 */
@@ -681,7 +706,7 @@ export async function importAnyFile(file: File) {
   } catch (e) {
     return toast('读不了这个文件：' + (e as Error).message);
   }
-  return rabbithole ? importRabbitholeFile(file) : importProject(file);
+  return exclusive(() => (rabbithole ? importRabbitholeFile(file) : importProject(file)));
 }
 
 /** 用命令行带文件启动时（npm start -- 文件），打开页面就自动导入。 */

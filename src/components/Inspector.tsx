@@ -9,6 +9,7 @@ import {
 } from '../actions';
 import { nearestPc, type Nearest } from '../perception';
 import { cellName, parseCell, rangeName, uid } from '../util';
+import { MAX_SIDE } from '../schema.js';
 import { Area, Check, Num, Row, Section, Txt } from './fields';
 
 export function Inspector() {
@@ -102,7 +103,7 @@ function MapInspector({ world, map, editable }: { world: World; map: GameMap; ed
             <Txt value={map.layer} list="layers" onChange={(v) => up((m) => { m.layer = v; }, 'maplayer' + map.id)} />
             <datalist id="layers">{layers.map((l) => <option key={l} value={l} />)}</datalist>
           </Row>
-          <Row label="楼层"><Num value={map.floor} onChange={(v) => up((m) => { m.floor = v; })} /></Row>
+          <Row label="楼层"><Num value={map.floor} onChange={(v) => up((m) => { m.floor = clampInt(v, -1000, 1000); })} /></Row>
           <Row label="尺寸">
             <span className="inline">
               <Num value={size.w} min={2} onChange={(v) => setSize({ ...size, w: v })} />×
@@ -174,6 +175,9 @@ function distanceNote(s: Secret, near: Nearest | null) {
   );
 }
 
+/** 取整并夹在范围里（输入框里打了小数、负数、特别大的数都兜住）。 */
+const clampInt = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, Math.round(Number.isFinite(v) ? v : lo)));
+
 function ObjectInspector({ world, mapId, o, ui }: { world: World; mapId: string; o: MapObject; ui: UIState }) {
   const run = ui.mode === 'run';
   const edit = canEditMap(ui);
@@ -182,6 +186,7 @@ function ObjectInspector({ world, mapId, o, ui }: { world: World; mapId: string;
   const [privTo, setPrivTo] = useState('');
   const isZone = o.kind === 'zone';
   const map = findMap(world, mapId)!;
+  const mapW = map.width, mapH = map.height;
   const near = run ? nearestPc(world, map, o) : null;
   const upSecret = (id: string, fn: (s: Draft<Secret>) => void, key?: string) =>
     up((x) => { fn(x.secrets.find((y) => y.id === id)!); }, key && key + id);
@@ -199,14 +204,14 @@ function ObjectInspector({ world, mapId, o, ui }: { world: World; mapId: string;
             <Row label="名字"><Txt value={o.name} onChange={(v) => up((x) => { x.name = v; }, 'name')} /></Row>
             {!isZone && <Row label="图标"><Txt value={o.icon} placeholder="可填 emoji" onChange={(v) => up((x) => { x.icon = v; }, 'icon')} /></Row>}
             <Row label="颜色"><input type="color" value={o.color} onChange={(e) => up((x) => { x.color = e.target.value; }, 'color')} /></Row>
-            <Row label="位置"><CellInput x={o.x} y={o.y} onChange={(p) => up((x) => { x.x = p.x; x.y = p.y; })} /></Row>
+            <Row label="位置"><CellInput x={o.x} y={o.y} onChange={(p) => up((x) => { x.x = clampInt(p.x, 0, mapW - 1); x.y = clampInt(p.y, 0, mapH - 1); })} /></Row>
             <Row label="大小">
               <span className="inline">
-                <Num value={o.w} min={1} onChange={(v) => up((x) => { x.w = Math.max(1, Math.round(v)); })} />×
-                <Num value={o.h} min={1} onChange={(v) => up((x) => { x.h = Math.max(1, Math.round(v)); })} />
+                <Num value={o.w} min={1} max={MAX_SIDE} onChange={(v) => up((x) => { x.w = clampInt(v, 1, MAX_SIDE); })} />×
+                <Num value={o.h} min={1} max={MAX_SIDE} onChange={(v) => up((x) => { x.h = clampInt(v, 1, MAX_SIDE); })} />
               </span>
             </Row>
-            {!isZone && <Row label="高度 (m)"><Num value={o.height} step={0.1} min={0} onChange={(v) => up((x) => { x.height = Math.max(0, v); })} /></Row>}
+            {!isZone && <Row label="高度 (m)"><Num value={o.height} step={0.1} min={0} onChange={(v) => up((x) => { x.height = Number.isFinite(v) ? Math.min(1000, Math.max(0, v)) : 0; })} /></Row>}
             {!isZone && <Check label="对玩家隐藏" value={o.hidden} onChange={(v) => up((x) => { x.hidden = v; })} />}
             <Row label="主持人备注"><Area value={o.notes} onChange={(v) => up((x) => { x.notes = v; }, 'notes')} /></Row>
           </>
@@ -261,7 +266,7 @@ function ObjectInspector({ world, mapId, o, ui }: { world: World; mapId: string;
                   </select>
                   {s.kind === 'roll' ? <Txt value={s.check} placeholder="检定" onChange={(v) => upSecret(s.id, (y) => { y.check = v; }, 'sc')} /> : <span />}
                   <span className="muted">≤</span>
-                  <Num value={s.range} min={0} onChange={(v) => upSecret(s.id, (y) => { y.range = Math.max(0, Math.round(v)); })} />
+                  <Num value={s.range} min={0} onChange={(v) => upSecret(s.id, (y) => { y.range = clampInt(v, 0, MAX_SIDE * 2); })} />
                   <span className="muted">格</span>
                 </div>
                 {s.kind === 'auto' ? (

@@ -41,11 +41,13 @@ const server = await createServer({
       // 这几个接口只回应本机地址：Host 不是 localhost 的请求（比如 DNS 重绑定，别的域名解析到 127.0.0.1）一律拒绝
       const localHost = (req) => /^(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/.test(req.headers.host ?? '');
       const sameOrigin = (req) => { const o = req.headers.origin; return !!o && localHost(req) && (o === `http://${req.headers.host}` || o === `https://${req.headers.host}`); };
+      // 所有请求（不只是这三个接口）先查 Host：路由匹配不分大小写、还认后缀，用路径去判断"是不是敏感接口"会漏
       s.middlewares.use((req, res, next) => {
-        if (/^\/__(save-target|load|save)(\?|\/|$)/.test(req.url ?? '') && !localHost(req)) { res.statusCode = 403; res.end('拒绝：只接受本机地址'); return; }
+        if (!localHost(req)) { res.statusCode = 403; res.end('拒绝：只接受本机地址'); return; }
         next();
       });
-      s.middlewares.use('/__save-target', (_req, res) => {
+      s.middlewares.use('/__save-target', (req, res) => {
+        if (!localHost(req)) { res.statusCode = 403; res.end(); return; }
         if (!target) { res.statusCode = 404; res.end(); return; }
         res.setHeader('Content-Type', 'application/json');
         res.end(JSON.stringify({ path: target, token: TOKEN }));
@@ -87,7 +89,8 @@ const server = await createServer({
           }
         });
       });
-      s.middlewares.use('/__load', async (_req, res) => {
+      s.middlewares.use('/__load', async (req, res) => {
+        if (!localHost(req)) { res.statusCode = 403; res.end(); return; }
         if (!file) { res.statusCode = 404; res.end(); return; }
         if (!isFolder) { res.setHeader('Content-Type', 'application/octet-stream'); fs.createReadStream(file).pipe(res); return; }
         try {

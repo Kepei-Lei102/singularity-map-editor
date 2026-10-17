@@ -185,12 +185,12 @@ function NpcEdit({ n }: { n: Npc }) {
       <div className="row-label" style={{ marginTop: 6 }}>结果之前的近况 <button className="small" onClick={() => mut(n.id, (x) => { x.beats.push({ id: uid(), afterDays: 3, text: '' }); })}>＋</button></div>
       {n.beats.map((b, i) => (
         <div key={b.id} className="npc-sub">
-          <div className="inline"><span className="muted">出完主意后至少</span><Num value={b.afterDays} min={0} onChange={(v) => mut(n.id, (x) => { x.beats[i].afterDays = v; })} /><span className="muted">天</span>
+          <div className="inline"><span className="muted">出完主意后至少</span><Num value={b.afterDays} min={0} onChange={(v) => mut(n.id, (x) => { x.beats[i].afterDays = Math.min(36500, Math.max(0, v)); })} /><span className="muted">天</span>
             <button className="danger small" onClick={() => mut(n.id, (x) => { x.beats.splice(i, 1); })}>×</button></div>
           <Area value={b.text} rows={2} placeholder="一句近况（不给奖励）" onChange={(v) => mut(n.id, (x) => { x.beats[i].text = v; }, 'bt' + b.id)} />
         </div>
       ))}
-      <Row label="几天后回访"><Num value={n.returnAfterDays} min={0} onChange={(v) => mut(n.id, (x) => { x.returnAfterDays = v; })} /></Row>
+      <Row label="几天后回访"><Num value={n.returnAfterDays} min={0} onChange={(v) => mut(n.id, (x) => { x.returnAfterDays = Math.min(36500, Math.max(0, v)); })} /></Row>
       <Row label="回访时顺口说"><Area value={n.extra} onChange={(v) => mut(n.id, (x) => { x.extra = v; }, 'ne')} rows={2} placeholder="比如认识的人的一件小事" /></Row>
       <div className="row-label" style={{ marginTop: 6 }}>结果 <button className="small" onClick={() => mut(n.id, (x) => { x.outcomes.push({ id: uid(), label: '新结果', text: '', reward: '' }); })}>＋</button></div>
       {n.outcomes.map((o, i) => (

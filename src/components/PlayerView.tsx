@@ -24,10 +24,7 @@ export function PlayerView() {
   }, []);
 
   const map = world?.maps.find((m) => m.id === world.playerMapId);
-  const clues = (world?.maps ?? [])
-    .flatMap((m) => m.objects.flatMap((o) =>
-      o.secrets.filter((s) => s.revealed?.scope === 'party').map((s) => ({ o, s }))))
-    .sort((a, b) => b.s.revealed!.at - a.s.revealed!.at);
+  const clues = [...(world?.clues ?? [])].sort((a, b) => b.at - a.at); // 公开过的线索单独带来，物件看不见了也还在
 
   return (
     <div className="player">
@@ -43,10 +40,10 @@ export function PlayerView() {
       {clues.length > 0 && (
         <div className="clues">
           <div className="clues-title">线索</div>
-          {clues.map(({ o, s }) => (
-            <div key={s.id} className="clue">
-              <b>{o.name}·{s.label}</b> <span className="muted">{s.kind === 'auto' ? '看到' : `${s.check}${TIER_LABEL[s.revealed!.tier]}`}</span>
-              <div>{s.tiers[s.revealed!.tier]}</div>
+          {clues.map((c) => (
+            <div key={c.id} className="clue">
+              <b>{c.object}·{c.label}</b> <span className="muted">{c.kind === 'auto' ? '看到' : `${c.check}${TIER_LABEL[c.tier]}`}</span>
+              <div>{c.text}</div>
             </div>
           ))}
         </div>

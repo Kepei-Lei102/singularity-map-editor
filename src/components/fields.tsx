@@ -13,11 +13,11 @@ export function Txt({ value, onChange, placeholder, list }: { value: string; onC
   return <input value={value} placeholder={placeholder} list={list} onChange={(e) => onChange(e.target.value)} />;
 }
 
-export function Num({ value, onChange, step = 1, min }: { value: number; onChange: (v: number) => void; step?: number; min?: number }) {
+export function Num({ value, onChange, step = 1, min, max }: { value: number; onChange: (v: number) => void; step?: number; min?: number; max?: number }) {
   return (
     <input
-      type="number" value={value} step={step} min={min}
-      onChange={(e) => { const n = parseFloat(e.target.value); if (!Number.isNaN(n)) onChange(n); }}
+      type="number" value={value} step={step} min={min} max={max}
+      onChange={(e) => { const n = parseFloat(e.target.value); if (Number.isFinite(n)) onChange(n); }}
     />
   );
 }

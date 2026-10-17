@@ -191,6 +191,7 @@ export function visibleMarks(w: World, mapId: string, viewer: string | null) {
   const me = m.tokens.find((t) => t.pcId === viewer);
   return live.filter((k) => {
     if (k.author === viewer) return true;
+    if (k.audience) return k.audience.includes(viewer); // 玩家窗口：主持人那边按完整地形算好了，不要用删过的地形重算
     const other = m.tokens.find((t) => t.pcId === k.author);
     return !!me && !!other && canHear(w, m, me, other);
   });

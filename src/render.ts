@@ -67,9 +67,14 @@ export function playerNumbering(world: World, map: GameMap): PlayerNumbered[] {
     out.push({ label: label.get(o.id)!, kind: 'object', id: o.id, x: o.x, y: o.y, w: o.w, h: o.h, name: o.name, icon: o.icon, height: o.height,
       state: o.states.length > 1 ? o.states[o.state] : null, memory: false });
   }
+  const greyRect = (n: { x: number; y: number; w: number; h: number }) => {
+    for (let y = Math.max(0, n.y); y < Math.min(map.height, n.y + n.h); y++)
+      for (let x = Math.max(0, n.x); x < Math.min(W, n.x + n.w); x++) if (map.fog[y * W + x] === 2) return true;
+    return false;
+  };
   for (const r of map.seen.objects) {
     const lb = label.get(r.id);
-    if (shown.has(r.id) || !lb || liveRect(r)) continue;
+    if (shown.has(r.id) || !lb || liveRect(r) || !greyRect(r)) continue; // 记忆要落在灰区里才标（抹黑了的不标）
     out.push({ label: lb, kind: 'object', id: r.id, x: r.x, y: r.y, w: r.w, h: r.h, name: r.name, icon: r.icon, height: r.height, state: r.stateLabel, memory: true });
   }
   for (const n of all) {

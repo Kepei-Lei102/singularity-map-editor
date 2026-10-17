@@ -272,7 +272,9 @@ export function MapCanvas({ world, map, mode, playerNumbers = false, follow, vie
     }
   };
 
-  useEffect(() => () => endBatch(), []); // 拖到一半切走了（换模式、关面板）：收尾，免得之后的修改都不进撤销
+  // 拖到一半切走了（换模式、换地图、关面板）：丢掉这次拖动并收尾，免得之后的修改都不进撤销
+  useEffect(() => { drag.current = null; endBatch(); }, [mode, map.id]);
+  useEffect(() => () => endBatch(), []);
 
   const onUp = (e: React.PointerEvent) => {
     const dr = drag.current;

@@ -150,7 +150,7 @@ export function Sidebar() {
             <div className="card">
               <Row label="名字"><Txt value={terrain.name} onChange={(v) => update((d) => { d.terrains.find((t) => t.id === terrain.id)!.name = v; }, { coalesce: 'tn' + terrain.id })} /></Row>
               <Row label="颜色"><input type="color" value={terrain.color} onChange={(e) => update((d) => { d.terrains.find((t) => t.id === terrain.id)!.color = e.target.value; }, { coalesce: 'tc' + terrain.id })} /></Row>
-              <Row label="视野衰减"><Num value={terrain.visionCoef} step={0.1} min={0} onChange={(v) => update((d) => { d.terrains.find((t) => t.id === terrain.id)!.visionCoef = v; })} /></Row>
+              <Row label="视野衰减"><Num value={terrain.visionCoef} step={0.1} min={0} onChange={(v) => update((d) => { d.terrains.find((t) => t.id === terrain.id)!.visionCoef = Math.min(1000, Math.max(0, v)); })} /></Row>
               <Check label="不可通行" value={terrain.blocksMove} onChange={(v) => update((d) => { d.terrains.find((t) => t.id === terrain.id)!.blocksMove = v; })} />
               <div className="hint">视野衰减：空地 0.1（≈15 格视野），草丛 2。现在只记录，以后算视野用。</div>
               <button className="danger small" onClick={() => {

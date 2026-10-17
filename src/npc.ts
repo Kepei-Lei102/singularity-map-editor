@@ -3,6 +3,7 @@ import type { Npc, NpcProgress, World } from './types';
 import { update } from './store';
 import { log } from './actions';
 import { download, uid } from './util';
+import { checkNpc } from './schema.js';
 
 // 普通人 NPC 的"现在该怎么办"：全按现实日期算（奇点之后的游戏时间和现实时间绑定）。
 
@@ -94,25 +95,6 @@ export const npcReset = (id: string) =>
 export const npcSkipWait = (id: string, at: number) =>
   setProgress(id, (p) => { if (p.advisedAt) p.advisedAt -= Math.max(0, at - Date.now()); }, '主持人跳过了等待');
 
-/** 导入前检查一位 NPC：缺名字、字段类型不对就报错（一位都不导入）。 */
-function checkNpc(raw: unknown, i: number): asserts raw is Partial<Npc> & { name: string } {
-  const bad = (what: string) => { throw new Error(`第 ${i + 1} 位 NPC ${what}`); };
-  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) bad('不是对象');
-  const r = raw as Record<string, unknown>;
-  if (typeof r.name !== 'string' || !r.name.trim()) bad('没有名字');
-  for (const k of ['summary', 'icon', 'color', 'persona', 'request', 'notes', 'extra'])
-    if (r[k] !== undefined && typeof r[k] !== 'string') bad(`的 ${k} 应该是文字`);
-  if (r.months !== undefined && (!Array.isArray(r.months) || !r.months.every((m) => Number.isInteger(m) && m >= 1 && m <= 12))) bad('的 months 应该是 1–12 的整数列表');
-  if (r.returnAfterDays !== undefined && !(typeof r.returnAfterDays === 'number' && r.returnAfterDays >= 0)) bad('的 returnAfterDays 应该是不小于 0 的数字');
-  if (r.place != null) {
-    const p = r.place as Record<string, unknown>;
-    if (typeof p !== 'object' || typeof p.mapId !== 'string' || !Number.isInteger(p.x) || !Number.isInteger(p.y)) bad('的 place 应该是 { mapId, x, y }（整数格子）');
-  }
-  for (const k of ['topics', 'beats', 'outcomes'])
-    if (r[k] !== undefined && (!Array.isArray(r[k]) || !(r[k] as unknown[]).every((x) => x && typeof x === 'object'))) bad(`的 ${k} 应该是对象列表`);
-  if (Array.isArray(r.beats) && !r.beats.every((b) => typeof b.afterDays === 'number' && typeof (b.text ?? '') === 'string')) bad('的 beats 每一条都要有 afterDays（天数）和 text');
-}
-
 /**
  * 导入：一份 NPC 的 JSON 数组（别的模组也能用这个格式）。同名的覆盖，进度保留。
  * 进度里记着结果和近况的 ID，所以覆盖时要把新内容对到旧 ID 上：
@@ -120,7 +102,7 @@ function checkNpc(raw: unknown, i: number): asserts raw is Partial<Npc> & { name
  * 旧进度引用的结果或近况在新内容里没了：近况从"已讲过"里去掉，结果清掉并在返回的提示里说一声。
  */
 export function importNpcs(input: unknown[]): string[] {
-  input.forEach(checkNpc);
+  input.forEach((n, i) => checkNpc(n, `第 ${i + 1} 位 NPC`, true)); // 和整份工程用同一套校验；有一位不对就一位都不导入
   const list = input as (Partial<Npc> & { name: string })[];
   const warnings: string[] = [];
   update((d) => {
@@ -141,15 +123,18 @@ export function importNpcs(input: unknown[]): string[] {
         continue;
       }
       const old = d.npcs[i];
+      // 先认带着旧 ID 来的（预留），再给没 ID 的按 key 找唯一的旧项；最后保证 ID 不重复
       const match = <T extends { id: string }>(news: T[], olds: T[], given: (x: T) => boolean, key: (x: T) => string) => {
-        const taken = new Set<string>();
-        return news.map((x) => {
-          if (given(x) && olds.some((o) => o.id === x.id)) { taken.add(x.id); return x; } // 带着旧 ID 来的
+        const taken = new Set(news.filter((x) => given(x) && olds.some((o) => o.id === x.id)).map((x) => x.id));
+        const out = news.map((x) => {
+          if (given(x) && taken.has(x.id)) return x;
           const same = olds.filter((o) => key(o) === key(x) && !taken.has(o.id));
-          const others = news.filter((y) => y !== x && key(y) === key(x));
+          const others = news.filter((y) => y !== x && !(given(y) && taken.has(y.id)) && key(y) === key(x));
           if (same.length === 1 && !others.length) { taken.add(same[0].id); return { ...x, id: same[0].id }; }
           return x;
         });
+        const used = new Set<string>();
+        return out.map((x) => { if (used.has(x.id)) x = { ...x, id: uid() }; used.add(x.id); return x; });
       };
       const hadId = (xs: { id?: string }[] | undefined) => new Set((xs ?? []).map((x) => x.id).filter(Boolean));
       const outIds = hadId(raw.outcomes), beatIds = hadId(raw.beats);

@@ -52,8 +52,13 @@ export async function readProject(p, { allowMissing = false } = {}) {
 }
 
 /** 写成文件夹：world.json 缩进排版（git 好比较）；只留还在用的配图，内容没变的配图不重写。
- * 顺序：校验 → 所有要写的东西先写进同目录下的暂存文件夹 → 全部写成功了才逐个改名换上（最后换 world.json）→ 删不用的配图。
- * 暂存阶段出任何错，原来的文件一个都没动。 */
+ * 顺序：
+ *   1. 校验；检查所有要换的目标（不能是符号链接）——任何一个不行就停，什么都没动
+ *   2. 新内容全部写进同目录下的暂存文件夹（new/）
+ *   3. 提交：每个目标先把旧文件挪进暂存的 old/，再把新文件挪上去，最后换 world.json；
+ *      提交中任何一步出错，按相反顺序把已经换上的撤下来、旧文件挪回去，原工程保持原样
+ *   4. 删不用的配图
+ */
 export function writeFolder(dir, world, media) {
   checkWorld(world);
   const mediaDir = path.join(dir, 'media'), wj = path.join(dir, 'world.json');
@@ -63,21 +68,46 @@ export function writeFolder(dir, world, media) {
   const onDisk = (id) => { const f = path.join(mediaDir, id); return fs.existsSync(f) && !isLink(f) && fs.statSync(f).isFile(); };
   const missing = missingMedia(world, (id) => media.has(id) || onDisk(id));
   if (missing.length) throw new Error(`缺少媒体文件：${missing.map((m) => `${m.name}（${m.id}）`).join('、')}`);
-  for (const id of keep) if (!media.has(id) && isLink(path.join(mediaDir, id))) throw new Error(`拒绝使用符号链接：media/${id}`);
-
   const changed = [...media].filter(([id, buf]) => keep.has(id) && safeId(id) && !(onDisk(id) && fs.readFileSync(path.join(mediaDir, id)).equals(buf)));
-  const stage = fs.mkdtempSync(path.join(dir, '.tsmap-stage-'));
-  try {
-    for (const [id, buf] of changed) writeNew(path.join(stage, id), buf);
-    writeNew(path.join(stage, 'world.json'), JSON.stringify(world, null, 2) + '\n');
-    for (const [id] of changed) {
-      if (isLink(path.join(mediaDir, id))) throw new Error(`拒绝覆盖符号链接：media/${id}`);
-      fs.renameSync(path.join(stage, id), path.join(mediaDir, id));
-    }
-    fs.renameSync(path.join(stage, 'world.json'), wj);
-  } finally {
-    fs.rmSync(stage, { recursive: true, force: true });
+  // 1. 先查完所有目标再动手
+  for (const id of keep) {
+    const f = path.join(mediaDir, id);
+    if (isLink(f)) throw new Error(`拒绝使用符号链接：media/${id}`);
+    if (fs.existsSync(f) && !fs.statSync(f).isFile()) throw new Error(`media/${id} 不是普通文件`);
   }
+  const stage = fs.mkdtempSync(path.join(dir, '.tsmap-stage-'));
+  const neu = path.join(stage, 'new'), old = path.join(stage, 'old');
+  fs.mkdirSync(neu); fs.mkdirSync(old);
+  const done = []; // 已经提交的：{ target, backup | null }
+  try {
+    // 2. 暂存
+    for (const [id, buf] of changed) writeNew(path.join(neu, id), buf);
+    writeNew(path.join(neu, 'world.json'), JSON.stringify(world, null, 2) + '\n');
+    // 3. 提交
+    const commit = (from, target, backupName) => {
+      let backup = null;
+      if (fs.existsSync(target)) { backup = path.join(old, backupName); fs.renameSync(target, backup); }
+      done.push({ target, backup });
+      fs.renameSync(from, target);
+    };
+    for (const [id] of changed) commit(path.join(neu, id), path.join(mediaDir, id), id);
+    commit(path.join(neu, 'world.json'), wj, 'world.json');
+  } catch (e) {
+    const stuck = [];
+    for (const { target, backup } of done.reverse()) {
+      try {
+        if (fs.existsSync(target) && (!backup || fs.existsSync(backup))) fs.rmSync(target, { force: true });
+        if (backup && fs.existsSync(backup)) fs.renameSync(backup, target);
+      } catch { stuck.push(target); }
+    }
+    if (stuck.length) { // 还原不了的旧文件留在暂存文件夹里，不删
+      throw new Error(`${e.message}；而且这些文件没能还原，旧版本留在 ${old}：${stuck.join('、')}`);
+    }
+    fs.rmSync(stage, { recursive: true, force: true });
+    throw e;
+  }
+  fs.rmSync(stage, { recursive: true, force: true });
+  // 4. 删不用的配图
   for (const f of fs.readdirSync(mediaDir)) if (!keep.has(f)) fs.rmSync(path.join(mediaDir, f), { recursive: true, force: true });
   return { written: changed.length };
 }
