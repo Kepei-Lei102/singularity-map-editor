@@ -5,17 +5,19 @@ import { demoWorld } from './defaults';
 import { migrateWorld, syncMemory } from './memory';
 import { setMediaIndex } from './media';
 import { withVision } from './perception';
-
-const SAVE_KEY = 'ts-map-world-v1';
+import { loadSlot, saveSlot } from './persist';
+import { onSessionRenewed } from './session';
 
 /** 浏览器允不允许本页保存数据。 */
 export const storageOK = (() => {
   try { localStorage.setItem('ts-probe', '1'); localStorage.removeItem('ts-probe'); return true; } catch { return false; }
 })();
+const isPlayerWindow = new URLSearchParams(location.search).get('view') === 'player'; // 玩家窗口只显示，不存档
 
 function load(): World | null {
+  if (isPlayerWindow) return null;
   try {
-    const s = localStorage.getItem(SAVE_KEY);
+    const s = loadSlot('world');
     return s ? migrateWorld(JSON.parse(s) as World) : null;
   } catch {
     return null;
@@ -42,16 +44,20 @@ function emit() {
   listeners.forEach((l) => l());
   clearTimeout(saveTimer);
   if (sandbox) return; // 试玩期间不保存，免得把试玩状态存进去
-  saveTimer = window.setTimeout(() => {
-    try {
-      localStorage.setItem(SAVE_KEY, JSON.stringify(world));
-    } catch (e) {
-      console.warn('自动保存失败', e);
-    }
-  }, 400);
+  saveTimer = window.setTimeout(saveNow, 400);
 }
 
+/** 立刻把（真正的）世界存进这个标签页的自动保存槽。 */
+export function saveNow() {
+  clearTimeout(saveTimer);
+  if (isPlayerWindow) return;
+  if (!saveSlot('world', JSON.stringify(sandbox ? sandbox.world : world))) console.warn('自动保存失败：浏览器存储空间不够');
+}
+onSessionRenewed(saveNow); // 复制标签页后换了会话标识：在新槽里存一份
+
 export const getWorld = () => world;
+/** 这个标签页里所有还可能回到的世界：现在的、试玩前的、撤销 / 重做记录里的（清理媒体时一个都不能漏）。 */
+export const reachableWorlds = (): World[] => [world, ...past, ...future, ...(sandbox ? [sandbox.world, ...sandbox.past, ...sandbox.future] : [])];
 /**
  * 当前世界的"上下文编号"：换了工程（导入、恢复、新建、载入示例）或者进出试玩都会变。
  * 异步操作（导入、上传、播放）开始时记下它，完成时对不上就不再动世界——结果属于一个已经不在的上下文。

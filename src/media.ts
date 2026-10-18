@@ -65,6 +65,25 @@ export async function storeBlob(blob: Blob): Promise<string> {
   return key;
 }
 
+/** 浏览器里存着的全部文件的存储名，和每个的大小。 */
+export async function listStored(): Promise<{ key: string; size: number }[]> {
+  const db = await open();
+  return new Promise((resolve, reject) => {
+    const out: { key: string; size: number }[] = [];
+    const t = db.transaction(STORE, 'readonly');
+    const req = t.objectStore(STORE).openCursor();
+    req.onsuccess = () => {
+      const c = req.result;
+      if (!c) return;
+      out.push({ key: String(c.key), size: (c.value as Blob)?.size ?? 0 });
+      c.continue();
+    };
+    t.oncomplete = () => { db.close(); resolve(out); };
+    t.onerror = () => { db.close(); reject(t.error); };
+    t.onabort = () => { db.close(); reject(t.error ?? new Error('读取被中止')); };
+  });
+}
+
 /** 一批写入放在同一个事务里：要么全部生效，要么（任何一步出错、空间不够）一个都不生效。blob = null 表示删除。 */
 export async function putBlobs(ops: { id: string; blob: Blob | null }[]): Promise<void> {
   if (!ops.length) return;

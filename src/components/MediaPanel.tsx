@@ -1,4 +1,4 @@
-import { stopMedia, playMedia } from '../actions';
+import { cleanupMedia, stopMedia, playMedia } from '../actions';
 import { storeBlob, useBlobUrl } from '../media';
 import { toast, update, useUI, useWorld, worldContext } from '../store';
 import { uid } from '../util';
@@ -28,6 +28,7 @@ export function MediaPanel() {
   return (
     <Section title="媒体库">
       <div className="hint">文件存在这台电脑的浏览器里。换电脑请用「导出工程」打包带走。</div>
+      <button className="small" title="删掉浏览器里没有任何工程、存档、备份用到的旧文件" onClick={() => cleanupMedia()}>清理用不到的文件</button>
       <label className="upload">
         上传音频 / 视频 / 图片 / PDF
         <input type="file" multiple accept="audio/*,video/*,image/*,application/pdf,.pdf" onChange={(e) => { upload(e.target.files); e.target.value = ''; }} />

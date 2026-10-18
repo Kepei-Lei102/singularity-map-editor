@@ -1,6 +1,6 @@
 import type { Draft } from 'immer';
 import JSZip from 'jszip';
-import { getUI, getWorld, replaceWorld, setUI, toast, update, worldContext, type Selection } from './store';
+import { getUI, getWorld, reachableWorlds, replaceWorld, setUI, toast, update, worldContext, type Selection } from './store';
 import { pcWithin } from './perception';
 import type { Flow, GameMap, LogEntry, MapObject, MediaAttach, Tier, World } from './types';
 import { NODE_H, NODE_W } from './flow';
@@ -8,8 +8,9 @@ export { NODE_H, NODE_W, reachable } from './flow';
 import { CONN_LABEL } from './types';
 import { TIER_LABEL } from './types';
 import { download, uid } from './util';
-import { contentKey, getRaw, mediaChanged, putBlobs, storageKey } from './media';
+import { contentKey, getRaw, listStored, mediaChanged, putBlobs, storageKey } from './media';
 import { checkWorld, repairWorld } from './schema.js';
+import { allSlots, dropSlot, loadSlot, saveSlot } from './persist';
 import { send } from './sync';
 import { emptyLayer, migrateWorld } from './memory';
 
@@ -553,14 +554,14 @@ async function readRaw(key: string): Promise<Blob | undefined> {
 // 备份就是导入前的那份世界。它引用的媒体文件都还在（文件从不覆盖），所以恢复只换世界。
 // 旧版备份另外记着"被覆盖的媒体"（swapped），那时文件会被覆盖；恢复这种旧备份时照旧版的办法换一次文件。
 
-const BACKUP_KEY = 'ts-map-world-backup';
-const OLD_BACKUP_MEDIA_KEY = 'ts-map-media-backup'; // 更旧的版本把清单单独存
+const OLD_BACKUP_MEDIA_KEY = 'ts-map-media-backup'; // 更旧的版本把"被覆盖的媒体"清单单独存
 const BACKUP_MEDIA_PREFIX = '__backup__/';
 interface Backup { world: World; swapped?: string[] }
 
+/** 读这个标签页的备份（persist.ts 按标签页分槽；旧版的单份备份也认）。 */
 function readBackup(): Backup | null {
   try {
-    const s = localStorage.getItem(BACKUP_KEY);
+    const s = loadSlot('backup');
     if (!s) return null;
     const j = JSON.parse(s);
     if (j && Array.isArray(j.maps)) { // 最旧的格式：直接是世界
@@ -573,17 +574,51 @@ function readBackup(): Backup | null {
 }
 /** 写备份；写不下（太大）返回 false，这时原来那条备份不受影响。 */
 function writeBackup(world: World): boolean {
-  try {
-    localStorage.setItem(BACKUP_KEY, JSON.stringify({ world }));
-    localStorage.removeItem(OLD_BACKUP_MEDIA_KEY); // 写成功了，旧格式的清单才可以丢
-    return true;
-  } catch { return false; }
+  if (!saveSlot('backup', JSON.stringify({ world }))) return false;
+  try { localStorage.removeItem(OLD_BACKUP_MEDIA_KEY); } catch { /* 留着也无妨 */ }
+  return true;
 }
 function dropBackup() {
-  try { localStorage.removeItem(BACKUP_KEY); localStorage.removeItem(OLD_BACKUP_MEDIA_KEY); } catch { /* 无能为力 */ }
+  dropSlot('backup');
+  try { localStorage.removeItem(OLD_BACKUP_MEDIA_KEY); } catch { /* 无能为力 */ }
 }
 export function hasBackup() {
-  try { return !!localStorage.getItem(BACKUP_KEY); } catch { return false; }
+  return !!loadSlot('backup');
+}
+
+/**
+ * 清理浏览器里用不到的媒体文件：文件从不覆盖，旧版本会越攒越多。
+ * 只要还有任何地方可能用到就不删：这个标签页现在的世界和撤销记录、所有标签页的自动保存和导入前的备份、旧版备份里换下来的文件。
+ */
+export async function cleanupMedia() {
+  if (getUI().trial) return toast('试玩中不能清理，先结束试玩');
+  await exclusive('清理媒体文件', async () => {
+    try {
+      const keep = new Set<string>();
+      const add = (w: unknown) => {
+        const media = (w as World | null)?.media;
+        if (Array.isArray(media)) for (const m of media) { if (m?.id) keep.add(m.id); if (m?.key) keep.add(m.key); }
+      };
+      reachableWorlds().forEach(add);
+      for (const text of allSlots()) {
+        try {
+          const j = JSON.parse(text);
+          if (Array.isArray(j?.maps)) add(j);
+          else { add(j?.world); for (const id of Array.isArray(j?.swapped) ? j.swapped : []) keep.add(BACKUP_MEDIA_PREFIX + id); }
+        } catch { /* 坏的存档不管 */ }
+      }
+      try { for (const id of JSON.parse(localStorage.getItem(OLD_BACKUP_MEDIA_KEY) ?? '[]')) keep.add(BACKUP_MEDIA_PREFIX + id); } catch { /* 没有 */ }
+      const junk = (await listStored()).filter((f) => !keep.has(f.key));
+      if (!junk.length) return toast('没有用不到的文件');
+      const mb = (junk.reduce((n, f) => n + f.size, 0) / 1048576).toFixed(1);
+      if (!confirm(`浏览器里有 ${junk.length} 个文件（共 ${mb} MB）没有任何工程、自动保存、备份或撤销记录用到。删除吗？\n\n（如果别的标签页还开着编辑器、并且打算撤销回很早以前删掉的媒体，那份媒体会找不到。导出过的工程包里都有自己的文件，不受影响。）`)) return;
+      await putBlobs(junk.map((f) => ({ id: f.key, blob: null })));
+      mediaChanged();
+      toast(`清理了 ${junk.length} 个文件，腾出 ${mb} MB`);
+    } catch (e) {
+      toast('清理失败：' + (e as Error).message);
+    }
+  });
 }
 
 /** 把一批新文件存进浏览器（只添不改），给世界里的媒体写上存储名。 */

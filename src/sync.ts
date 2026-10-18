@@ -1,7 +1,8 @@
 import type { Endpoint, GameMap, PlayerClue, World } from './types';
 import { visibleMarks } from './perception';
 import { numbering } from './render';
-import { getRealWorld, getUI } from './store';
+import { getRealWorld, getUI, saveNow } from './store';
+import { SESSION, rand, renewSession } from './session';
 
 // 主持人窗口 ↔ 玩家窗口。玩家窗口用来共享屏幕给玩家（第一阶段还没有联网，靠共享屏幕）。
 // 两条路同时走：
@@ -21,27 +22,9 @@ export type SyncBody =
 /** inst / born：发送的是哪个页面实例、什么时候打开的（同一个会话标识出现在两个实例上时，后打开的让）。 */
 export type SyncMsg = SyncBody & { __ts: 'ts-map'; seq: string; from: string; to?: string; inst: string; born: number };
 
-const rand = () => Math.random().toString(36).slice(2) + Date.now().toString(36);
-const SESSION_KEY = 'ts-sync-session';
-/**
- * 这个编辑器窗口的会话标识。同时开着两个编辑器（两场团）时，玩家窗口只认打开它的那一个。
- * 存在 sessionStorage：刷新页面不变（玩家窗口不用重开）。复制标签页会把 sessionStorage 一起复制，
- * 所以编辑器启动时先问一句（claim）；之后任何时候发现另一个实例也在用这个标识，后打开的那个换新的。
- */
-export let SESSION = (() => {
-  try {
-    let s = sessionStorage.getItem(SESSION_KEY);
-    if (!s) { s = rand(); sessionStorage.setItem(SESSION_KEY, s); }
-    return s;
-  } catch { return rand(); }
-})();
+export { SESSION };
 const INST = rand(); // 这个页面实例（刷新就是新的实例，但会话标识不变）
 const BORN = Date.now();
-function renewSession() {
-  SESSION = rand();
-  try { sessionStorage.setItem(SESSION_KEY, SESSION); } catch { /* 存不了就只在这次有效 */ }
-}
-
 let channel: BroadcastChannel | null = null;
 try { channel = new BroadcastChannel('ts-map-sync'); } catch { /* 不支持就只走 postMessage */ }
 
@@ -191,7 +174,7 @@ export function listenAsEditor(onHello: () => void) {
     if (m.type !== 'hello' && m.from === SESSION && m.inst !== INST) {
       const iAmNewer = m.born < BORN || (m.born === BORN && m.inst < INST);
       if (iAmNewer) renewSession();
-      else { send({ type: 'taken' }); onHello(); } // 我是原来那个：叫对方换号，并重推一次世界（万一玩家窗口刚才收到了对方的）
+      else { send({ type: 'taken' }); onHello(); saveNow(); } // 我是原来那个：叫对方换号，重推一次世界（万一玩家窗口刚才收到了对方的），并重存一次自己的槽（万一对方存进来过）
       return;
     }
     if (m.type === 'claim' || m.type === 'taken' || m.type === 'alive') return;
