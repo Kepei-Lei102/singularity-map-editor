@@ -168,6 +168,8 @@ export function checkWorld(w, migrated = false) {
       strings(o.states, `${oa}.states`);
       if (!o.states.length) fail(`${oa}.states`, '是空的（至少要有一个状态）');
       int(o.state, `${oa}.state`, 0, o.states.length - 1);
+      if (o.blocksWhen !== undefined) arr(o.blocksWhen, `${oa}.blocksWhen`).forEach((v, k) => int(v, `${oa}.blocksWhen[${k}]`, 0, o.states.length - 1));
+      optBool(o.pushable, `${oa}.pushable`);
       optNum(o.stateRev, `${oa}.stateRev`);
       arr(o.secrets, `${oa}.secrets`).forEach((s, k) => {
         const sa = `${oa}.secrets[${k}]`;

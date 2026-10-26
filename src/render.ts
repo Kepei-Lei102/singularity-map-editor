@@ -163,26 +163,39 @@ const tokenGlyph = (name: string) => {
 
 function drawObject(ctx: CanvasRenderingContext2D, o: MapObject, player: boolean, zoom: number, scale: number) {
   const X = o.x * CS, Y = o.y * CS, W = o.w * CS, H = o.h * CS;
-  // 2.5D：越高，影子拉得越长、边缘越虚（羽化）。canvas 的阴影参数不跟着缩放走，所以乘上 scale。
-  const lift = Math.min(o.height, 8) * 5;
-  ctx.save();
-  ctx.shadowColor = 'rgba(0,0,0,0.5)';
-  ctx.shadowBlur = (4 + lift * 0.9) * scale;
-  ctx.shadowOffsetX = lift * 0.7 * scale;
-  ctx.shadowOffsetY = lift * scale;
-  ctx.globalAlpha = !player && o.hidden ? 0.55 : 1;
-  ctx.fillStyle = o.color;
-  ctx.fillRect(X + 2, Y + 2, W - 4, H - 4);
-  ctx.restore();
-  ctx.lineWidth = 1.5;
-  ctx.strokeStyle = 'rgba(0,0,0,0.55)';
-  if (!player && o.hidden) ctx.setLineDash([4, 3]);
-  ctx.strokeRect(X + 2, Y + 2, W - 4, H - 4);
-  ctx.setLineDash([]);
+  // 靠状态开合的物件（隔断、门）：此刻不挡路时只画虚线轮廓，表示板片收起了、人可以从这里过去。
+  const ghost = !!o.blocksWhen && !o.blocksWhen.includes(o.state);
+  if (ghost) {
+    ctx.save();
+    ctx.globalAlpha = player ? 0.5 : 0.75;
+    ctx.setLineDash([5, 4]);
+    ctx.lineWidth = 2;
+    ctx.strokeStyle = o.color;
+    ctx.strokeRect(X + 2, Y + 2, W - 4, H - 4);
+    ctx.restore();
+  } else {
+    // 2.5D：越高，影子拉得越长、边缘越虚（羽化）。canvas 的阴影参数不跟着缩放走，所以乘上 scale。
+    const lift = Math.min(o.height, 8) * 5;
+    ctx.save();
+    ctx.shadowColor = 'rgba(0,0,0,0.5)';
+    ctx.shadowBlur = (4 + lift * 0.9) * scale;
+    ctx.shadowOffsetX = lift * 0.7 * scale;
+    ctx.shadowOffsetY = lift * scale;
+    ctx.globalAlpha = !player && o.hidden ? 0.55 : 1;
+    ctx.fillStyle = o.color;
+    ctx.fillRect(X + 2, Y + 2, W - 4, H - 4);
+    ctx.restore();
+    ctx.lineWidth = 1.5;
+    ctx.strokeStyle = 'rgba(0,0,0,0.55)';
+    if (!player && o.hidden) ctx.setLineDash([4, 3]);
+    ctx.strokeRect(X + 2, Y + 2, W - 4, H - 4);
+    ctx.setLineDash([]);
+  }
 
   // 细节多少看屏幕上有多大：够大才写字，太小只放图标，详情靠悬停/选中时的浮签
   const big = W * zoom >= 110 && H * zoom >= 44;
   ctx.save();
+  if (ghost) ctx.globalAlpha = 0.6;
   ctx.beginPath();
   ctx.rect(X + 2, Y + 2, W - 4, H - 4);
   ctx.clip();

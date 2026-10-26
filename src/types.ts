@@ -59,6 +59,10 @@ export interface MapObject {
   icon: string;
   states: string[];
   state: number;
+  /** 只有这些状态挡路、挡视线（空列表＝永远不挡）。不写就按 height 算，兼容旧物件。 */
+  blocksWhen?: number[];
+  /** 可推动：试玩时走过去会把整件东西向同方向推一格（推书架、推车）。 */
+  pushable?: boolean;
   stateRev?: number; // 状态改过几次（自动加一）：流程图撤销时用来判断之后有没有被别人改过
   notes: string; // 只有主持人看得到
   hidden: boolean; // 对玩家隐藏

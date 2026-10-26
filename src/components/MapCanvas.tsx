@@ -60,16 +60,21 @@ export function MapCanvas({ world, map, mode, playerNumbers = false, follow, vie
     } else if (!getUI().views[map.id]) setView(fitView(map, size.w, size.h));
   }, [map.id, size.w, size.h]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // 试玩时镜头跟着棋子：走出画面中间那块区域就重新对准
-  const ft = follow ? map.tokens.find((t) => t.id === follow) : undefined;
+  // 试玩时镜头不再跟着走：开始试玩或切换操控角色时对准一次，之后由「回到棋子」按钮决定。
+  // 每走一步就回正会让人看不清刚走过的路线，也没法自己看周边。
+  const followToken = follow ? map.tokens.find((t) => t.id === follow) : undefined;
+  const centeredFor = useRef<string | null>(null);
+  const centerOnToken = (t: { x: number; y: number }) => {
+    if (!size.w) return;
+    const z = viewRef.current.zoom;
+    setView({ zoom: z, panX: size.w / 2 - (t.x + 0.5) * CS * z, panY: size.h / 2 - (t.y + 0.5) * CS * z });
+  };
   useEffect(() => {
-    if (!ft || !size.w) return;
-    const v = viewRef.current;
-    const z = Math.max(v.zoom, 1.2);
-    const sx = v.panX + (ft.x + 0.5) * CS * v.zoom, sy = v.panY + (ft.y + 0.5) * CS * v.zoom;
-    if (z !== v.zoom || sx < size.w * 0.25 || sx > size.w * 0.75 || sy < size.h * 0.25 || sy > size.h * 0.75)
-      setView({ zoom: z, panX: size.w / 2 - (ft.x + 0.5) * CS * z, panY: size.h / 2 - (ft.y + 0.5) * CS * z });
-  }, [ft?.x, ft?.y, size.w, size.h]); // eslint-disable-line react-hooks/exhaustive-deps
+    if (!follow) { centeredFor.current = null; return; }
+    if (!followToken || !size.w || centeredFor.current === follow) return;
+    centeredFor.current = follow;
+    centerOnToken(followToken);
+  }, [follow, size.w, map.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // 有标记时，每 10 秒重画一次（标记按真实时间变淡）
   const [, setTick] = useState(0);
@@ -327,6 +332,11 @@ export function MapCanvas({ world, map, mode, playerNumbers = false, follow, vie
         onPointerLeave={() => setHover(null)}
         onContextMenu={(e) => e.preventDefault()}
       />
+      {followToken && (
+        <button className="recenter-btn" title="把镜头移回当前操控的角色（移动时镜头不会自动回正）" onClick={() => centerOnToken(followToken)}>
+          ⌖ 回到棋子
+        </button>
+      )}
     </div>
   );
 }

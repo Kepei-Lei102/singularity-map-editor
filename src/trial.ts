@@ -1,23 +1,39 @@
 import { beginSandbox, endSandbox, getUI, getWorld, setUI, toast, update, type UIState } from './store';
 import { addMark, autoReveal, cancelPendingPlay, checkEnterTriggers, findMap, ioBusy } from './actions';
-import type { GameMap, World } from './types';
+import type { GameMap, MapObject, World } from './types';
 import { uid } from './util';
-import { ROUND_MINUTES } from './perception';
+import { blocksMovement, ROUND_MINUTES } from './perception';
 
 // 试玩：放白板玩家进去，用 WASD 走，体验视野。退出时一切恢复原样（沙盒）。
 // 默认是非战斗：不限步数；打开"战斗模式"才是每回合 5 格。
 
 export const MOVE_PER_TURN = 5;
-const BLOCK_HEIGHT = 0.5; // 这么高以上的家具挡路
 const COLORS = ['#f4f1ea', '#ffd166', '#81e2ff', '#ff9fb2'];
 
 export type Trial = NonNullable<UIState['trial']>;
+
+const insideRect = (o: { x: number; y: number; w: number; h: number }, x: number, y: number) =>
+  x >= o.x && x < o.x + o.w && y >= o.y && y < o.y + o.h;
+
+/** 可推物件往这个方向挪一格行不行：每一格都要是能站的地形，没有别的挡路物件，也没有人。 */
+function canPush(w: World, m: GameMap, shelf: MapObject, dx: number, dy: number) {
+  const sx = shelf.x + dx, sy = shelf.y + dy;
+  if (sx < 0 || sy < 0 || sx + shelf.w > m.width || sy + shelf.h > m.height) return false;
+  for (let y = sy; y < sy + shelf.h; y++)
+    for (let x = sx; x < sx + shelf.w; x++) {
+      const t = w.terrains.find((t) => t.id === m.cells[y * m.width + x]);
+      if (!t || t.blocksMove) return false;
+      if (m.objects.some((o) => o !== shelf && o.kind === 'object' && blocksMovement(o) && insideRect(o, x, y))) return false;
+      if (m.tokens.some((k) => k.x === x && k.y === y)) return false;
+    }
+  return true;
+}
 
 function walkable(w: World, m: GameMap, x: number, y: number) {
   if (x < 0 || y < 0 || x >= m.width || y >= m.height) return false;
   const t = w.terrains.find((t) => t.id === m.cells[y * m.width + x]);
   if (!t || t.blocksMove) return false; // 空白格（地图外）也不能走
-  return !m.objects.some((o) => o.kind === 'object' && o.height >= BLOCK_HEIGHT && x >= o.x && x < o.x + o.w && y >= o.y && y < o.y + o.h);
+  return !m.objects.some((o) => o.kind === 'object' && blocksMovement(o) && x >= o.x && x < o.x + o.w && y >= o.y && y < o.y + o.h);
 }
 
 /** 出生点：作者设的；没设就是最靠北、最居中的那扇门外面（大家从北边进来）。 */
@@ -128,8 +144,19 @@ export function trialMove(dx: number, dy: number) {
   const used = t.moved[pl.tokenId] ?? 0;
   if (t.combat && used >= MOVE_PER_TURN) return setTr({ msg: '这回合的移动力用完了，按空格结束回合' });
   const nx = tok.x + dx, ny = tok.y + dy;
-  if (!walkable(w, m, nx, ny)) return setTr({ msg: '走不过去' });
-  if (m.tokens.some((x) => x.x === nx && x.y === ny)) return setTr({ msg: '有人挡着' });
+  // 前面是可推的书架／推车：先把它推一格，再走进去。推不动就停下，不悄悄挪半格。
+  const shelf = m.objects.find((o) => o.kind === 'object' && blocksMovement(o) && insideRect(o, nx, ny));
+  if (shelf) {
+    if (!shelf.pushable) return setTr({ msg: '走不过去' });
+    if (!canPush(w, m, shelf, dx, dy)) return setTr({ msg: `${shelf.name}推不动` });
+    update((d) => {
+      const o = findMap(d, t.mapId)!.objects.find((x) => x.id === shelf.id)!;
+      o.x += dx; o.y += dy;
+    });
+  }
+  const now = getWorld(), m2 = findMap(now, t.mapId);
+  if (!m2 || !walkable(now, m2, nx, ny)) return setTr({ msg: '走不过去' });
+  if (m2.tokens.some((x) => x.x === nx && x.y === ny)) return setTr({ msg: '有人挡着' });
   update((d) => {
     const dt = findMap(d, t.mapId)!.tokens.find((x) => x.id === pl.tokenId)!;
     dt.x = nx; dt.y = ny;

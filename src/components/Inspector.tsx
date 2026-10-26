@@ -7,7 +7,7 @@ import {
   deleteMap, duplicateMap, fillEmptyCells, findMap, giveMapKnowledge, reshapeMaps, setVisionMode, findObj, fireAttach, hideSecret, itemsAt, jumpTo, resizeMap, revealSecret,
   sameSel, setObjectState, setObjectStates,
 } from '../actions';
-import { nearestPc, type Nearest } from '../perception';
+import { CELL_METERS, nearestPc, type Nearest } from '../perception';
 import { cellName, parseCell, rangeName, uid } from '../util';
 import { MAX_SIDE } from '../schema.js';
 import { Area, Check, Num, Row, Section, Txt } from './fields';
@@ -213,6 +213,8 @@ function ObjectInspector({ world, mapId, o, ui }: { world: World; mapId: string;
             </Row>
             {!isZone && <Row label="高度 (m)"><Num value={o.height} step={0.1} min={0} onChange={(v) => up((x) => { x.height = Number.isFinite(v) ? Math.min(1000, Math.max(0, v)) : 0; })} /></Row>}
             {!isZone && <Check label="对玩家隐藏" value={o.hidden} onChange={(v) => up((x) => { x.hidden = v; })} />}
+            {!isZone && <Check label="可推动（推书架／推车）" value={!!o.pushable} onChange={(v) => up((x) => { if (v) x.pushable = true; else delete x.pushable; })} />}
+            {!isZone && o.pushable && <div className="hint">试玩时朝着它走过去，整件东西会向同方向挪一格；后面有墙、家具或人时推不动。带团时仍可以直接拖动。</div>}
             <Row label="主持人备注"><Area value={o.notes} onChange={(v) => up((x) => { x.notes = v; }, 'notes')} /></Row>
           </>
         ) : (
@@ -231,6 +233,27 @@ function ObjectInspector({ world, mapId, o, ui }: { world: World; mapId: string;
                 onClick={() => run ? setObjectState(mapId, o.id, i) : up((x) => { x.state = i; })}>{s || '（空）'}</button>
             ))}
           </div>
+          {edit && o.states.length > 1 && (
+            <>
+              <Check label="按状态挡路（不勾＝按高度算）" value={o.blocksWhen !== undefined}
+                onChange={(v) => up((x) => { if (v) x.blocksWhen = [x.state]; else delete x.blocksWhen; })} />
+              {o.blocksWhen && (
+                <div className="chips">
+                  {o.states.map((s, i) => (
+                    <label key={i} className="check">
+                      <input type="checkbox" checked={o.blocksWhen!.includes(i)}
+                        onChange={(e) => up((x) => {
+                          const set = new Set(x.blocksWhen ?? []);
+                          if (e.target.checked) set.add(i); else set.delete(i);
+                          x.blocksWhen = [...set].sort((a, b) => a - b);
+                        })} /> {s || '（空）'}
+                    </label>
+                  ))}
+                </div>
+              )}
+              {o.blocksWhen && <div className="hint">勾上的状态挡路、挡视线；没勾的状态可以从这里穿过。隔断、门这类可开合的物件用这个。</div>}
+            </>
+          )}
           {edit && <Area rows={2} placeholder="一行一个状态" value={o.states.join('\n')}
             onChange={(v) => setObjectStates(mapId, o.id, v.split('\n'))} />}
           {run && <div className="hint">带团时切换状态会写进记录。</div>}
@@ -376,7 +399,7 @@ function TokenInspector({ world, mapId, t }: { world: World; mapId: string; t: T
         </select>
       </Row>
       <div className="kv">位置 {cellName(t.x, t.y)}</div>
-      {t.pcId && <div className="hint">地图上的三圈是"看清"范围：1 格触手可及 / 5 格一步之遥 / 15 格屋子那头（1 格 = 1.5 米，只画看得见的格子）。</div>}
+      {t.pcId && <div className="hint">地图上的三圈是"看清"范围：1 格触手可及 / 5 格一步之遥 / 15 格屋子那头（1 格 = {CELL_METERS} 米，只画看得见的格子）。</div>}
     </Section>
   );
 }

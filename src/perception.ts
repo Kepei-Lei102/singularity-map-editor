@@ -3,20 +3,31 @@ import type { GameMap, MapObject, VisionLayer, World } from './types';
 import { emptyLayer } from './memory';
 import { cellLine, distToRect, gridDist } from './util';
 
-// 视野。尺度：1 格 = 1.5 米。
+// 视野。尺度：1 格 = 0.75 米。
 //
 // 看见：从玩家角色往外画视线，不设半径。路上经过的格子按地形的视野衰减系数累加（空地不算），
 //       累计 ≥ 1 就看不见了：墙 99 直接挡住，草丛 2 一格就挡住，窗 0.5 能透过一层。
 //       比人高的物件（≥ EYE 米）也挡视线。目标格本身总是看得见（看得见墙面、草丛本身）。
 // 看清：按圆形距离 ⌊√(dx²+dy²)⌋ 分档：1 格触手可及 / 5 格一步之遥 / 15 格屋子那头。
 
-export const CELL_METERS = 1.5;
+export const CELL_METERS = 0.75;
 /**
  * 一回合折算多少分钟。奇点之后的时间和现实时间绑定：自由行动以分钟计，战斗以回合计，
  * 两者按 1 回合 = 5 分钟换算（多场跑团实测的平均值；例：晕厥 15 分钟 = 3 回合）。全局锁定。
  */
 export const ROUND_MINUTES = 5;
 export const EYE = 1.8;
+/** 这么高以上的物件挡路（0.5 米：矮凳能跨过去，桌子不行）。 */
+export const BLOCK_HEIGHT = 0.5;
+
+/**
+ * 这个物件现在挡不挡路。写了 blocksWhen 的（隔断、门、可开合的墙）只看状态：
+ * 列出的状态挡，其余状态可以穿过，和高度无关；没写的旧物件仍按高度算。
+ */
+export function blocksMovement(o: MapObject) {
+  return o.blocksWhen ? o.blocksWhen.includes(o.state) : o.height >= BLOCK_HEIGHT;
+}
+
 export const CLEAR_BANDS = [
   { d: 1, label: '触手可及' },
   { d: 5, label: '一步之遥' },
@@ -32,7 +43,9 @@ export function sightCosts(world: World, map: GameMap) {
     cost[i] = c > 0.1 ? c : 0;
   }
   for (const o of map.objects) {
-    if (o.kind !== 'object' || o.height < EYE) continue;
+    if (o.kind !== 'object') continue;
+    const blocksSight = o.blocksWhen ? o.blocksWhen.includes(o.state) : o.height >= EYE;
+    if (!blocksSight) continue;
     for (let y = o.y; y < o.y + o.h; y++) for (let x = o.x; x < o.x + o.w; x++)
       if (x >= 0 && y >= 0 && x < map.width && y < map.height) cost[y * map.width + x] = 99;
   }
@@ -165,7 +178,7 @@ export function pcWithin(world: World, map: GameMap, o: MapObject, range: number
 
 // ---------- 听得见：至少能大声说话交流 ----------
 
-export const HEAR_RANGE = 10; // 格（15 米）：大声说话还能听清
+export const HEAR_RANGE = 10; // 格（7.5 米）：大声说话还能听清
 
 /** 两个人能不能大声说话交流：距离在 HEAR_RANGE 以内，而且中间没隔着墙（门、家具不挡声音）。 */
 export function canHear(world: World, map: GameMap, a: { x: number; y: number }, b: { x: number; y: number }) {

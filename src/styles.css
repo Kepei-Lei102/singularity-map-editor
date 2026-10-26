@@ -273,6 +273,7 @@ button.ai { color: #e6c2ff; border-color: #6b4f8c; }
   font-size: 12px; line-height: 1; border-radius: 4px; background: var(--panel2); color: var(--muted); z-index: 2; }
 .splitter-btn:hover { color: var(--accent); border-color: var(--accent); }
 .fit-btn { position: absolute; top: 24px; right: 10px; z-index: 3; }
+.recenter-btn { position: absolute; top: 60px; right: 10px; z-index: 3; }
 .secret-meta { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr) auto 52px auto; gap: 6px; align-items: center; margin: 6px 0; }
 .menu-ver { color: var(--muted); font-size: 11px; padding: 4px 2px 0; border-top: 1px solid var(--line); margin-top: 2px; }
 .storage-warn { background: #4a2a12; color: #ffd8a8; padding: 6px 12px; border-bottom: 1px solid #ff9f43; font-size: 12px; }
