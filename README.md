@@ -33,3 +33,7 @@ npm run build:single           # 打成单个 html，在 release-build/ 里
 ## 开发
 
 Vite + React + TypeScript。`npm run build` 会先跑类型检查。开发模式下，`window.__ts` 上挂着页面实际在用的 store / actions / trial / perception，方便在控制台测试。
+
+## 许可
+
+保留所有权利。仓库公开供阅读与参考，未授予复制、修改、分发或商业使用的许可。详见 [LICENSE](LICENSE)。
