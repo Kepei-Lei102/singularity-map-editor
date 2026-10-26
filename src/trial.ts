@@ -29,6 +29,12 @@ function canPush(w: World, m: GameMap, shelf: MapObject, dx: number, dy: number)
   return true;
 }
 
+/** 沉重物件要两个人：另一个棋子得贴着这件东西（上下左右斜角都算），不是只贴着推的人。 */
+function hasHelper(m: GameMap, shelf: MapObject, pusherId: string) {
+  return m.tokens.some((k) => k.id !== pusherId &&
+    k.x >= shelf.x - 1 && k.x <= shelf.x + shelf.w && k.y >= shelf.y - 1 && k.y <= shelf.y + shelf.h);
+}
+
 function walkable(w: World, m: GameMap, x: number, y: number) {
   if (x < 0 || y < 0 || x >= m.width || y >= m.height) return false;
   const t = w.terrains.find((t) => t.id === m.cells[y * m.width + x]);
@@ -148,6 +154,7 @@ export function trialMove(dx: number, dy: number) {
   const shelf = m.objects.find((o) => o.kind === 'object' && blocksMovement(o) && insideRect(o, nx, ny));
   if (shelf) {
     if (!shelf.pushable) return setTr({ msg: '走不过去' });
+    if (shelf.heavy && !hasHelper(m, shelf, pl.tokenId)) return setTr({ msg: `${shelf.name}太沉，要两个人一起推` });
     if (!canPush(w, m, shelf, dx, dy)) return setTr({ msg: `${shelf.name}推不动` });
     update((d) => {
       const o = findMap(d, t.mapId)!.objects.find((x) => x.id === shelf.id)!;

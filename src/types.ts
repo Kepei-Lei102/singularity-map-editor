@@ -63,6 +63,8 @@ export interface MapObject {
   blocksWhen?: number[];
   /** 可推动：试玩时走过去会把整件东西向同方向推一格（推书架、推车）。 */
   pushable?: boolean;
+  /** 沉重：要另一个棋子也贴着这件东西，才能推。做成需要两人合力。 */
+  heavy?: boolean;
   stateRev?: number; // 状态改过几次（自动加一）：流程图撤销时用来判断之后有没有被别人改过
   notes: string; // 只有主持人看得到
   hidden: boolean; // 对玩家隐藏

@@ -232,7 +232,8 @@ function ObjectInspector({ world, mapId, o, ui }: { world: World; mapId: string;
             {!isZone && <Row label="高度 (m)"><Num value={o.height} step={0.1} min={0} onChange={(v) => up((x) => { x.height = Number.isFinite(v) ? Math.min(1000, Math.max(0, v)) : 0; })} /></Row>}
             {!isZone && <Check label="对玩家隐藏" value={o.hidden} onChange={(v) => up((x) => { x.hidden = v; })} />}
             {!isZone && <Check label="可推动（推书架／推车）" value={!!o.pushable} onChange={(v) => up((x) => { if (v) x.pushable = true; else delete x.pushable; })} />}
-            {!isZone && o.pushable && <div className="hint">试玩时朝着它走过去，整件东西会向同方向挪一格；后面有墙、家具或人时推不动。带团时仍可以直接拖动。</div>}
+            {!isZone && o.pushable && <Check label="沉重：要两个人一起推" value={!!o.heavy} onChange={(v) => up((x) => { if (v) x.heavy = true; else delete x.heavy; })} />}
+            {!isZone && o.pushable && <div className="hint">试玩时朝着它走过去，整件东西会向同方向挪一格；后面有墙、家具或人时推不动。勾了"沉重"就还要另一个棋子贴着它，才推得动。带团时仍可直接拖动。</div>}
             <Row label="主持人备注"><Area value={o.notes} onChange={(v) => up((x) => { x.notes = v; }, 'notes')} /></Row>
           </>
         ) : (

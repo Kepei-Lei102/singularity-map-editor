@@ -180,6 +180,7 @@ export function checkWorld(w, migrated = false) {
       int(o.state, `${oa}.state`, 0, o.states.length - 1);
       if (o.blocksWhen !== undefined) arr(o.blocksWhen, `${oa}.blocksWhen`).forEach((v, k) => int(v, `${oa}.blocksWhen[${k}]`, 0, o.states.length - 1));
       optBool(o.pushable, `${oa}.pushable`);
+      optBool(o.heavy, `${oa}.heavy`);
       optNum(o.stateRev, `${oa}.stateRev`);
       arr(o.secrets, `${oa}.secrets`).forEach((s, k) => {
         const sa = `${oa}.secrets[${k}]`;
