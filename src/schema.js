@@ -155,7 +155,17 @@ export function checkWorld(w, migrated = false) {
       obj(L, `${at}.views.${pc}`); fogs(L.fog, `${at}.views.${pc}.fog`, n); memory(L.seen, `${at}.views.${pc}.seen`, n);
     });
     if (m.rooms !== undefined) {
-      arr(m.rooms, `${at}.rooms`).forEach((r, i) => { const ra = `${at}.rooms[${i}]`; obj(r, ra); id(r.id, `${ra}.id`); str(r.name, `${ra}.name`); str(r.color, `${ra}.color`); str(r.note, `${ra}.note`); strings(r.tags, `${ra}.tags`); });
+      arr(m.rooms, `${at}.rooms`).forEach((r, i) => {
+        const ra = `${at}.rooms[${i}]`; obj(r, ra); id(r.id, `${ra}.id`); str(r.name, `${ra}.name`); str(r.color, `${ra}.color`); str(r.note, `${ra}.note`); strings(r.tags, `${ra}.tags`);
+        if (r.reset !== undefined) {
+          const rs = `${ra}.reset`;
+          obj(r.reset, rs); num(r.reset.at, `${rs}.at`, 0);
+          arr(r.reset.objects, `${rs}.objects`).forEach((s, k) => {
+            const sa = `${rs}.objects[${k}]`;
+            obj(s, sa); id(s.id, `${sa}.id`); int(s.x, `${sa}.x`); int(s.y, `${sa}.y`); int(s.state, `${sa}.state`, 0);
+          });
+        }
+      });
       unique(m.rooms, `${at}.rooms`);
     }
     if (m.spawn != null) { obj(m.spawn, `${at}.spawn`); int(m.spawn.x, `${at}.spawn.x`); int(m.spawn.y, `${at}.spawn.y`); }

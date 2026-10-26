@@ -77,6 +77,8 @@ export interface Room {
   color: string;
   note: string;
   tags: string[];
+  /** 分区复位：这个房间里物件的位置和状态。带团中途点「复位」就回到这里。 */
+  reset?: { at: number; objects: { id: Id; x: number; y: number; state: number }[] };
 }
 
 /** 暂时不能行动（晕厥、泡温泉……）：自由行动时按真实时间倒数，战斗中换算成回合（1 回合 = 5 分钟）。 */

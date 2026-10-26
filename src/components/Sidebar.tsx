@@ -4,6 +4,7 @@ import { numbering } from '../render';
 import { newMap } from '../defaults';
 import { cellName, uid } from '../util';
 import { Area, Check, Num, Row, Section, Txt } from './fields';
+import { captureRoomReset, resetRoom } from '../actions';
 
 const ALL_TOOLS: [Tool, string, string][] = [
   ['select', '选择/移动', 'V'],
@@ -200,6 +201,13 @@ function RoomSection({ mapId, rooms, roomId, tool }: { mapId: string; rooms: Roo
           <Row label="颜色"><input type="color" value={room.color} onChange={(e) => up((r) => { r.color = e.target.value; }, 'rc')} /></Row>
           <Row label="标签"><Txt value={room.tags.join('，')} placeholder="例如 命宫，死门" onChange={(v) => up((r) => { r.tags = v.split(/[,，、]/).map((t) => t.trim()).filter(Boolean); }, 'rt')} /></Row>
           <Row label="笔记"><Area rows={5} value={room.note} onChange={(v) => up((r) => { r.note = v; }, 'rno')} /></Row>
+          <div className="btns">
+            <button className="small" onClick={() => captureRoomReset(mapId, room.id)}>记下当前摆位</button>
+            <button className="small" disabled={!room.reset} onClick={() => resetRoom(mapId, room.id)}>复位</button>
+          </div>
+          {room.reset
+            ? <div className="hint">复位点：{room.reset.objects.length} 个物件（{new Date(room.reset.at).toLocaleString()}）。带团或试玩中点「复位」，家具和状态都回到这里。</div>
+            : <div className="hint">先把房间摆好，再点「记下当前摆位」；之后推乱的推车、打开的隔断都能一键回去。</div>}
           <button className="danger small" onClick={() => {
             if (!confirm(`删除房间「${room.name}」？格子本身不变，只是不再属于这个房间。`)) return;
             update((d) => {

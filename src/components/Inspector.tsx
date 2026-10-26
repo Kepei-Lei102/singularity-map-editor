@@ -5,7 +5,7 @@ import type { Connection, GameMap, MapObject, Secret, Token, World } from '../ty
 import { CONN_LABEL, TIERS, TIER_LABEL } from '../types';
 import {
   deleteMap, duplicateMap, fillEmptyCells, findMap, giveMapKnowledge, reshapeMaps, setVisionMode, findObj, fireAttach, hideSecret, itemsAt, jumpTo, resizeMap, revealSecret,
-  sameSel, setObjectState, setObjectStates,
+  sameSel, setObjectState, setObjectStates, resetRoom,
 } from '../actions';
 import { CELL_METERS, nearestPc, type Nearest } from '../perception';
 import { cellName, parseCell, rangeName, uid } from '../util';
@@ -31,6 +31,7 @@ export function Inspector() {
   }
   return (
     <>
+      <RoomReset map={map} />
       <StackList world={w} map={map} ui={ui} />
       {body ?? (
         <>
@@ -39,6 +40,23 @@ export function Inspector() {
         </>
       )}
     </>
+  );
+}
+
+/** 记过复位点的房间：带团、试玩时随手把家具和状态挪回去。 */
+function RoomReset({ map }: { map: GameMap }) {
+  const rooms = map.rooms.filter((r) => r.reset);
+  if (!rooms.length) return null;
+  return (
+    <Section title="分区复位">
+      {rooms.map((r) => (
+        <div key={r.id} className="btns" style={{ justifyContent: 'space-between' }}>
+          <span>{r.name}</span>
+          <button className="small" onClick={() => resetRoom(map.id, r.id)}>复位</button>
+        </div>
+      ))}
+      <div className="hint">把房间里的推车、隔断、家具挪回记录的位置和状态。复位点在地图编辑的「房间」里记。</div>
+    </Section>
   );
 }
 

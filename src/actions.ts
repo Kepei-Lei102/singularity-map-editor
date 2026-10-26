@@ -31,6 +31,50 @@ export function partyTags(w: World) {
 
 // ---------- 物件状态 ----------
 
+/**
+ * 分区复位：把一个房间里物件的当前位置和状态记成复位点。
+ * 之后无论推书架、开关隔断，点复位就全部回到这里。只记位置和状态，不记棋子和迷雾。
+ */
+export function captureRoomReset(mapId: string, roomId: string) {
+  update((d) => {
+    const m = findMap(d, mapId);
+    const r = m?.rooms.find((x) => x.id === roomId);
+    if (!m || !r) return;
+    const inside = (o: MapObject) => {
+      for (let y = o.y; y < o.y + o.h; y++)
+        for (let x = o.x; x < o.x + o.w; x++)
+          if (x >= 0 && y >= 0 && x < m.width && y < m.height && m.roomCells[y * m.width + x] === roomId) return true;
+      return false;
+    };
+    r.reset = {
+      at: Date.now(),
+      objects: m.objects.filter((o) => o.kind === 'object' && inside(o)).map((o) => ({ id: o.id, x: o.x, y: o.y, state: o.state })),
+    };
+    log(d, 'note', `记下「${r.name}」的复位点：${r.reset.objects.length} 个物件`, mapId);
+  });
+}
+
+/** 把房间里的物件挪回复位点记的位置和状态。记录过状态变化的照样记版本号。 */
+export function resetRoom(mapId: string, roomId: string) {
+  update((d) => {
+    const m = findMap(d, mapId);
+    const r = m?.rooms.find((x) => x.id === roomId);
+    if (!m || !r?.reset) return;
+    let n = 0;
+    for (const s of r.reset.objects) {
+      const o = m.objects.find((x) => x.id === s.id);
+      if (!o) continue;
+      const moved = o.x !== s.x || o.y !== s.y;
+      const restated = o.state !== s.state;
+      if (!moved && !restated) continue;
+      o.x = s.x; o.y = s.y;
+      if (restated) { o.state = s.state; o.stateRev = (o.stateRev ?? 0) + 1; }
+      n++;
+    }
+    log(d, 'note', `复位「${r.name}」：${n} 个物件回到记录的位置和状态`, mapId);
+  });
+}
+
 export function setObjectState(mapId: string, objId: string, idx: number) {
   update((d) => {
     const o = findObj(d, mapId, objId);
