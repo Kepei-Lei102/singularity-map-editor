@@ -153,7 +153,7 @@ export function trialMove(dx: number, dy: number) {
   const nx = tok.x + dx, ny = tok.y + dy;
   // 棋盘块由检查器抽象操控，不能用普通推箱绕过边界、碰撞和门状态规则。
   const puzzleBlock = m.objects.find((o) => slidingPuzzleForObject(m, o.id) && insideRect(o, nx, ny));
-  if (puzzleBlock) return setTr({ msg: `${puzzleBlock.name}是滑块，请在检查器的滑块棋盘面板操作` });
+  if (puzzleBlock) return setTr({ msg: `${puzzleBlock.name}是滑块，请拖动当前看得见的家具，或使用检查器的方向按钮` });
   // 前面是可推的书架／推车：先把它推一格，再走进去。推不动就停下，不悄悄挪半格。
   const shelf = m.objects.find((o) => o.kind === 'object' && blocksMovement(o) && insideRect(o, nx, ny));
   if (shelf) {

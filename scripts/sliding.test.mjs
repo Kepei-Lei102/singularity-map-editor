@@ -52,6 +52,22 @@ test('legal single steps translate without rotating or requiring a person/helper
   }
 });
 
+test('trial cannot move unseen furniture using buttons or stale selection; current eye ignores shared fog', () => {
+  const { world, map } = fixture();
+  map.spawn = { x: 0, y: 2 };
+  map.objects.push({ ...api.newObject('object', 1, 0, 1, 10), id: 'screen', height: 2 });
+  install(world); api.startTrial();
+  const tokenId = api.getUI().trial.players[0].tokenId;
+  assert.equal(api.seesSlidingObject(api.getWorld(), api.getWorld().maps[0], 'target', tokenId), false);
+  const before = JSON.stringify(api.getWorld());
+  assert.match(api.moveSlidingObject(map.id, 'target', 2, 1), /看不见/);
+  assert.equal(JSON.stringify(api.getWorld()), before);
+  api.update(d => { d.maps[0].tokens.find(t => t.id === tokenId).x = 2; d.maps[0].tokens.find(t => t.id === tokenId).y = 4; });
+  assert.equal(api.seesSlidingObject(api.getWorld(), api.getWorld().maps[0], 'target', tokenId), true);
+  assert.equal(api.moveSlidingObject(map.id, 'target', 2, 1), null);
+  api.endTrial();
+});
+
 test('bounds account for whole block and reject all four edges without mutation', () => {
   const { world, map, block } = fixture();
   for (const [x, y] of [[0, 2], [6, 2], [2, 0], [2, 7]]) {

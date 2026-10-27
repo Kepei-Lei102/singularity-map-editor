@@ -3,7 +3,7 @@ import type { GameMap, World } from '../types';
 import { CS, cellLine, uid } from '../util';
 import { beginBatch, canEditMap, endBatch, getUI, getWorld, setUI, toast, update, useUI, type Selection, type View } from '../store';
 import { checkEnterTriggers, clearPendingFocus, findMap, itemsAt, jumpTo, moveSlidingObject, pendingFocus, sameSel } from '../actions';
-import { slidingPuzzleForObject } from '../sliding';
+import { checkSlidingMove, slidingPuzzleForObject } from '../sliding';
 import { newObject } from '../defaults';
 import { brushCells, render, type Mode, type Rect } from '../render';
 
@@ -161,11 +161,25 @@ export function MapCanvas({ world, map, mode, playerNumbers = false, follow, vie
     const { sx, sy, cx, cy } = toCell(e);
     const v = viewRef.current;
     const startPan = () => { drag.current = { k: 'pan', sx, sy, px: v.panX, py: v.panY }; };
-    if (e.button !== 0 || space.current || mode === 'player') return startPan();
+    if (e.button !== 0 || space.current) return startPan();
 
     const s = getUI();
     const w = getWorld();
     const m = findMap(w, map.id)!;
+    // 试玩允许直接拖棋盘块；独立玩家窗口仍只平移，标记模式仍交给点击处理。
+    if (mode === 'player') {
+      const trial = s.trial;
+      const obj = trial?.mapId === m.id && !trial.markMode
+        ? m.objects.find(o => !o.hidden && slidingPuzzleForObject(m, o.id) &&
+          (w.visionMode === 'individual' ? m.views[viewer ?? '']?.fog : m.fog)?.[cy * m.width + cx] === 1 &&
+          cx >= o.x && cx < o.x + o.w && cy >= o.y && cy < o.y + o.h)
+        : undefined;
+      if (!obj) return startPan();
+      beginBatch();
+      drag.current = { k: 'obj', id: obj.id, ox: cx - obj.x, oy: cy - obj.y, moved: false, next: null };
+      setUI({ selection: { type: 'object', mapId: m.id, id: obj.id }, tab: 'inspect' });
+      return;
+    }
     const inMap = cx >= 0 && cy >= 0 && cx < m.width && cy < m.height;
     const tool = s.tool;
 
@@ -196,7 +210,7 @@ export function MapCanvas({ world, map, mode, playerNumbers = false, follow, vie
         const tok = m.tokens.find((t) => t.id === ts.id)!;
         beginBatch();
         drag.current = { k: 'tok', id: tok.id, fx: tok.x, fy: tok.y, moved: false, next };
-      } else if (ts.type === 'object' && canEditMap(s)) {
+      } else if (ts.type === 'object' && (canEditMap(s) || slidingPuzzleForObject(m, ts.id))) {
         const obj = m.objects.find((o) => o.id === ts.id)!;
         beginBatch();
         drag.current = { k: 'obj', id: obj.id, ox: cx - obj.x, oy: cy - obj.y, moved: false, next };
@@ -272,8 +286,9 @@ export function MapCanvas({ world, map, mode, playerNumbers = false, follow, vie
       if (slidingPuzzleForObject(m, o.id)) {
         const nx = cx - dr.ox, ny = cy - dr.oy;
         if (nx !== o.x || ny !== o.y) {
-          const error = moveSlidingObject(map.id, o.id, nx, ny);
-          if (error) toast(error); else dr.moved = true;
+          const error = checkSlidingMove(getWorld(), m, o.id, nx, ny);
+          setPreview(error ? null : { x: nx, y: ny, w: o.w, h: o.h });
+          dr.moved = true;
         }
       } else {
         const nx = clampX(cx - dr.ox, o.w), ny = clampY(cy - dr.oy, o.h);
@@ -301,6 +316,15 @@ export function MapCanvas({ world, map, mode, playerNumbers = false, follow, vie
     if (dr.k === 'pan' && mode === 'player' && onCellClick) {
       const { sx, sy, cx, cy } = toCell(e);
       if (Math.hypot(sx - dr.sx, sy - dr.sy) < 4) onCellClick(cx, cy);
+    }
+    if (dr.k === 'obj' && dr.moved) {
+      const m = findMap(getWorld(), map.id);
+      if (m && slidingPuzzleForObject(m, dr.id)) {
+        const { cx, cy } = toCell(e);
+        const error = moveSlidingObject(map.id, dr.id, cx - dr.ox, cy - dr.oy);
+        if (error) toast(error);
+        setPreview(null);
+      }
     }
     if (dr.k === 'paint' || dr.k === 'obj') endBatch();
     if (dr.k === 'tok') {

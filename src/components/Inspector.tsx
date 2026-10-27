@@ -7,7 +7,7 @@ import {
   deleteMap, duplicateMap, fillEmptyCells, findMap, giveMapKnowledge, reshapeMaps, setVisionMode, findObj, fireAttach, hideSecret, itemsAt, jumpTo, resizeMap, revealSecret,
   sameSel, setObjectState, setObjectStates, resetRoom, applyRoomLayout, moveSlidingObject, deleteMapObject,
 } from '../actions';
-import { checkSlidingMove, slidingPuzzleForObject } from '../sliding';
+import { checkSlidingMove, seesSlidingObject, slidingPuzzleForObject } from '../sliding';
 import { CELL_METERS, nearestPc, type Nearest } from '../perception';
 import { cellName, parseCell, rangeName, uid } from '../util';
 import { MAX_SIDE } from '../schema.js';
@@ -22,7 +22,8 @@ export function Inspector() {
   let body: JSX.Element | null = null;
   if (sel?.type === 'object') {
     const o = findObj(w, sel.mapId, sel.id);
-    if (o) body = <ObjectInspector key={o.id} world={w} mapId={sel.mapId} o={o} ui={ui} />;
+    if (o && (!ui.trial || !slidingPuzzleForObject(map, o.id) || seesSlidingObject(w, map, o.id, ui.trial.players[ui.trial.current]?.tokenId ?? '')))
+      body = <ObjectInspector key={o.id} world={w} mapId={sel.mapId} o={o} ui={ui} />;
   } else if (sel?.type === 'token') {
     const t = findMap(w, sel.mapId)?.tokens.find((x) => x.id === sel.id);
     if (t) body = <TokenInspector world={w} mapId={sel.mapId} t={t} />;
@@ -83,20 +84,21 @@ function RoomReset({ map }: { map: GameMap }) {
   );
 }
 
-/** 棋盘始终可从检查器操作，试玩玩家视角不能直接选图上物件时也能选块。 */
+/** 试玩仅列出当前角色可见的滑块，按钮与画布拖动共用移动规则。 */
 function SlidingPuzzles({ world, map, ui }: { world: World; map: GameMap; ui: UIState }) {
   const [message, setMessage] = useState<{ mapId: string; text: string } | null>(null);
   const allowed = !ui.trial || ui.trial.mapId === map.id;
+  const visible = (id: string) => !ui.trial || seesSlidingObject(world, map, id, ui.trial.players[ui.trial.current]?.tokenId ?? '');
   return <>{map.slidingPuzzles?.map((puzzle) => {
     const selected = ui.selection;
-    const block = selected?.type === 'object' && selected.mapId === map.id && puzzle.objectIds.includes(selected.id)
+    const block = selected?.type === 'object' && selected.mapId === map.id && puzzle.objectIds.includes(selected.id) && visible(selected.id)
       ? map.objects.find((o) => o.id === selected.id) : undefined;
     const target = map.objects.find((o) => o.id === puzzle.targetId);
     const solved = puzzle.goal && target?.x === puzzle.goal.x && target?.y === puzzle.goal.y;
     return <Section key={puzzle.id} title={`滑块棋盘 · ${puzzle.name}`}>
       <div className="kv">边界 {rangeName(puzzle)}{puzzle.goal ? ` · 目标左上角 ${cellName(puzzle.goal.x, puzzle.goal.y)}${solved ? ' · 已到位，门已打开' : ''}` : ' · 腾挪书架，实际走通通道'}</div>
       <div className="chips">
-        {puzzle.objectIds.map((id) => {
+        {puzzle.objectIds.filter(visible).map((id) => {
           const o = map.objects.find((x) => x.id === id);
           return o && <button key={id} className={block?.id === id ? 'chip on' : 'chip'} disabled={!allowed}
             onClick={() => { setMessage(null); setUI({ selection: { type: 'object', mapId: map.id, id } }); }}>
@@ -116,7 +118,7 @@ function SlidingPuzzles({ world, map, ui }: { world: World; map: GameMap; ui: UI
         })}
       </div>
       {message?.mapId === map.id && <div role="status" className="hint">{message.text}</div>}
-      <div className="hint">选块后按方向按钮，每次平移一格，不旋转。灰色按钮的提示说明阻挡原因。人物不必站在推动侧，沉重只表示费力；不能把书架移到人物身上。{puzzle.goal ? '目标块到位开门，移开关门。' : '腾挪书架，实际走通通道。'}</div>
+      <div className="hint">可直接拖动家具，松手时提交整段直线移动；也可选块后按方向按钮，每次一格。试玩只能操作当前角色看得见的家具。人物不必站在推动侧；不能旋转或穿过其它家具、人物。{puzzle.goal ? '目标块到位开门，移开关门。' : '腾挪书架，实际走通通道。'}</div>
       {!allowed && <div className="hint">试玩时只能操作当前试玩地图的棋盘。</div>}
     </Section>;
   })}</>;

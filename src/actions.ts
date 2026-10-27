@@ -13,7 +13,7 @@ import { checkRoomObjects, checkWorld, repairWorld } from './schema.js';
 import { allSlots, dropSlot, loadSlot, saveSlot } from './persist';
 import { send } from './sync';
 import { emptyLayer, migrateWorld } from './memory';
-import { applySlidingMove } from './sliding';
+import { applySlidingMove, seesSlidingObject } from './sliding';
 
 export const findMap = (w: World | Draft<World>, id: string) => w.maps.find((m) => m.id === id);
 export const findObj = (w: World | Draft<World>, mapId: string, id: string) =>
@@ -151,6 +151,11 @@ export function deleteMapObject(mapId: string, objectId: string) {
 export function moveSlidingObject(mapId: string, objectId: string, x: number, y: number): string | null {
   const ui = getUI();
   if (mapId !== ui.mapId || (ui.trial && mapId !== ui.trial.mapId)) return '只能操作当前地图的滑块';
+  if (ui.trial) {
+    const world = getWorld(), map = findMap(world, mapId);
+    const player = ui.trial.players[ui.trial.current];
+    if (!map || !player || !seesSlidingObject(world, map, objectId, player.tokenId)) return '当前角色看不见这件家具，先走近探索';
+  }
   let error: string | null = '找不到地图';
   update((d) => {
     const map = findMap(d, mapId);

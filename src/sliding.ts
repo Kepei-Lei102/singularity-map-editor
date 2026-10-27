@@ -1,5 +1,15 @@
 import type { GameMap, World } from './types';
-import { blocksMovement } from './perception';
+import { blocksMovement, canSee, sightCosts } from './perception';
+
+/** 当前操控者确实看见家具的一部分，记忆与队友视野不算。 */
+export function seesSlidingObject(world: World, map: GameMap, objectId: string, tokenId: string): boolean {
+  const o = map.objects.find(o => o.id === objectId), t = map.tokens.find(t => t.id === tokenId);
+  if (!o || o.hidden || !t) return false;
+  const cost = sightCosts(world, map);
+  for (let y = o.y; y < o.y + o.h; y++) for (let x = o.x; x < o.x + o.w; x++)
+    if (canSee(cost, map.width, t.x, t.y, x, y)) return true;
+  return false;
+}
 
 export const slidingPuzzleForObject = (map: GameMap, objectId: string) =>
   map.slidingPuzzles?.find((p) => p.objectIds.includes(objectId));
