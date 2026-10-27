@@ -1,7 +1,8 @@
+import { architectureBlocksSight, architectureGeometry, isArchitectureObject, segmentHitsRect, tokenPosition, isSubdivided, subKey } from './architecture';
 import { produce } from 'immer';
 import type { GameMap, MapObject, VisionLayer, World } from './types';
 import { emptyLayer } from './memory';
-import { cellLine, distToRect, gridDist } from './util';
+import { cellLine, gridDist } from './util';
 
 // 视野。尺度：1 格 = 0.75 米。
 //
@@ -25,7 +26,7 @@ export const BLOCK_HEIGHT = 0.5;
  * 列出的状态挡，其余状态可以穿过，和高度无关；没写的旧物件仍按高度算。
  */
 export function blocksMovement(o: MapObject) {
-  return o.blocksWhen ? o.blocksWhen.includes(o.state) : o.height >= BLOCK_HEIGHT;
+  return !isArchitectureObject(o) && (o.physical?.blocksMove ?? (o.blocksWhen ? o.blocksWhen.includes(o.state) : o.height >= BLOCK_HEIGHT));
 }
 
 export const CLEAR_BANDS = [
@@ -43,8 +44,8 @@ export function sightCosts(world: World, map: GameMap) {
     cost[i] = c > 0.1 ? c : 0;
   }
   for (const o of map.objects) {
-    if (o.kind !== 'object') continue;
-    const blocksSight = o.blocksWhen ? o.blocksWhen.includes(o.state) : o.height >= EYE;
+    if (o.kind !== 'object' || isArchitectureObject(o)) continue;
+    const blocksSight = o.physical?.blocksSight ?? (o.blocksWhen ? o.blocksWhen.includes(o.state) : o.height >= EYE);
     if (!blocksSight) continue;
     for (let y = o.y; y < o.y + o.h; y++) for (let x = o.x; x < o.x + o.w; x++)
       if (x >= 0 && y >= 0 && x < map.width && y < map.height) cost[y * map.width + x] = 99;
@@ -69,30 +70,48 @@ export function canSee(cost: Float32Array, width: number, x0: number, y0: number
   return true;
 }
 
-/** 某个角色看这个物件：物件上任何一格在视线里都算看得见；返回看得见的格子里最近的距离（都看不见就返回最近那格、los=false）。 */
-function sightToObject(cost: Float32Array, width: number, t: { x: number; y: number }, o: MapObject) {
-  let best: { d: number; los: boolean } | null = null;
-  const cells: [number, number, number][] = [];
-  for (let y = o.y; y < o.y + o.h; y++) for (let x = o.x; x < o.x + o.w; x++) cells.push([gridDist(x - t.x, y - t.y), x, y]);
-  cells.sort((a, b) => a[0] - b[0]);
-  for (const [d, x, y] of cells) {
-    if (canSee(cost, width, t.x, t.y, x, y)) return { d, los: true };
-    best ??= { d, los: false };
+/** 旧地形保持主格衰减，薄墙用连续几何遮挡。目标采用主格坐标的真实中心。 */
+export function seesPoint(cost: Float32Array, map: GameMap, eye: { x: number; y: number; subcell?: { x: number; y: number } }, target: { x: number; y: number }, geometry?: ReturnType<typeof architectureGeometry>) {
+  const p = tokenPosition(eye);
+  return canSee(cost, map.width, Math.floor(p.x), Math.floor(p.y), Math.floor(target.x), Math.floor(target.y)) && !(geometry ? geometry.some(r => r.blocksSight && segmentHitsRect(p, target, r)) : architectureBlocksSight(map, p, target));
+}
+function sightToObject(cost: Float32Array, map: GameMap, t: { x: number; y: number; subcell?: { x: number; y: number } }, o: MapObject) {
+  const p = tokenPosition(t);
+  let best = { d: Infinity, los: false };
+  if (isArchitectureObject(o)) {
+    const geometry = architectureGeometry(map, true), others = geometry.filter(r => r.objectId !== o.id && r.blocksSight);
+    for (const r of geometry.filter(r => r.objectId === o.id)) {
+      const target = { x: Math.max(r.x, Math.min(r.x + r.w, p.x)), y: Math.max(r.y, Math.min(r.y + r.h, p.y)) };
+      const d = gridDist(target.x - p.x, target.y - p.y), los = seesPoint(cost, map, t, target, others);
+      if ((los && !best.los) || los === best.los && d < best.d) best = { d, los };
+    }
+    return best;
   }
-  return best ?? { ...distToRect(t.x, t.y, o), los: false };
+  for (let y = o.y; y < o.y + o.h; y++) for (let x = o.x; x < o.x + o.w; x++) {
+    const fine = isSubdivided(map, x, y), n = fine ? 3 : 1;
+    for (let sy = 0; sy < n; sy++) for (let sx = 0; sx < n; sx++) {
+      const target = { x: x + (sx + 0.5) / n, y: y + (sy + 0.5) / n };
+      const d = gridDist(target.x - p.x, target.y - p.y), los = seesPoint(cost, map, t, target);
+      if ((los && !best.los) || los === best.los && d < best.d) best = { d, los };
+    }
+  }
+  return best;
 }
-
-/** 从这些棋子的眼睛看出去，能看见的格子（1 = 看得见）。 */
-export function visionFrom(world: World, map: GameMap, eyes: { x: number; y: number }[]): Uint8Array {
-  const vis = new Uint8Array(map.width * map.height);
-  const ok = eyes.filter((t) => t.x >= 0 && t.y >= 0 && t.x < map.width && t.y < map.height);
-  if (!ok.length) return vis;
-  const cost = sightCosts(world, map);
-  for (let y = 0; y < map.height; y++)
-    for (let x = 0; x < map.width; x++)
-      for (const t of ok) if (canSee(cost, map.width, t.x, t.y, x, y)) { vis[y * map.width + x] = 1; break; }
-  return vis;
+export function detailedVision(world: World, map: GameMap, eyes: { x: number; y: number; subcell?: { x: number; y: number } }[]) {
+  const vis = new Uint8Array(map.width * map.height), sub: Record<number, number> = {};
+  const cost = sightCosts(world, map), geometry = architectureGeometry(map);
+  for (let y = 0; y < map.height; y++) for (let x = 0; x < map.width; x++) {
+    const n = isSubdivided(map, x, y) ? 3 : 1;
+    for (let sy = 0; sy < n; sy++) for (let sx = 0; sx < n; sx++) {
+      const target = { x: x + (sx + 0.5) / n, y: y + (sy + 0.5) / n };
+      const visible = eyes.some(t => seesPoint(cost, map, t, target, geometry)) ? 1 : 0;
+      if (visible) vis[y * map.width + x] = 1;
+      if (n === 3) sub[subKey(map, x * 3 + sx, y * 3 + sy)] = visible;
+    }
+  }
+  return { vis, sub };
 }
+export function visionFrom(world: World, map: GameMap, eyes: { x: number; y: number }[]) { return detailedVision(world, map, eyes).vis; }
 
 /** 全队能看见的格子。 */
 export const partyVision = (world: World, map: GameMap) => visionFrom(world, map, map.tokens.filter((t) => t.pcId));
@@ -105,47 +124,28 @@ const step = (f: number, seeing: number) => (seeing ? 1 : f === 1 ? 2 : f);
  * 各自独立：每个玩家角色一份（map.views），只算他自己的眼睛；地图上那份是所有人的并集，给主持人看。
  */
 export function withVision(next: World, prev: World): World {
-  const changes: { i: number; fog: number[]; views?: Record<string, VisionLayer> }[] = [];
-  next.maps.forEach((m, i) => {
-    if (!m.autoFog) return;
-    const p = prev.maps.find((x) => x.id === m.id);
-    if (p && p.autoFog && p.cells === m.cells && p.objects === m.objects && p.tokens === m.tokens &&
-      prev.terrains === next.terrains && prev.visionMode === next.visionMode) return;
-    if (next.visionMode !== 'individual') {
-      const vis = partyVision(next, m);
-      let changed = false;
-      const fog = m.fog.map((f, k) => { const nf = step(f, vis[k]); if (nf !== f) changed = true; return nf; });
-      if (changed) changes.push({ i, fog });
-      return;
-    }
-    const n = m.width * m.height;
-    const views: Record<string, VisionLayer> = { ...m.views };
-    let vchanged = false;
-    // 按角色分组：同一个角色在这张图上有几个棋子（比如分身、附身），几双眼睛看到的合在一起
-    const eyes = new Map<string, typeof m.tokens>();
-    for (const t of m.tokens) if (t.pcId) eyes.set(t.pcId, [...(eyes.get(t.pcId) ?? []), t]);
-    for (const [pc, ts] of eyes) {
-      const vis = visionFrom(next, m, ts);
-      const L = views[pc] ?? emptyLayer(n);
-      let ch = !m.views[pc];
-      const fog = L.fog.map((f, k) => { const nf = step(f, vis[k]); if (nf !== f) ch = true; return nf; });
-      if (ch) { views[pc] = { ...L, fog }; vchanged = true; }
-    }
-    // 不在这张图上的人：之前看得见的都变成记忆
-    for (const [pc, L] of Object.entries(m.views))
-      if (!m.tokens.some((t) => t.pcId === pc) && L.fog.includes(1)) { views[pc] = { ...L, fog: L.fog.map((f) => (f === 1 ? 2 : f)) }; vchanged = true; }
-    let changed = false;
-    const all = Object.values(views);
-    const fog = m.fog.map((f, k) => {
-      const nf = all.some((L) => L.fog[k] === 1) ? 1 : all.some((L) => L.fog[k]) || f ? 2 : 0;
-      if (nf !== f) changed = true;
-      return nf;
-    });
-    if (changed || vchanged) changes.push({ i, fog, views });
+  const dirty = next.maps.filter(m => {
+    const p = prev.maps.find(p => p.id === m.id);
+    return m.autoFog && (!p || !p.autoFog || p.cells !== m.cells || p.objects !== m.objects || p.tokens !== m.tokens || p.architecture !== m.architecture || p.subdivisions !== m.subdivisions || next.terrains !== prev.terrains || next.visionMode !== prev.visionMode);
   });
-  if (!changes.length) return next;
-  return produce(next, (d) => {
-    changes.forEach(({ i, fog, views }) => { d.maps[i].fog = fog; if (views) d.maps[i].views = views; });
+  if (!dirty.length) return next;
+  return produce(next, d => {
+    for (const src of dirty) {
+      const m = d.maps.find(m => m.id === src.id)!;
+      const apply = (L: VisionLayer, eyes: typeof src.tokens) => {
+        const { vis, sub } = detailedVision(next, src, eyes);
+        L.fog = L.fog.map((f, i) => step(f, vis[i]));
+        const old = L.subFog ?? {};
+        L.subFog = Object.fromEntries(Object.entries(sub).map(([k, v]) => [k, step(old[+k] ?? 0, v)]));
+      };
+      if (next.visionMode === 'individual') {
+        const pcs = new Set([...Object.keys(m.views), ...src.tokens.flatMap(t => t.pcId ? [t.pcId] : [])]);
+        for (const pc of pcs) { const L = m.views[pc] ??= emptyLayer(m.width * m.height); apply(L, src.tokens.filter(t => t.pcId === pc)); }
+        m.fog = m.fog.map((f, i) => Object.values(m.views).some(L => L.fog[i] === 1) ? 1 : f || Object.values(m.views).some(L => L.fog[i]) ? 2 : 0);
+        const keys = Object.keys(detailedVision(next, src, []).sub);
+        m.subFog = Object.fromEntries(keys.map(k => [k, Object.values(m.views).some(L => L.subFog?.[+k] === 1) ? 1 : Object.values(m.views).some(L => L.subFog?.[+k]) ? 2 : 0]));
+      } else apply(m, src.tokens.filter(t => t.pcId));
+    }
   });
 }
 
@@ -157,7 +157,7 @@ export function nearestPc(world: World, map: GameMap, o: MapObject): Nearest | n
   let best: Nearest | null = null;
   for (const t of map.tokens) {
     if (!t.pcId) continue;
-    const { d, los } = sightToObject(cost, map.width, t, o);
+    const { d, los } = sightToObject(cost, map, t, o);
     const better = !best || (los && !best.los) || (los === best.los && d < best.d);
     if (better) best = { tokenId: t.id, name: t.name, d, los };
   }
@@ -169,10 +169,8 @@ export function pcWithin(world: World, map: GameMap, o: MapObject, range: number
   const cost = sightCosts(world, map);
   return map.tokens.find((t) => {
     if (!t.pcId) return false;
-    // 范围内的格子里有一格看得见就行（大件家具的另一头露在外面也算）
-    for (let y = o.y; y < o.y + o.h; y++) for (let x = o.x; x < o.x + o.w; x++)
-      if (gridDist(x - t.x, y - t.y) <= range && canSee(cost, map.width, t.x, t.y, x, y)) return true;
-    return false;
+    const result = sightToObject(cost, map, t, o);
+    return result.los && result.d <= range;
   });
 }
 
@@ -182,7 +180,8 @@ export const HEAR_RANGE = 10; // 格（7.5 米）：大声说话还能听清
 
 /** 两个人能不能大声说话交流：距离在 HEAR_RANGE 以内，而且中间没隔着墙（门、家具不挡声音）。 */
 export function canHear(world: World, map: GameMap, a: { x: number; y: number }, b: { x: number; y: number }) {
-  if (gridDist(a.x - b.x, a.y - b.y) > HEAR_RANGE) return false;
+  const ap = tokenPosition(a), bp = tokenPosition(b);
+  if (gridDist(ap.x - bp.x, ap.y - bp.y) > HEAR_RANGE || architectureBlocksSight(map, ap, bp)) return false;
   const walls = new Set(world.terrains.filter((t) => t.blocksMove && t.visionCoef >= 99).map((t) => t.id));
   const line = cellLine(a.x, a.y, b.x, b.y);
   const wall = (x: number, y: number) => walls.has(map.cells[y * map.width + x]);

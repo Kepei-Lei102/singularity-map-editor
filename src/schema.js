@@ -1,3 +1,5 @@
+import { architectureWalls, architectureDoors, architectureGeometry, isArchitectureObject, architectureObjectBounds } from './architectureData.js';
+export { migrateArchitecture } from './architectureData.js';
 // 工程文件的结构校验。浏览器（导入、恢复备份、NPC 导入）和命令行（scripts/tsmap.mjs、open.mjs 保存）共用这一份。
 // 原则：编辑器会读、会画出来的字段都要查，类型不对就拒绝（文字被换成对象会让界面崩溃，坐标太大会让循环停不下来）。
 // 旧存档缺的、migrateWorld 会补上的字段（seen、views、rooms、marks、npcs、线索的 kind/range……）有就查，没有不算错。
@@ -112,6 +114,36 @@ export function repairWorld(w) {
   return fixed;
 }
 
+/** 纯 JS 建筑校验，命令行与编辑器都拒绝悬空门洞和未细分墙。 */
+export function checkArchitecture(m) {
+  const c = checker('建筑数据有问题：');
+  const subs = new Set();
+  for (const i of m.subdivisions ?? []) { c.int(i, 'subdivisions', 0, m.width * m.height - 1); if (subs.has(i)) c.fail('subdivisions', '索引重复'); subs.add(i); }
+  if (m.architecture) { c.obj(m.architecture, 'architecture'); c.arr(m.architecture.walls, 'walls'); c.arr(m.architecture.doors, 'doors'); }
+  const walls = architectureWalls(m), doors = architectureDoors(m);
+  c.unique([...(m.objects ?? []), ...(m.architecture?.walls ?? []), ...(m.architecture?.doors ?? [])], 'objects / architecture');
+  c.unique(walls, 'walls'); c.unique(doors, 'doors');
+  for (const w of walls) {
+    c.obj(w, 'wall'); c.id(w.id, 'wall.id'); c.oneOf(w.material, ['wall', 'glass'], 'material'); c.num(w.thickness, 'thickness', 1, 750);
+    for (const p of [w.a, w.b]) { c.obj(p, '端点'); c.int(p.x, '端点.x', 0, m.width * 3); c.int(p.y, '端点.y', 0, m.height * 3); }
+    if ((w.a.x !== w.b.x && w.a.y !== w.b.y) || (w.a.x === w.b.x && w.a.y === w.b.y)) c.fail(w.id, '墙必须是非零轴对齐线段');
+    const len = Math.abs(w.b.x - w.a.x) + Math.abs(w.b.y - w.a.y);
+    for (let i = 0; i < len; i++) {
+      const x = w.a.x + (i + .5) * Math.sign(w.b.x - w.a.x), y = w.a.y + (i + .5) * Math.sign(w.b.y - w.a.y);
+      const candidates = w.a.x === w.b.x ? [[Math.floor(x / 3 - 1e-7), Math.floor(y / 3)], [Math.floor(x / 3), Math.floor(y / 3)]] : [[Math.floor(x / 3), Math.floor(y / 3 - 1e-7)], [Math.floor(x / 3), Math.floor(y / 3)]];
+      if (!candidates.some(([cx, cy]) => cx >= 0 && cy >= 0 && cx < m.width && cy < m.height && subs.has(cy * m.width + cx))) c.fail(w.id, '墙经过未细分区域');
+    }
+  }
+  for (const d of doors) {
+    c.obj(d, 'door'); c.id(d.id, 'door.id'); c.id(d.wallId, 'door.wallId'); c.int(d.offset, 'door.offset', 0); c.int(d.width, 'door.width', 1); c.bool(d.open, 'door.open');
+    const w = walls.find(w => w.id === d.wallId);
+    if (!w) c.fail(d.id, '门洞找不到所属墙');
+    const len = Math.abs(w.b.x - w.a.x) + Math.abs(w.b.y - w.a.y);
+    if (d.offset + d.width > len) c.fail(d.id, '门洞超出墙段');
+    if (doors.some(b => b !== d && b.wallId === d.wallId && d.offset < b.offset + b.width && b.offset < d.offset + d.width)) c.fail(d.id, '门洞重叠');
+  }
+}
+
 /** 校验整批快照的最终摆位；先投影所有物件，再查滑块，允许互换位置。 */
 export function checkRoomObjects(map, snapshots) {
   const c = checker('房间排布有问题：');
@@ -125,17 +157,26 @@ export function checkRoomObjects(map, snapshots) {
     c.int(s.x, `${o.name}.x`, 0); c.int(s.y, `${o.name}.y`, 0);
     c.int(s.state, `${o.name}.state`, 0, o.states.length - 1);
     if (s.x + o.w > map.width || s.y + o.h > map.height) c.fail(o.name, '完整尺寸超出地图边界');
+    if (isArchitectureObject(o) && (s.x !== o.x || s.y !== o.y)) c.fail(o.name, '静态建筑不能按家具移动');
     changes.set(s.id, s);
   }
   const objects = map.objects.map((o) => ({ ...o, ...changes.get(o.id) }));
+  for (const snap of list) {
+    const o = objects.find(o => o.id === snap.id);
+    if (!(o.physical?.blocksMove ?? (o.blocksWhen ? o.blocksWhen.includes(o.state) : o.height >= .5))) continue;
+    if (isArchitectureObject(o)) continue;
+    for (const r of architectureGeometry({ ...map, objects }).filter(r => r.blocksMove)) {
+      if (o.x < r.x + r.w && o.x + o.w > r.x && o.y < r.y + r.h && o.y + o.h > r.y) c.fail(o.name, '排布与建筑墙/关闭的门相交');
+    }
+  }
   const members = new Set(map.slidingPuzzles?.flatMap((p) => p.objectIds));
   const overlap = (a, b) => a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
   for (const p of map.slidingPuzzles ?? []) for (const id of p.objectIds) {
     const o = objects.find((o) => o.id === id);
     if (!o || o.x < p.x || o.y < p.y || o.x + o.w > p.x + p.w || o.y + o.h > p.y + p.h ||
       o.x < 0 || o.y < 0 || o.x + o.w > map.width || o.y + o.h > map.height) c.fail(p.name, '滑块超出棋盘边界');
-    if (objects.some((b) => b.id !== o.id && b.kind === 'object' &&
-      (members.has(b.id) || (b.blocksWhen ? b.blocksWhen.includes(b.state) : b.height >= 0.5)) && overlap(o, b))) c.fail(p.name, '滑块与其它滑块或挡路物件相交');
+    if (objects.some((b) => b.id !== o.id && b.kind === 'object' && !isArchitectureObject(b) &&
+      (members.has(b.id) || (b.physical?.blocksMove ?? (b.blocksWhen ? b.blocksWhen.includes(b.state) : b.height >= 0.5))) && overlap(o, b))) c.fail(p.name, '滑块与其它滑块或挡路物件相交');
   }
 }
 
@@ -154,7 +195,12 @@ export function checkWorld(w, migrated = false) {
     int(o.x, `${at}.x`); int(o.y, `${at}.y`); int(o.w, `${at}.w`, 1, MAX_SIDE); int(o.h, `${at}.h`, 1, MAX_SIDE); num(o.height, `${at}.height`, 0, 1000);
     if (o.stateLabel !== null) str(o.stateLabel, `${at}.stateLabel`);
   });
-  const memory = (v, where, n) => { obj(v, where); strings(v.cells, `${where}.cells`, n); seenObjects(v.objects, `${where}.objects`); };
+  const fragments = (v, where) => arr(v, where).forEach(r => { obj(r, where); for (const k of ['x', 'y', 'w', 'h']) num(r[k], `${where}.${k}`, k === 'w' || k === 'h' ? .0000001 : -MAX_COORD, MAX_COORD); oneOf(r.material, ['wall', 'glass', 'door', 'opening'], where); });
+  const memory = (v, where, n) => {
+    obj(v, where); strings(v.cells, `${where}.cells`, n); seenObjects(v.objects, `${where}.objects`);
+    if (v.architecture !== undefined) fragments(v.architecture, `${where}.architecture`);
+    if (v.subCells !== undefined) for (const [key, value] of Object.entries(obj(v.subCells, `${where}.subCells`))) { int(+key, `${where}.subCells key`, 0, n * 9 - 1); str(value, `${where}.subCells value`); }
+  };
 
   obj(w, '工程');
   if (w.version !== 1) fail('version', '不是 1（不是这个编辑器的工程文件）');
@@ -171,6 +217,19 @@ export function checkWorld(w, migrated = false) {
     obj(m, at); id(m.id, `${at}.id`); str(m.name, `${at}.name`); str(m.layer, `${at}.layer`); int(m.floor, `${at}.floor`, -1000, 1000); str(m.notes, `${at}.notes`);
     int(m.width, `${at}.width`, 1, MAX_SIDE); int(m.height, `${at}.height`, 1, MAX_SIDE);
     const n = m.width * m.height;
+    if (m.subdivisions !== undefined) arr(m.subdivisions, `${at}.subdivisions`);
+    checkArchitecture(m);
+    if (m.architectureFragments !== undefined) fragments(m.architectureFragments, `${at}.architectureFragments`);
+    const checkSubFog = (L, at) => {
+      if (L.subFog !== undefined) for (const [key, v] of Object.entries(obj(L.subFog, at))) {
+        const k = +key; int(k, at, 0, n * 9 - 1);
+        if (![0, 1, 2].includes(v)) fail(at, '子格迷雾只能是 0/1/2');
+        const sx = k % (m.width * 3), sy = Math.floor(k / (m.width * 3));
+        if (!m.subdivisions?.includes(Math.floor(sy / 3) * m.width + Math.floor(sx / 3))) fail(at, '子格迷雾不在细分区域');
+      }
+    };
+    checkSubFog(m, `${at}.subFog`);
+    for (const L of Object.values(m.views ?? {})) checkSubFog(L, `${at}.views.subFog`);
     strings(m.cells, `${at}.cells`, n);
     arr(m.d100, `${at}.d100`, n).forEach((v, i) => num(v, `${at}.d100[${i}]`));
     fogs(m.fog, `${at}.fog`, n);
@@ -187,6 +246,7 @@ export function checkWorld(w, migrated = false) {
         if (r.reset !== undefined) {
           const rs = `${ra}.reset`;
           obj(r.reset, rs); num(r.reset.at, `${rs}.at`, 0);
+          if (r.reset.doors !== undefined) { arr(r.reset.doors, `${rs}.doors`).forEach(d => { obj(d, rs); id(d.id, rs); bool(d.open, rs); }); unique(r.reset.doors, `${rs}.doors`); }
           arr(r.reset.objects, `${rs}.objects`).forEach((s, k) => {
             const sa = `${rs}.objects[${k}]`;
             obj(s, sa); id(s.id, `${sa}.id`); int(s.x, `${sa}.x`); int(s.y, `${sa}.y`); int(s.state, `${sa}.state`, 0);
@@ -206,6 +266,16 @@ export function checkWorld(w, migrated = false) {
       if (!o.states.length) fail(`${oa}.states`, '是空的（至少要有一个状态）');
       int(o.state, `${oa}.state`, 0, o.states.length - 1);
       if (o.blocksWhen !== undefined) arr(o.blocksWhen, `${oa}.blocksWhen`).forEach((v, k) => int(v, `${oa}.blocksWhen[${k}]`, 0, o.states.length - 1));
+      if (o.geometry !== undefined) {
+        obj(o.geometry, `${oa}.geometry`); oneOf(o.geometry.kind, ['wall'], `${oa}.geometry.kind`);
+      }
+      if (o.opening !== undefined) {
+        obj(o.opening, `${oa}.opening`);
+        arr(o.opening.openStates, `${oa}.opening.openStates`).forEach(i => int(i, `${oa}.opening.openStates`, 0, o.states.length - 1));
+        if (new Set(o.opening.openStates).size !== o.opening.openStates.length) fail(oa, '打开状态重复');
+      }
+      if (isArchitectureObject(o) && (o.kind !== 'object' || o.geometry && o.opening || o.pushable || o.heavy)) fail(oa, '建筑组件必须是静态物件，不能同时是墙和门洞');
+      if (o.physical !== undefined) { obj(o.physical, `${oa}.physical`); optBool(o.physical.blocksMove, `${oa}.physical.blocksMove`); optBool(o.physical.blocksSight, `${oa}.physical.blocksSight`); }
       optBool(o.pushable, `${oa}.pushable`);
       optBool(o.heavy, `${oa}.heavy`);
       optNum(o.stateRev, `${oa}.stateRev`);
@@ -249,7 +319,7 @@ export function checkWorld(w, migrated = false) {
         }
         const blocks = p.objectIds.map((oid) => {
           const block = m.objects.find((o) => o.id === oid && o.kind === 'object');
-          if (!block) fail(`${pa}.objectIds`, `找不到本图的物件：${oid}`);
+          if (!block || isArchitectureObject(block)) fail(`${pa}.objectIds`, `找不到本图的物件：${oid}`);
           if (members.has(oid)) fail(`${pa}.objectIds`, `滑块重复或属于多个棋盘：${oid}`);
           members.add(oid);
           if (!within(block, p)) fail(pa, `滑块「${block.name}」超出棋盘边界`);
@@ -263,13 +333,13 @@ export function checkWorld(w, migrated = false) {
           if (!gate || gate.states.length < 2 || gate.blocksWhen?.length !== 1 || gate.blocksWhen[0] !== 0) fail(`${pa}.gateId`, '门必须是本图物件，具有状态 0/1 且 blocksWhen=[0]');
           if (gates.has(p.gateId)) fail(`${pa}.gateId`, '不同棋盘不能共用一扇门');
           gates.add(p.gateId);
-          if (overlaps(p, gate)) fail(`${pa}.gateId`, '门必须放在棋盘外');
+          if (overlaps(p, isArchitectureObject(gate) ? architectureObjectBounds(m, gate) : gate)) fail(`${pa}.gateId`, '门必须放在棋盘外');
         }
         blocks.forEach((block, j) => {
           if (blocks.slice(j + 1).some((o) => overlaps(block, o))) fail(pa, '滑块不能相交');
         });
-        if (m.objects.some((o) => o.kind === 'object' && !p.objectIds.includes(o.id) &&
-          (o.blocksWhen ? o.blocksWhen.includes(o.state) : o.height >= 0.5) && overlaps(p, o))) fail(pa, '棋盘范围内不能有其它挡路物件');
+        if (m.objects.some((o) => o.kind === 'object' && !isArchitectureObject(o) && !p.objectIds.includes(o.id) &&
+          (o.physical?.blocksMove ?? (o.blocksWhen ? o.blocksWhen.includes(o.state) : o.height >= 0.5)) && overlaps(p, o))) fail(pa, '棋盘范围内不能有其它挡路物件');
       });
       unique(puzzles, `${at}.slidingPuzzles`);
       if ([...gates].some((gid) => members.has(gid))) fail(`${at}.slidingPuzzles`, '门不能同时是滑块');
@@ -284,6 +354,7 @@ export function checkWorld(w, migrated = false) {
           const la = `${ra}.layouts[${i}]`;
           obj(layout, la); id(layout.id, `${la}.id`); str(layout.name, `${la}.name`);
           if (layout.description !== undefined) str(layout.description, `${la}.description`);
+          if (layout.doors !== undefined) { arr(layout.doors, `${la}.doors`).forEach(d => { obj(d, la); id(d.id, la); bool(d.open, la); }); unique(layout.doors, `${la}.doors`); }
           arr(layout.objects, `${la}.objects`);
           snapshots.push(layout.objects);
         });
@@ -294,7 +365,9 @@ export function checkWorld(w, migrated = false) {
         if (!r.layouts?.some((l) => l.id === r.activeLayoutId)) fail(`${ra}.activeLayoutId`, '找不到本房间的排布');
       }
       for (const objects of snapshots) {
-        try { checkRoomObjects(m, objects); } catch (e) { fail(ra, e.message); }
+        const doorStates = r.reset?.objects === objects ? r.reset.doors : r.layouts?.find(l => l.objects === objects)?.doors;
+        const projected = doorStates && m.architecture ? { ...m, architecture: { ...m.architecture, doors: m.architecture.doors.map(d => ({ ...d, open: doorStates.find(s => s.id === d.id)?.open ?? d.open })) } } : m;
+        try { checkRoomObjects(projected, objects); } catch (e) { fail(ra, e.message); }
         for (const s of objects) {
           if (owners.has(s.id) && owners.get(s.id) !== r.id) fail(ra, `物件被其它房间的排布或复位点共用：${s.id}`);
           owners.set(s.id, r.id);
@@ -304,6 +377,10 @@ export function checkWorld(w, migrated = false) {
     arr(m.tokens, `${at}.tokens`).forEach((t, i) => {
       const ta = `${at}.tokens[${i}]`;
       obj(t, ta); id(t.id, `${ta}.id`); str(t.name, `${ta}.name`); str(t.color, `${ta}.color`); int(t.x, `${ta}.x`); int(t.y, `${ta}.y`);
+      if (t.subcell !== undefined) {
+        obj(t.subcell, `${ta}.subcell`); int(t.subcell.x, `${ta}.subcell.x`, 0, m.width * 3 - 1); int(t.subcell.y, `${ta}.subcell.y`, 0, m.height * 3 - 1);
+        if (Math.floor(t.subcell.x / 3) !== t.x || Math.floor(t.subcell.y / 3) !== t.y || !m.subdivisions?.includes(t.y * m.width + t.x)) fail(ta, '子格位置与主格锚点/细分范围不一致');
+      }
       if (t.pcId !== null) str(t.pcId, `${ta}.pcId`);
       if (t.status !== undefined) { obj(t.status, `${ta}.status`); str(t.status.label, `${ta}.status.label`); optNum(t.status.endsAt, `${ta}.status.endsAt`); optNum(t.status.roundsLeft, `${ta}.status.roundsLeft`); }
     });

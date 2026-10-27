@@ -1,3 +1,5 @@
+import { architectureWalls, architectureDoors, isArchitectureObject, characterPathClear, furnitureSweepBlocked, isSubdivided, tokenPosition } from '../architecture';
+import { addArchitectureDoor, addArchitectureWall, eraseArchitecture, moveMapToken, subdivideRegion, toggleArchitectureDoor } from '../actions';
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { GameMap, World } from '../types';
 import { CS, cellLine, uid } from '../util';
@@ -8,6 +10,7 @@ import { newObject } from '../defaults';
 import { brushCells, render, type Mode, type Rect } from '../render';
 
 type Drag =
+  | { k: 'wall'; ax: number; ay: number; bx: number; by: number }
   | { k: 'pan'; sx: number; sy: number; px: number; py: number }
   | { k: 'paint'; lx: number; ly: number; value: number }
   | { k: 'rect'; x0: number; y0: number; x1: number; y1: number }
@@ -65,10 +68,10 @@ export function MapCanvas({ world, map, mode, playerNumbers = false, follow, vie
   // 每走一步就回正会让人看不清刚走过的路线，也没法自己看周边。
   const followToken = follow ? map.tokens.find((t) => t.id === follow) : undefined;
   const centeredFor = useRef<string | null>(null);
-  const centerOnToken = (t: { x: number; y: number }) => {
+  const centerOnToken = (t: { x: number; y: number; subcell?: { x: number; y: number } }) => {
     if (!size.w) return;
     const z = viewRef.current.zoom;
-    setView({ zoom: z, panX: size.w / 2 - (t.x + 0.5) * CS * z, panY: size.h / 2 - (t.y + 0.5) * CS * z });
+    setView({ zoom: z, panX: size.w / 2 - tokenPosition(t).x * CS * z, panY: size.h / 2 - tokenPosition(t).y * CS * z });
   };
   useEffect(() => {
     if (!follow) { centeredFor.current = null; return; }
@@ -99,6 +102,7 @@ export function MapCanvas({ world, map, mode, playerNumbers = false, follow, vie
       mode, selection: mode === 'player' ? null : ui.selection, preview, hover, brush: ui.brush,
       tool: ui.tool, pending: ui.pendingConn, showFog: ui.showFogInEdit, viewer,
       numbers: mode === 'player' ? playerNumbers : ui.showNumbers, rulers: mode === 'player' ? true : ui.showRulers,
+      subgrid: ui.showSubgrid,
     });
   });
 
@@ -130,7 +134,7 @@ export function MapCanvas({ world, map, mode, playerNumbers = false, follow, vie
     const r = canvas.current!.getBoundingClientRect();
     const sx = e.clientX - r.left, sy = e.clientY - r.top;
     const v = viewRef.current;
-    return { sx, sy, cx: Math.floor((sx - v.panX) / v.zoom / CS), cy: Math.floor((sy - v.panY) / v.zoom / CS) };
+    return { sx, sy, gx: (sx - v.panX) / v.zoom / CS, gy: (sy - v.panY) / v.zoom / CS, cx: Math.floor((sx - v.panX) / v.zoom / CS), cy: Math.floor((sy - v.panY) / v.zoom / CS) };
   };
 
   const paintCells = (cells: [number, number][], value: number) => {
@@ -150,6 +154,11 @@ export function MapCanvas({ world, map, mode, playerNumbers = false, follow, vie
             if (tool === 'fogReveal') L.fog[i] = 1;
             else if (tool === 'fogHide') { if (L.fog[i] === 1) L.fog[i] = 2; }
             else { L.fog[i] = 0; L.seen.cells[i] = ''; }
+            if (isSubdivided(m, x, y)) for (let sy = 0; sy < 3; sy++) for (let sx = 0; sx < 3; sx++) {
+              const key = (y * 3 + sy) * m.width * 3 + x * 3 + sx; L.subFog ??= {};
+              L.subFog[key] = tool === 'fogReveal' ? 1 : tool === 'fogHide' && L.subFog[key] ? 2 : 0;
+              if (tool === 'fogBlack') { if (L.seen.subCells) delete L.seen.subCells[key]; }
+            }
           }
         }
       }
@@ -183,6 +192,20 @@ export function MapCanvas({ world, map, mode, playerNumbers = false, follow, vie
     const inMap = cx >= 0 && cy >= 0 && cx < m.width && cy < m.height;
     const tool = s.tool;
 
+    if (tool === 'wall' || tool === 'glass') {
+      const { gx, gy } = toCell(e), ax = Math.round(gx * 3), ay = Math.round(gy * 3);
+      drag.current = { k: 'wall', ax, ay, bx: ax, by: ay }; return;
+    }
+    if (tool === 'archDoor' || tool === 'archErase') {
+      const { gx, gy } = toCell(e);
+      const wall = architectureWalls(m).find(w => Math.min(w.a.x, w.b.x) / 3 - .12 <= gx && gx <= Math.max(w.a.x, w.b.x) / 3 + .12 && Math.min(w.a.y, w.b.y) / 3 - .12 <= gy && gy <= Math.max(w.a.y, w.b.y) / 3 + .12);
+      if (!wall) return;
+      const along = Math.round(wall.a.x === wall.b.x ? (gy * 3 - wall.a.y) * Math.sign(wall.b.y - wall.a.y) : (gx * 3 - wall.a.x) * Math.sign(wall.b.x - wall.a.x));
+      const door = architectureDoors(m).find(d => d.wallId === wall.id && along >= d.offset && along <= d.offset + d.width);
+      if (tool === 'archErase') eraseArchitecture(m.id, door?.id ?? wall.id, !!door);
+      else { const error = door ? toggleArchitectureDoor(m.id, door.id) : addArchitectureDoor(m.id, wall.id, Math.max(0, along - Math.floor(s.doorWidth / 2)), s.doorWidth); if (error) toast(error); }
+      return;
+    }
     if (tool === 'select') {
       const items = inMap ? itemsAt(w, m, cx, cy) : [];
       if (e.detail >= 2) {
@@ -210,7 +233,7 @@ export function MapCanvas({ world, map, mode, playerNumbers = false, follow, vie
         const tok = m.tokens.find((t) => t.id === ts.id)!;
         beginBatch();
         drag.current = { k: 'tok', id: tok.id, fx: tok.x, fy: tok.y, moved: false, next };
-      } else if (ts.type === 'object' && (canEditMap(s) || slidingPuzzleForObject(m, ts.id))) {
+      } else if (ts.type === 'object' && (!isArchitectureObject(m.objects.find(o => o.id === ts.id)!) && (canEditMap(s) || slidingPuzzleForObject(m, ts.id)))) {
         const obj = m.objects.find((o) => o.id === ts.id)!;
         beginBatch();
         drag.current = { k: 'obj', id: obj.id, ox: cx - obj.x, oy: cy - obj.y, moved: false, next };
@@ -226,7 +249,7 @@ export function MapCanvas({ world, map, mode, playerNumbers = false, follow, vie
       paintCells(brushCells(cx, cy, s.brush), value);
       return;
     }
-    if (tool === 'fill' || tool === 'object' || tool === 'zone') {
+    if (tool === 'fill' || tool === 'object' || tool === 'zone' || tool === 'subdivide' || tool === 'unsubdivide') {
       drag.current = { k: 'rect', x0: cx, y0: cy, x1: cx, y1: cy };
       setPreview({ x: cx, y: cy, w: 1, h: 1 });
       return;
@@ -248,13 +271,16 @@ export function MapCanvas({ world, map, mode, playerNumbers = false, follow, vie
       const existing = pc && m.tokens.find((t) => t.pcId === pc.id);
       if (existing) {
         const fx = existing.x, fy = existing.y;
-        update((d) => { const t = findMap(d, m.id)!.tokens.find((x) => x.id === existing.id)!; t.x = cx; t.y = cy; });
-        checkEnterTriggers(m.id, existing.id, fx, fy);
+        const { gx, gy } = toCell(e), p = isSubdivided(m, gx, gy) ? { x: (Math.floor(gx * 3) + .5) / 3, y: (Math.floor(gy * 3) + .5) / 3 } : { x: cx + .5, y: cy + .5 };
+        const error = moveMapToken(m.id, existing.id, p); if (error) return toast(error);
+        checkEnterTriggers(m.id, existing.id, fx + .5, fy + .5);
         setUI({ selection: { type: 'token', mapId: m.id, id: existing.id } });
       } else {
+        const { gx, gy } = toCell(e), p = isSubdivided(m, gx, gy) ? { x: (Math.floor(gx * 3) + .5) / 3, y: (Math.floor(gy * 3) + .5) / 3 } : { x: cx + .5, y: cy + .5 };
+        if (!characterPathClear(w, m, p, p)) return toast('此处放不下人物');
         const id = uid();
         update((d) => {
-          findMap(d, m.id)!.tokens.push({ id, pcId: pc?.id ?? null, name: pc?.name ?? '敌人', color: pc?.color ?? '#c0392b', x: cx, y: cy });
+          findMap(d, m.id)!.tokens.push({ id, pcId: pc?.id ?? null, name: pc?.name ?? '敌人', color: pc?.color ?? '#c0392b', x: cx, y: cy, ...(isSubdivided(m, p.x, p.y) ? { subcell: { x: Math.floor(p.x * 3), y: Math.floor(p.y * 3) } } : {}) });
         });
         setUI({ selection: { type: 'token', mapId: m.id, id }, tab: 'inspect' });
       }
@@ -272,7 +298,12 @@ export function MapCanvas({ world, map, mode, playerNumbers = false, follow, vie
     if (!m) return gone();
     const clampX = (x: number, w = 1) => Math.max(0, Math.min(m.width - w, x));
     const clampY = (y: number, h = 1) => Math.max(0, Math.min(m.height - h, y));
-    if (dr.k === 'paint') {
+    if (dr.k === 'wall') {
+      const { gx, gy } = toCell(e); let bx = Math.round(gx * 3), by = Math.round(gy * 3);
+      if (Math.abs(bx - dr.ax) >= Math.abs(by - dr.ay)) by = dr.ay; else bx = dr.ax;
+      dr.bx = bx; dr.by = by;
+      setPreview({ x: Math.min(dr.ax, bx) / 3, y: Math.min(dr.ay, by) / 3, w: Math.max(.05, Math.abs(bx - dr.ax) / 3), h: Math.max(.05, Math.abs(by - dr.ay) / 3) });
+    } else if (dr.k === 'paint') {
       if (cx === dr.lx && cy === dr.ly) return;
       const n = getUI().brush;
       paintCells(cellLine(dr.lx, dr.ly, cx, cy).flatMap(([x, y]) => brushCells(x, y, n)), dr.value);
@@ -293,14 +324,14 @@ export function MapCanvas({ world, map, mode, playerNumbers = false, follow, vie
       } else {
         const nx = clampX(cx - dr.ox, o.w), ny = clampY(cy - dr.oy, o.h);
         if (nx !== o.x || ny !== o.y) dr.moved = true;
-        if (nx !== o.x || ny !== o.y) update((d) => { const od = findMap(d, map.id)!.objects.find((x) => x.id === dr.id)!; od.x = nx; od.y = ny; });
+        if ((nx !== o.x || ny !== o.y) && (o.kind === 'zone' || !furnitureSweepBlocked(m, o, nx, ny))) update((d) => { const od = findMap(d, map.id)!.objects.find((x) => x.id === dr.id)!; od.x = nx; od.y = ny; });
       }
     } else if (dr.k === 'tok') {
       const t = m.tokens.find((x) => x.id === dr.id);
       if (!t) return gone();
-      const nx = clampX(cx), ny = clampY(cy);
-      if (nx !== t.x || ny !== t.y) dr.moved = true;
-      if (nx !== t.x || ny !== t.y) update((d) => { const td = findMap(d, map.id)!.tokens.find((x) => x.id === dr.id)!; td.x = nx; td.y = ny; });
+      const { gx, gy } = toCell(e), fine = isSubdivided(m, gx, gy);
+      const p = fine ? { x: (Math.floor(gx * 3) + .5) / 3, y: (Math.floor(gy * 3) + .5) / 3 } : { x: clampX(cx) + .5, y: clampY(cy) + .5 };
+      if (characterPathClear(getWorld(), m, tokenPosition(t), p, t.id)) { moveMapToken(map.id, t.id, p); dr.moved = true; }
     }
   };
 
@@ -326,6 +357,7 @@ export function MapCanvas({ world, map, mode, playerNumbers = false, follow, vie
         setPreview(null);
       }
     }
+    if (dr.k === 'wall') { const error = addArchitectureWall(map.id, { x: dr.ax, y: dr.ay }, { x: dr.bx, y: dr.by }, getUI().tool === 'glass' ? 'glass' : 'wall', getUI().wallThickness); if (error) toast(error); setPreview(null); }
     if (dr.k === 'paint' || dr.k === 'obj') endBatch();
     if (dr.k === 'tok') {
       endBatch();
@@ -337,7 +369,7 @@ export function MapCanvas({ world, map, mode, playerNumbers = false, follow, vie
     if (dr.k === 'rect' && preview) {
       const r = preview;
       const { tool, terrainId } = getUI();
-      if (tool === 'fill') {
+      if (tool === 'subdivide' || tool === 'unsubdivide') { const error = subdivideRegion(map.id, r, tool === 'unsubdivide'); if (error) toast(error); } else if (tool === 'fill') {
         update((d) => {
           const m = findMap(d, map.id)!;
           for (let y = r.y; y < r.y + r.h; y++) for (let x = r.x; x < r.x + r.w; x++) m.cells[y * m.width + x] = terrainId;

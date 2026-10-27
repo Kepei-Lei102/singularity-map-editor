@@ -1,3 +1,4 @@
+import { clipArchitecture, isArchitectureObject, migrateArchitecture } from './architecture';
 import { repairWorld } from './schema.js';
 import type { Draft } from 'immer';
 import type { GameMap, MapObject, SeenObject, VisionLayer, World } from './types';
@@ -8,10 +9,12 @@ import { linesToFlow } from './flow';
 
 type Rect = { x: number; y: number; w: number; h: number };
 
-export function anyVisible(m: { width: number; height: number; fog: number[] }, r: Rect) {
+export function anyVisible(m: { width: number; height: number; fog: number[]; subdivisions?: number[]; subFog?: Record<number, number> }, r: Rect) {
   for (let y = Math.max(0, r.y); y < Math.min(m.height, r.y + r.h); y++)
-    for (let x = Math.max(0, r.x); x < Math.min(m.width, r.x + r.w); x++)
-      if (m.fog[y * m.width + x] === 1) return true;
+    for (let x = Math.max(0, r.x); x < Math.min(m.width, r.x + r.w); x++) {
+      if (!(m.subdivisions ?? []).includes(y * m.width + x)) { if (m.fog[y * m.width + x] === 1) return true; }
+      else for (let sy = 0; sy < 3; sy++) for (let sx = 0; sx < 3; sx++) if (m.subFog?.[(y * 3 + sy) * m.width * 3 + x * 3 + sx] === 1) return true;
+    }
   return false;
 }
 
@@ -33,8 +36,15 @@ export function sameSeen(a: SeenObject, b: SeenObject) {
 function syncLayer(m: Draft<GameMap>, L: Draft<VisionLayer>) {
   const n = m.width * m.height;
   for (let i = 0; i < n; i++) if (L.fog[i] === 1 && L.seen.cells[i] !== m.cells[i]) L.seen.cells[i] = m.cells[i];
-  const box = { width: m.width, height: m.height, fog: L.fog };
-  const live = m.objects.filter((o) => o.kind === 'object' && !o.hidden && anyVisible(box, o));
+  L.seen.subCells ??= {};
+  for (const [key, f] of Object.entries(L.subFog ?? {})) if (f === 1) {
+    const sx = +key % (m.width * 3), sy = Math.floor(+key / (m.width * 3));
+    L.seen.subCells[+key] = m.cells[Math.floor(sy / 3) * m.width + Math.floor(sx / 3)];
+  }
+  const historical = clipArchitecture(m, L, 2, L.seen.architecture ?? []);
+  L.seen.architecture = [...historical, ...clipArchitecture(m, L)];
+  const box = { ...m, fog: L.fog, subFog: L.subFog };
+  const live = m.objects.filter((o) => o.kind === 'object' && !isArchitectureObject(o) && !o.hidden && anyVisible(box, o));
   const liveIds = new Set(live.map((o) => o.id));
   // 记忆里的东西，原地方现在看得见了、但它已经不在那（被搬走/删掉/藏起来）→ 忘掉
   const kept = L.seen.objects.filter((r) => liveIds.has(r.id) || !anyVisible(box, r));
@@ -50,6 +60,7 @@ function syncLayer(m: Draft<GameMap>, L: Draft<VisionLayer>) {
 /** 每次修改世界后执行：全队那份和每个人自己那份，都把"看得见"的部分同步进记忆。 */
 export function syncMemory(d: Draft<World>) {
   for (const m of d.maps) {
+    migrateArchitecture(m);
     if (!m.seen) m.seen = { cells: new Array(m.width * m.height).fill(''), objects: [] };
     syncLayer(m, m);
     for (const L of Object.values(m.views ?? {})) syncLayer(m, L);
@@ -59,12 +70,15 @@ export function syncMemory(d: Draft<World>) {
 /** 旧存档（只有 0/1 迷雾）补上记忆字段。 */
 export function migrateWorld(w: World): World {
   for (const m of w.maps) {
+    migrateArchitecture(m);
     if (!m.seen) m.seen = { cells: m.cells.map((c, i) => (m.fog[i] === 1 ? c : '')), objects: [] };
     m.autoFog ??= true;
     m.rooms ??= [];
     m.roomCells ??= new Array(m.width * m.height).fill('');
     m.views ??= {};
     m.spawn ??= null;
+    // 新建筑旧记忆缺子格时不继承整格揭示；自动视野从真实眼睛重新计算。
+    if (m.subdivisions?.length && !m.autoFog && !m.subFog) m.subFog = {};
     for (const o of m.objects) for (const s of o.secrets) { s.kind ??= 'roll'; s.range ??= 1; }
   }
   w.visionMode ??= 'shared';

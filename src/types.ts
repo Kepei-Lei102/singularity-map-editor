@@ -61,6 +61,10 @@ export interface MapObject {
   state: number;
   /** 只有这些状态挡路、挡视线（空列表＝永远不挡）。不写就按 height 算，兼容旧物件。 */
   blocksWhen?: number[];
+  /** Optional fine geometry. x/y/w/h are metadata bounds, never furniture collision. */
+  geometry?: { kind: 'wall'; a: Point; b: Point; thickness: number; material: 'wall' | 'glass' };
+  opening?: { wallId: Id; offset: number; width: number; openStates: number[] };
+  physical?: { blocksMove?: boolean; blocksSight?: boolean };
   /** 可推动：试玩时走过去会把整件东西向同方向推一格（推书架、推车）。 */
   pushable?: boolean;
   /** 沉重：要另一个棋子也贴着这件东西，才能推。做成需要两人合力。 */
@@ -73,7 +77,7 @@ export interface MapObject {
 }
 
 export interface RoomObjectSnapshot { id: Id; x: number; y: number; state: number }
-export interface RoomLayout { id: Id; name: string; description?: string; objects: RoomObjectSnapshot[] }
+export interface RoomLayout { id: Id; name: string; description?: string; objects: RoomObjectSnapshot[]; doors?: { id: Id; open: boolean }[] }
 
 /** 房间：按格子刷出来的命名区域。tags 预留给十二宫、八门等对应关系。 */
 export interface Room {
@@ -83,7 +87,7 @@ export interface Room {
   note: string;
   tags: string[];
   /** 分区复位：这个房间里物件的位置和状态。带团中途点「复位」就回到这里。 */
-  reset?: { at: number; objects: RoomObjectSnapshot[] };
+  reset?: { at: number; objects: RoomObjectSnapshot[]; doors?: { id: Id; open: boolean }[] };
   layouts?: RoomLayout[];
   activeLayoutId?: Id;
 }
@@ -95,6 +99,14 @@ export interface TokenStatus {
   roundsLeft?: number; // 战斗中：还剩几回合
 }
 
+export interface Point { x: number; y: number }
+/** 全图子格网格顶点，1 单位 = 250mm；墙厚以中心线向两侧等分。 */
+export interface Wall { id: Id; a: Point; b: Point; thickness: number; material: 'wall' | 'glass' }
+export interface ArchitectureDoor { id: Id; wallId: Id; offset: number; width: number; open: boolean }
+export interface Architecture { walls: Wall[]; doors: ArchitectureDoor[] }
+/** 已裁切的可见几何，坐标单位为主格；不带原墙端点/隐藏门状态。 */
+export interface ArchitectureFragment { x: number; y: number; w: number; h: number; material: 'wall' | 'glass' | 'door' | 'opening' }
+
 export interface Token {
   id: Id;
   pcId: Id | null;
@@ -102,6 +114,7 @@ export interface Token {
   color: string;
   x: number;
   y: number;
+  subcell?: Point; // 绝对子格单元索引，其中心是人物位置；x/y 仍为所属主格
   status?: TokenStatus;
 }
 
@@ -136,6 +149,10 @@ export interface GameMap {
   views: Record<Id, VisionLayer>; // 视野各自独立时，每个玩家角色（pcId）自己的一份迷雾和记忆
   spawn: { x: number; y: number } | null; // 试玩出生点（null = 自动：最北、最居中的门外）
   objects: MapObject[];
+  subdivisions?: number[];
+  architecture?: Architecture;
+  architectureFragments?: ArchitectureFragment[]; // 仅玩家同步的实时可见片段
+  subFog?: Record<number, number>; // key = sy*(width*3)+sx，仅明确细分处
   slidingPuzzles?: SlidingPuzzle[];
   tokens: Token[];
   notes: string;
@@ -158,11 +175,14 @@ export interface SeenObject {
 
 /** 一份迷雾 + 记忆。全队共享时就是地图上的 fog / seen；各自独立时每个人一份。 */
 export interface VisionLayer {
+  subFog?: Record<number, number>;
   fog: number[];
   seen: Memory;
 }
 
 export interface Memory {
+  architecture?: ArchitectureFragment[];
+  subCells?: Record<number, string>;
   cells: string[]; // 记得的地形，'' = 不记得
   objects: SeenObject[];
 }

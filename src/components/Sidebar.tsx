@@ -9,6 +9,12 @@ import { captureRoomReset, resetRoom, saveRoomLayout, deleteRoomLayout } from '.
 
 const ALL_TOOLS: [Tool, string, string][] = [
   ['select', '选择/移动', 'V'],
+  ['subdivide', '细分为3×3', ''],
+  ['unsubdivide', '取消细分', ''],
+  ['wall', '薄墙', ''],
+  ['glass', '玻璃墙', ''],
+  ['archDoor', '建筑门', ''],
+  ['archErase', '擦除建筑', ''],
   ['paint', '画笔', 'B'],
   ['fill', '矩形填充', 'R'],
   ['erase', '橡皮', 'E'],
@@ -24,7 +30,7 @@ const ALL_TOOLS: [Tool, string, string][] = [
 ];
 // 编辑地图 = 形状；备团 = 内容（棋子初始位置、初始迷雾）；带团 = 跑
 export const MODE_TOOLS: Record<Mode, Tool[]> = {
-  edit: ['select', 'paint', 'fill', 'erase', 'object', 'zone', 'conn', 'room', 'd100'],
+  edit: ['subdivide', 'unsubdivide', 'wall', 'glass', 'archDoor', 'archErase', 'select', 'paint', 'fill', 'erase', 'object', 'zone', 'conn', 'room', 'd100'],
   prep: ['select', 'token', 'fogReveal', 'fogHide', 'fogBlack'],
   run: ['select', 'token', 'fogReveal', 'fogHide', 'fogBlack'],
 };
@@ -68,7 +74,7 @@ export function Sidebar() {
       <Section title="工具">
         <div className="tools">
           {tools.map(([t, label, key]) => (
-            <button key={t} className={ui.tool === t ? 'tool on' : 'tool'} title={`快捷键 ${key}`}
+            <button key={t} className={ui.tool === t ? 'tool on' : 'tool'} aria-label={label} title={key ? `${label} · 快捷键 ${key}` : label}
               onClick={() => setUI({ tool: t, pendingConn: null })}>{label}</button>
           ))}
         </div>
@@ -81,6 +87,12 @@ export function Sidebar() {
             </span>
           </Row>
         )}
+        {['subdivide', 'unsubdivide'].includes(ui.tool) && <div className="hint">拖出主格矩形，松手整次应用；只有手动细分区启用0.25米吸附。取消不会删除墙、门或棋子。</div>}
+        {['wall', 'glass'].includes(ui.tool) && <>
+          <Row label="墙厚 mm"><Num value={ui.wallThickness} min={1} max={750} onChange={v => setUI({ wallThickness: Math.max(1, Math.min(750, v)) })} /></Row>
+          <div className="hint">在细分区拖出水平或竖直中心线。墙厚向两侧平分；实体墙挡视线，玻璃透视，两者挡路。</div>
+        </>}
+        {ui.tool === 'archDoor' && <><Row label="门净宽 m"><select value={ui.doorWidth} onChange={e => setUI({ doorWidth: +e.target.value })}>{[2, 3, 4, 5, 6].map(n => <option key={n} value={n}>{n * .25}</option>)}</select></Row><div className="hint">点墙放置关闭的门洞；点已有门开关。也可在检查器操作。</div></>}
         {ui.tool === 'conn' && (
           <Row label="类型">
             <select value={ui.connKind} onChange={(e) => setUI({ connKind: e.target.value as ConnKind })}>
@@ -98,6 +110,7 @@ export function Sidebar() {
         )}
         {ui.tool === 'd100' && <div className="hint">D100 区域：恐怖副本等，用百分值检定。再刷一次可以擦掉。</div>}
         {ui.mode === 'edit' && <Check label="显示迷雾" value={ui.showFogInEdit} onChange={(v) => setUI({ showFogInEdit: v })} />}
+        <Check label="显示0.25米子格线" value={ui.showSubgrid} onChange={(v) => setUI({ showSubgrid: v })} />
         <Check label="显示坐标" value={ui.showRulers} onChange={(v) => setUI({ showRulers: v })} />
         <Check label="显示编号（和给 AI 的图一致）" value={ui.showNumbers} onChange={(v) => setUI({ showNumbers: v })} />
         {ui.tool.startsWith('fog') && cur && (
@@ -108,9 +121,9 @@ export function Sidebar() {
             </div>
             <Check label="自动视野（按玩家角色的视线）" value={cur.autoFog} onChange={(v) => update((d) => { d.maps.find((m) => m.id === cur.id)!.autoFog = v; })} />
             <div className="btns">
-              <button className="small" onClick={() => update((d) => { const m = d.maps.find((x) => x.id === cur.id)!; for (const L of [m, ...Object.values(m.views)]) L.fog = L.fog.map((f) => (f === 1 ? 2 : f)); })}>可见的全部变灰</button>
-              <button className="small" onClick={() => update((d) => { const m = d.maps.find((x) => x.id === cur.id)!; for (const L of [m, ...Object.values(m.views)]) L.fog.fill(1); })}>全部看得见</button>
-              <button className="small" onClick={() => update((d) => { const m = d.maps.find((x) => x.id === cur.id)!; for (const L of [m, ...Object.values(m.views)]) { L.fog.fill(0); L.seen = { cells: m.cells.map(() => ''), objects: [] }; } })}>全部抹黑</button>
+              <button className="small" onClick={() => update((d) => { const m = d.maps.find((x) => x.id === cur.id)!; for (const L of [m, ...Object.values(m.views)]) { L.fog = L.fog.map((f) => (f === 1 ? 2 : f)); if (L.subFog) for (const k of Object.keys(L.subFog)) if (L.subFog[+k] === 1) L.subFog[+k] = 2; } })}>可见的全部变灰</button>
+              <button className="small" onClick={() => update((d) => { const m = d.maps.find((x) => x.id === cur.id)!; for (const L of [m, ...Object.values(m.views)]) { L.fog.fill(1); L.subFog ??= {}; for (const i of m.subdivisions ?? []) for (let sy = 0; sy < 3; sy++) for (let sx = 0; sx < 3; sx++) L.subFog[(Math.floor(i / m.width) * 3 + sy) * m.width * 3 + i % m.width * 3 + sx] = 1; } })}>全部看得见</button>
+              <button className="small" onClick={() => update((d) => { const m = d.maps.find((x) => x.id === cur.id)!; for (const L of [m, ...Object.values(m.views)]) { L.fog.fill(0); L.subFog = {}; L.seen = { cells: m.cells.map(() => ''), objects: [] }; } })}>全部抹黑</button>
             </div>
           </>
         )}

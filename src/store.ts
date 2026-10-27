@@ -1,3 +1,4 @@
+import { architectureTransitionError } from './architecture';
 import { produce, type Draft } from 'immer';
 import { useSyncExternalStore } from 'react';
 import type { World } from './types';
@@ -91,6 +92,13 @@ function pushHistory(at: World = world) {
 export function update(fn: (d: Draft<World>) => void, opts: { coalesce?: string; history?: boolean } = {}) {
   let next = produce(world, fn);
   if (next === world) return;
+  // Component edits (material/physical/openStates/state lists) obey the same close policy.
+  for (const m of next.maps) {
+    const before = world.maps.find(p => p.id === m.id);
+    if (!before || before.objects === m.objects) continue;
+    const error = architectureTransitionError(before, m);
+    if (error) { toast(error); return; }
+  }
   next = produce(withVision(next, world), syncMemory);
   next = bumpStateRevs(world, next);
   if (batching && batchStart) { pushHistory(batchStart); batchStart = null; } // 拖动里第一次真的改了东西，才记一步撤销
@@ -142,7 +150,7 @@ export function replaceWorld(w: World) {
   batching = false;
   batchStart = null;
   lastCoalesce = null; // 换了世界，上一个世界的"连续打字合并"不能延续
-  world = w;
+  world = produce(withVision(migrateWorld(w), { ...w, maps: [] }), syncMemory);
   emit();
 }
 
@@ -156,6 +164,7 @@ export const useWorld = () => useSyncExternalStore(subscribe, getWorld);
 
 export type Tool =
   | 'select' | 'paint' | 'fill' | 'erase' | 'object' | 'zone' | 'conn' | 'token'
+  | 'subdivide' | 'unsubdivide' | 'wall' | 'glass' | 'archDoor' | 'archErase'
   | 'd100' | 'room' | 'fogReveal' | 'fogHide' | 'fogBlack';
 
 export type Selection =
@@ -177,6 +186,8 @@ export interface UIState {
   terrainId: string;
   roomId: string; // 房间笔刷：'' = 擦掉房间
   brush: number;
+  wallThickness: number;
+  doorWidth: number;
   selection: Selection;
   views: Record<string, View>;
   pendingConn: { mapId: string; x: number; y: number } | null;
@@ -202,6 +213,7 @@ export interface UIState {
   showFogInEdit: boolean;
   showNumbers: boolean;
   showRulers: boolean;
+  showSubgrid: boolean;
   toast: string | null;
   privateNote: { to: string; title: string; text: string } | null;
   nowPlaying: { mediaId: string; label: string; broadcast: boolean } | null;
@@ -214,6 +226,8 @@ let ui: UIState = {
   terrainId: 'floor',
   roomId: '',
   brush: 1,
+  wallThickness: 100,
+  doorWidth: 3,
   selection: null,
   views: {},
   pendingConn: null,
@@ -228,6 +242,7 @@ let ui: UIState = {
   showFogInEdit: false,
   showNumbers: false,
   showRulers: true,
+  showSubgrid: (() => { try { return localStorage.getItem('ts-map-show-subgrid') === 'true'; } catch { return false; } })(),
   toast: null,
   privateNote: null,
   nowPlaying: null,
@@ -236,6 +251,7 @@ const uiListeners = new Set<() => void>();
 export const getUI = () => ui;
 export function setUI(patch: Partial<UIState> | ((s: UIState) => Partial<UIState>)) {
   ui = { ...ui, ...(typeof patch === 'function' ? patch(ui) : patch) };
+  try { localStorage.setItem('ts-map-show-subgrid', String(ui.showSubgrid)); } catch { /* 显示偏好存不了时仍可使用 */ }
   uiListeners.forEach((l) => l());
 }
 const uiSubscribe = (l: () => void) => {

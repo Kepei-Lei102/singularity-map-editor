@@ -1,3 +1,5 @@
+import { isArchitectureObject, openingIsOpen, architectureObjectBounds, furnitureSweepBlocked, tokenPosition } from '../architecture';
+import { subdivideRegion, toggleArchitectureDoor } from '../actions';
 import type { Draft } from 'immer';
 import { useState } from 'react';
 import { canEditMap, setUI, toast, update, useUI, useWorld, type UIState } from '../store';
@@ -34,6 +36,16 @@ export function Inspector() {
   return (
     <>
       <RoomReset map={map} />
+      <Section title="建筑层">
+        {!ui.trial && canEditMap(ui) && sel?.type === 'cell' && <div className="btns"><button onClick={() => { const e = subdivideRegion(map.id, { x: sel.x, y: sel.y, w: 1, h: 1 }); if (e) toast(e); }}>此格细分为3×3</button><button onClick={() => { const e = subdivideRegion(map.id, { x: sel.x, y: sel.y, w: 1, h: 1 }, true); if (e) toast(e); }}>取消细分</button></div>}
+        {map.objects.filter(o => isArchitectureObject(o) && (!ui.trial || !o.hidden && (() => {
+          const t = map.tokens.find(t => t.id === ui.trial!.players[ui.trial!.current]?.tokenId), b = architectureObjectBounds(map, o);
+          return t && Math.hypot(tokenPosition(t).x - b.x - b.w / 2, tokenPosition(t).y - b.y - b.h / 2) <= 1.5;
+        })())).map(o => <div key={o.id} className="card">
+          <button onClick={() => setUI({ selection: { type: 'object', mapId: map.id, id: o.id }, tab: 'inspect' })}>{o.name}</button>
+          {o.opening && <> · 净宽 {o.opening.width * .25}m <button onClick={() => { const e = toggleArchitectureDoor(map.id, o.id); if (e) toast(e); }}>{openingIsOpen(o) ? '关门' : '开门'}</button></>}
+        </div>)}
+      </Section>
       <SlidingPuzzles world={w} map={map} ui={ui} />
       <StackList world={w} map={map} ui={ui} />
       {body ?? (
@@ -266,6 +278,7 @@ function ObjectInspector({ world, mapId, o, ui }: { world: World; mapId: string;
   const up = (fn: (x: Draft<MapObject>) => void, key?: string) =>
     update((d) => { const x = findObj(d, mapId, o.id); if (x) fn(x); }, { coalesce: key && key + o.id });
   const [privTo, setPrivTo] = useState('');
+  const architecture = isArchitectureObject(o);
   const isZone = o.kind === 'zone';
   const map = findMap(world, mapId)!;
   const puzzle = slidingPuzzleForObject(map, o.id);
@@ -284,9 +297,9 @@ function ObjectInspector({ world, mapId, o, ui }: { world: World; mapId: string;
             <Row label="名字"><Txt value={o.name} onChange={(v) => up((x) => { x.name = v; }, 'name')} /></Row>
             {!isZone && <Row label="图标"><Txt value={o.icon} placeholder="可填 emoji" onChange={(v) => up((x) => { x.icon = v; }, 'icon')} /></Row>}
             <Row label="颜色"><input type="color" value={o.color} onChange={(e) => up((x) => { x.color = e.target.value; }, 'color')} /></Row>
-            <Row label="位置"><CellInput x={o.x} y={o.y} onChange={(p) => {
+            {!architecture && <><Row label="位置"><CellInput x={o.x} y={o.y} onChange={(p) => {
               if (puzzle) { const error = moveSlidingObject(mapId, o.id, p.x, p.y); if (error) toast(error); }
-              else up((x) => { x.x = clampInt(p.x, 0, mapW - 1); x.y = clampInt(p.y, 0, mapH - 1); });
+              else { const m = findMap(world, mapId)!; if (o.kind === 'object' && furnitureSweepBlocked(m, o, p.x, p.y)) toast('建筑墙或关闭的门挡住了路径'); else up((x) => { x.x = clampInt(p.x, 0, mapW - o.w); x.y = clampInt(p.y, 0, mapH - o.h); }); }
             }} /></Row>
             <Row label="大小">
               {puzzle ? <span>{o.w}×{o.h}（滑块不旋转）</span> : <span className="inline">
@@ -294,9 +307,12 @@ function ObjectInspector({ world, mapId, o, ui }: { world: World; mapId: string;
                 <Num value={o.h} min={1} max={MAX_SIDE} onChange={(v) => up((x) => { x.h = clampInt(v, 1, MAX_SIDE); })} />
               </span>}
             </Row>
+            </>}
+            {o.geometry && <><div className="kv">墙中心线 ({o.geometry.a.x},{o.geometry.a.y}) → ({o.geometry.b.x},{o.geometry.b.y}) · 单位250mm</div><Row label="材质"><select value={o.geometry.material} onChange={e => up(x => { x.geometry!.material = e.target.value as 'wall' | 'glass'; })}><option value="wall">实墙</option><option value="glass">玻璃</option></select></Row><Row label="厚度 mm"><Num value={o.geometry.thickness} min={1} max={750} onChange={v => up(x => { x.geometry!.thickness = Math.max(1, Math.min(750, v)); })} /></Row></>}
+            {o.opening && <div className="kv">门洞 · 墙 {o.opening.wallId} · 偏移 {o.opening.offset * .25}m · 净宽 {o.opening.width * .25}m</div>}
             {!isZone && <Row label="高度 (m)"><Num value={o.height} step={0.1} min={0} onChange={(v) => up((x) => { x.height = Number.isFinite(v) ? Math.min(1000, Math.max(0, v)) : 0; })} /></Row>}
             {!isZone && <Check label="对玩家隐藏" value={o.hidden} onChange={(v) => up((x) => { x.hidden = v; })} />}
-            {!isZone && <Check label="可推动（推书架／推车）" value={!!o.pushable} onChange={(v) => up((x) => { if (v) x.pushable = true; else delete x.pushable; })} />}
+            {!isZone && !architecture && <Check label="可推动（推书架／推车）" value={!!o.pushable} onChange={(v) => up((x) => { if (v) x.pushable = true; else delete x.pushable; })} />}
             {!isZone && o.pushable && !puzzle && <Check label="沉重：要两个人一起推" value={!!o.heavy} onChange={(v) => up((x) => { if (v) x.heavy = true; else delete x.heavy; })} />}
             {!isZone && o.pushable && !puzzle && <div className="hint">试玩时朝着它走过去，整件东西会向同方向挪一格；后面有墙、家具或人时推不动。勾了"沉重"就还要另一个棋子贴着它，才推得动。带团时仍可直接拖动。</div>}
             <Row label="主持人备注"><Area value={o.notes} onChange={(v) => up((x) => { x.notes = v; }, 'notes')} /></Row>
@@ -314,10 +330,10 @@ function ObjectInspector({ world, mapId, o, ui }: { world: World; mapId: string;
           <div className="chips">
             {o.states.map((s, i) => (
               <button key={i} className={i === o.state ? 'chip on' : 'chip'} disabled={!run && !edit}
-                onClick={() => run ? setObjectState(mapId, o.id, i) : up((x) => { x.state = i; })}>{s || '（空）'}</button>
+                onClick={() => { setObjectState(mapId, o.id, i); }}>{s || '（空）'}</button>
             ))}
           </div>
-          {edit && o.states.length > 1 && (
+          {edit && !o.opening && o.states.length > 1 && (
             <>
               <Check label="按状态挡路（不勾＝按高度算）" value={o.blocksWhen !== undefined}
                 onChange={(v) => up((x) => { if (v) x.blocksWhen = [x.state]; else delete x.blocksWhen; })} />
@@ -338,6 +354,7 @@ function ObjectInspector({ world, mapId, o, ui }: { world: World; mapId: string;
               {o.blocksWhen && <div className="hint">勾上的状态挡路、挡视线；没勾的状态可以从这里穿过。隔断、门这类可开合的物件用这个。</div>}
             </>
           )}
+          {edit && o.opening && <><div className="hint">勾选打开门洞的状态；其余状态关闭。所有切换共用人物与家具防夹规则。</div><div className="chips">{o.states.map((s, i) => <label key={i} className="check"><input type="checkbox" checked={o.opening!.openStates.includes(i)} onChange={e => up(x => { const set = new Set(x.opening!.openStates); if (e.target.checked) set.add(i); else set.delete(i); x.opening!.openStates = [...set]; x.blocksWhen = x.states.map((_, i) => i).filter(i => !set.has(i)); })} />{s}</label>)}</div></>}
           {edit && <Area rows={2} placeholder="一行一个状态" value={o.states.join('\n')}
             onChange={(v) => setObjectStates(mapId, o.id, v.split('\n'))} />}
           {run && <div className="hint">带团时切换状态会写进记录。</div>}
@@ -482,7 +499,7 @@ function TokenInspector({ world, mapId, t }: { world: World; mapId: string; t: T
           {world.party.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
         </select>
       </Row>
-      <div className="kv">位置 {cellName(t.x, t.y)}</div>
+      <div className="kv">位置 {cellName(t.x, t.y)}{t.subcell ? ` · 子格(${t.subcell.x}, ${t.subcell.y})` : ''}</div>
       {t.pcId && <div className="hint">地图上的三圈是"看清"范围：1 格触手可及 / 5 格一步之遥 / 15 格屋子那头（1 格 = {CELL_METERS} 米，只画看得见的格子）。</div>}
     </Section>
   );

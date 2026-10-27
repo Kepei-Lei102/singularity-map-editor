@@ -1,9 +1,11 @@
+import { isArchitectureObject, architectureGeometry, clipArchitecture, fogAt, isSubdivided, tokenPosition } from './architecture';
+import { anyVisible } from './memory';
 import type { Selection, Tool, View } from './store';
 import type { GameMap, MapObject, SeenObject, World } from './types';
 import { staleMemories, emptyLayer } from './memory';
 import { CONN_ICON, CONN_LABEL } from './types';
 import { CS, colName, distToRect, gridDist } from './util';
-import { CLEAR_BANDS, canSee, sightCosts, visibleMarks } from './perception';
+import { CLEAR_BANDS, seesPoint, sightCosts, visibleMarks } from './perception';
 
 export type Mode = 'edit' | 'prep' | 'run' | 'player';
 export interface Rect { x: number; y: number; w: number; h: number }
@@ -20,6 +22,7 @@ export interface RenderOpts {
   viewer?: string | null; // 玩家视角时以谁的眼睛看（视野各自独立时用他自己那份迷雾，标记也按他算）
   numbers?: boolean; // 显示编号 O1 / Z2 / T1 / C1（和给 AI 的图一致）
   rulers?: boolean; // 画面边缘的坐标尺
+  subgrid?: boolean; // 仅显示已手动细分区的辅助线，不改变几何或走位
 }
 
 export interface Numbered { label: string; kind: 'object' | 'zone' | 'token' | 'conn'; id: string; x: number; y: number; w: number; h: number; name: string }
@@ -33,7 +36,7 @@ export function numbering(world: World, map: GameMap, player = false): Numbered[
     if (player && (o.kind === 'zone' || o.hidden)) return;
     out.push({ label: L(o.id, `${o.kind === 'zone' ? 'Z' : 'O'}${i + 1}`), kind: o.kind, id: o.id, x: o.x, y: o.y, w: o.w, h: o.h, name: o.name });
   });
-  map.tokens.forEach((t, i) => out.push({ label: L(t.id, `T${i + 1}`), kind: 'token', id: t.id, x: t.x, y: t.y, w: 1, h: 1, name: t.name }));
+  map.tokens.forEach((t, i) => out.push({ label: L(t.id, `T${i + 1}`), kind: 'token', id: t.id, x: tokenPosition(t).x - .5, y: tokenPosition(t).y - .5, w: 1, h: 1, name: t.name }));
   world.connections.filter((c) => c.a.mapId === map.id || c.b.mapId === map.id).forEach((c, i) => {
     if (player && c.hidden) return;
     const p = c.a.mapId === map.id ? c.a : c.b;
@@ -53,9 +56,7 @@ export interface PlayerNumbered extends Numbered { state: string | null; height:
 export function playerNumbering(world: World, map: GameMap): PlayerNumbered[] {
   const W = map.width;
   const liveRect = (n: { x: number; y: number; w: number; h: number }) => {
-    for (let y = Math.max(0, n.y); y < Math.min(map.height, n.y + n.h); y++)
-      for (let x = Math.max(0, n.x); x < Math.min(W, n.x + n.w); x++) if (map.fog[y * W + x] === 1) return true;
-    return false;
+    return anyVisible(map, n);
   };
   const all = numbering(world, map, false);
   const label = new Map([...all.map((n) => [n.id, n.label] as const), ...Object.entries(world.labels ?? {})]); // 玩家世界里删掉的（隐藏的）物件，编号在 labels 里
@@ -80,7 +81,7 @@ export function playerNumbering(world: World, map: GameMap): PlayerNumbered[] {
   for (const n of all) {
     if (n.kind === 'token') {
       const t = map.tokens.find((x) => x.id === n.id);
-      if (t && (t.pcId || map.fog[t.y * W + t.x] === 1)) out.push({ ...n, state: null, height: 0, icon: '', memory: false });
+      if (t && (t.pcId || fogAt(map, map, tokenPosition(t).x, tokenPosition(t).y) === 1)) out.push({ ...n, state: null, height: 0, icon: '', memory: false });
     } else if (n.kind === 'conn') {
       const c = world.connections.find((x) => x.id === n.id);
       if (c && !c.hidden && map.fog[n.y * W + n.x] === 1) out.push({ ...n, state: null, height: 0, icon: '', memory: false });
@@ -266,8 +267,10 @@ function fromMemory(r: SeenObject): MapObject {
 
 function cellsPath(map: GameMap, x0: number, y0: number, x1: number, y1: number, fogValue: number) {
   const p = new Path2D();
-  for (let y = y0; y <= y1; y++)
-    for (let x = x0; x <= x1; x++) if (map.fog[y * map.width + x] === fogValue) p.rect(x * CS, y * CS, CS, CS);
+  for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) {
+    const n = isSubdivided(map, x, y) ? 3 : 1;
+    for (let sy = 0; sy < n; sy++) for (let sx = 0; sx < n; sx++) if (fogAt(map, map, x + (sx + .5) / n, y + (sy + .5) / n) === fogValue) p.rect((x + sx / n) * CS, (y + sy / n) * CS, CS / n, CS / n);
+  }
   return p;
 }
 
@@ -291,7 +294,7 @@ export function render(
 ) {
   // 视野各自独立时，玩家视角换成这个人自己的那份迷雾和记忆；后面的代码照常读 map.fog / map.seen
   const own = o.mode === 'player' && o.viewer && world.visionMode === 'individual' ? map0.views[o.viewer] ?? emptyLayer(map0.width * map0.height) : undefined; // 这个人还没有视野层：什么都没看过
-  const map: GameMap = own ? { ...map0, fog: own.fog, seen: own.seen } : map0;
+  const map: GameMap = own ? { ...map0, fog: own.fog, subFog: own.subFog, seen: own.seen } : map0;
   const player = o.mode === 'player';
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.fillStyle = player ? '#08080b' : '#17181d';
@@ -311,10 +314,14 @@ export function render(
   for (let y = y0; y <= y1; y++)
     for (let x = x0; x <= x1; x++) {
       const i = y * W + x;
-      const id = player ? (map.fog[i] === 1 ? map.cells[i] : map.fog[i] === 2 ? map.seen.cells[i] : '') : map.cells[i];
-      if (!id) continue;
-      ctx.fillStyle = terrains.get(id)?.color ?? '#ff00ff';
-      ctx.fillRect(x * CS, y * CS, CS + 0.5, CS + 0.5);
+      const n = isSubdivided(map, x, y) ? 3 : 1;
+      for (let sy = 0; sy < n; sy++) for (let sx = 0; sx < n; sx++) {
+        const f = fogAt(map, map, x + (sx + .5) / n, y + (sy + .5) / n), key = (y * 3 + sy) * W * 3 + x * 3 + sx;
+        const id = player ? (f === 1 ? map.cells[i] : f === 2 ? n === 3 ? map.seen.subCells?.[key] ?? '' : map.seen.cells[i] : '') : map.cells[i];
+        if (!id) continue;
+        ctx.fillStyle = terrains.get(id)?.color ?? '#ff00ff';
+        ctx.fillRect((x + sx / n) * CS, (y + sy / n) * CS, CS / n + .1, CS / n + .1);
+      }
     }
 
   // 网格
@@ -325,6 +332,13 @@ export function render(
   for (let y = y0; y <= y1 + 1; y++) { ctx.moveTo(x0 * CS, y * CS); ctx.lineTo((x1 + 1) * CS, y * CS); }
   ctx.stroke();
 
+  if (!player && o.subgrid) for (const i of map.subdivisions ?? []) {
+    const x = i % W, y = Math.floor(i / W);
+    ctx.strokeStyle = 'rgba(120,190,210,.6)'; ctx.lineWidth = .65 / view.zoom;
+    ctx.strokeRect(x * CS, y * CS, CS, CS); ctx.beginPath();
+    for (let j = 1; j < 3; j++) { ctx.moveTo((x + j / 3) * CS, y * CS); ctx.lineTo((x + j / 3) * CS, (y + 1) * CS); ctx.moveTo(x * CS, (y + j / 3) * CS); ctx.lineTo((x + 1) * CS, (y + j / 3) * CS); }
+    ctx.stroke();
+  }
   // 房间底色（主持人视角；墙上不涂）
   if (!player && map.rooms.length) {
     const rc = new Map(map.rooms.map((r) => [r.id, r.color]));
@@ -355,9 +369,9 @@ export function render(
     const alpha = [0.3, 0.17, 0.07];
     for (let y = Math.max(y0, st.y - R); y <= Math.min(y1, st.y + R); y++)
       for (let x = Math.max(x0, st.x - R); x <= Math.min(x1, st.x + R); x++) {
-        const d = gridDist(x - st.x, y - st.y);
+        const d = gridDist(x + .5 - tokenPosition(st).x, y + .5 - tokenPosition(st).y);
         const band = CLEAR_BANDS.findIndex((b) => d <= b.d);
-        if (band < 0 || !canSee(cost, W, st.x, st.y, x, y)) continue;
+        if (band < 0 || !seesPoint(cost, map, st, { x: x + .5, y: y + .5 })) continue;
         ctx.fillStyle = `rgba(129,226,255,${alpha[band]})`;
         ctx.fillRect(x * CS, y * CS, CS, CS);
       }
@@ -378,12 +392,12 @@ export function render(
   // 物件（矮的先画）、触发区
   const byHeight = (a: { height: number }, b: { height: number }) => a.height - b.height;
   if (!player) {
-    map.objects.filter((ob) => ob.kind === 'object').sort(byHeight).forEach((ob) => drawObject(ctx, ob, false, view.zoom, view.zoom * dpr));
+    map.objects.filter((ob) => ob.kind === 'object' && !isArchitectureObject(ob)).sort(byHeight).forEach((ob) => drawObject(ctx, ob, false, view.zoom, view.zoom * dpr));
   } else {
     // 看得见的格子画现实，灰格子画记忆
     ctx.save();
     ctx.clip(cellsPath(map, x0, y0, x1, y1, 1));
-    map.objects.filter((ob) => ob.kind === 'object' && !ob.hidden).sort(byHeight).forEach((ob) => drawObject(ctx, ob, true, view.zoom, view.zoom * dpr));
+    map.objects.filter((ob) => ob.kind === 'object' && !isArchitectureObject(ob) && !ob.hidden).sort(byHeight).forEach((ob) => drawObject(ctx, ob, true, view.zoom, view.zoom * dpr));
     ctx.restore();
     ctx.save();
     ctx.clip(cellsPath(map, x0, y0, x1, y1, 2));
@@ -391,6 +405,18 @@ export function render(
     ctx.restore();
   }
   if (!player) map.objects.filter((ob) => ob.kind === 'zone').forEach((ob) => drawZone(ctx, ob));
+
+  // 建筑层：使用碰撞的实际矩形尺寸；玩家只画可见裁片与历史。
+  const drawArchitecture = (fragments: import('./types').ArchitectureFragment[]) => {
+    for (const r of fragments) {
+      ctx.fillStyle = r.material === 'glass' ? '#70c6dd' : r.material === 'door' ? '#966c41' : '#41434a';
+      ctx.strokeStyle = r.material === 'glass' ? '#c1f3ff' : '#14171c'; ctx.lineWidth = .65 / view.zoom;
+      if (r.material === 'opening') { ctx.strokeStyle = '#a98c62'; ctx.setLineDash([2, 2]); ctx.strokeRect(r.x * CS, r.y * CS, r.w * CS, r.h * CS); ctx.setLineDash([]); }
+      else { ctx.fillRect(r.x * CS, r.y * CS, r.w * CS, r.h * CS); ctx.strokeRect(r.x * CS, r.y * CS, r.w * CS, r.h * CS); }
+    }
+  };
+  if (!player) drawArchitecture(architectureGeometry(map, true));
+  else { drawArchitecture(clipArchitecture(map, map, 2, map.seen.architecture ?? [])); drawArchitecture((map.architecture || map.objects.some(isArchitectureObject)) ? clipArchitecture(map, map) : clipArchitecture(map, map, 1, map.architectureFragments ?? [])); }
 
   // 连接点
   for (const c of world.connections) {
@@ -418,8 +444,8 @@ export function render(
 
   // 棋子
   for (const t of map.tokens) {
-    if (player && !t.pcId && map.fog[t.y * W + t.x] !== 1) continue;
-    const cx = (t.x + 0.5) * CS, cy = (t.y + 0.5) * CS;
+    if (player && !t.pcId && fogAt(map, map, tokenPosition(t).x, tokenPosition(t).y) !== 1) continue;
+    const pos = tokenPosition(t), cx = pos.x * CS, cy = pos.y * CS;
     ctx.beginPath();
     ctx.arc(cx, cy, CS * 0.38, 0, Math.PI * 2);
     ctx.fillStyle = t.color;
@@ -472,10 +498,13 @@ export function render(
     const grey = player ? 'rgba(14,14,22,0.58)' : 'rgba(40,40,60,0.32)';
     for (let y = y0; y <= y1; y++)
       for (let x = x0; x <= x1; x++) {
-        const f = map.fog[y * W + x];
-        if (f === 1) continue;
-        ctx.fillStyle = f === 2 ? grey : black;
-        ctx.fillRect(x * CS - 0.25, y * CS - 0.25, CS + 0.5, CS + 0.5);
+        const n = isSubdivided(map, x, y) ? 3 : 1;
+        for (let sy = 0; sy < n; sy++) for (let sx = 0; sx < n; sx++) {
+          const f = fogAt(map, map, x + (sx + .5) / n, y + (sy + .5) / n);
+          if (f === 1) continue;
+          ctx.fillStyle = f === 2 ? grey : black;
+          ctx.fillRect((x + sx / n) * CS, (y + sy / n) * CS, CS / n, CS / n);
+        }
       }
     // 主持人：玩家记得的样子已经过时的物件
     if (!player) {
@@ -501,7 +530,7 @@ export function render(
     if (ob) ctx.strokeRect(ob.x * CS, ob.y * CS, ob.w * CS, ob.h * CS);
   } else if (sel?.type === 'token' && sel.mapId === map.id) {
     const t = map.tokens.find((x) => x.id === sel.id);
-    if (t) { ctx.beginPath(); ctx.arc((t.x + 0.5) * CS, (t.y + 0.5) * CS, CS * 0.48, 0, Math.PI * 2); ctx.stroke(); }
+    if (t) { ctx.beginPath(); ctx.arc(tokenPosition(t).x * CS, tokenPosition(t).y * CS, CS * 0.48, 0, Math.PI * 2); ctx.stroke(); }
   } else if (sel?.type === 'cell' && sel.mapId === map.id) {
     ctx.strokeRect(sel.x * CS, sel.y * CS, CS, CS);
   } else if (sel?.type === 'conn') {

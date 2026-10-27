@@ -48,7 +48,7 @@ export function TrialHud() {
       <div className="trial-row">
         <label className="check"><input type="checkbox" checked={t.combat} onChange={toggleCombat} /> 战斗模式</label>
         {t.combat
-          ? <span>第 {t.turn} 回合 · {cur?.name} 已走 {used}/{MOVE_PER_TURN} 格（空格结束这一回合）</span>
+          ? <span>第 {t.turn} 回合 · {cur?.name} 已走 {used}/{MOVE_PER_TURN * 3} 子步（3 子步＝1 格，空格结束这一回合）</span>
           : <span className="muted">自由行动：不限步数</span>}
         <span className="spacer" />
         <span className="muted">视野</span>

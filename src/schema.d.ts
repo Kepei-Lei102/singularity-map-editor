@@ -1,4 +1,5 @@
 import type { GameMap, MediaMeta, Npc, RoomObjectSnapshot, World } from './types';
+export function checkArchitecture(map: GameMap): void;
 export function checkRoomObjects(map: GameMap, snapshots: RoomObjectSnapshot[]): void;
 export const MAX_SIDE: number;
 export const MAX_COORD: number;
@@ -11,3 +12,5 @@ export function repairWorld(w: unknown): string[];
 export function checkNpc(n: unknown, where: string, partial?: boolean): asserts n is Partial<Npc> & { name: string };
 /** 工程里声明了、却没有对应文件的媒体。 */
 export function missingMedia(w: World, has: (id: string) => boolean): MediaMeta[];
+
+export { migrateArchitecture } from './architectureData.js';

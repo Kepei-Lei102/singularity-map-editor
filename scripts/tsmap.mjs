@@ -9,7 +9,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import JSZip from 'jszip';
 import { fileURLToPath } from 'node:url';
-import { checkWorld, missingMedia, repairWorld, safeId } from '../src/schema.js';
+import { migrateArchitecture, checkWorld, missingMedia, repairWorld, safeId } from '../src/schema.js';
 
 export { checkWorld, safeId };
 
@@ -81,6 +81,8 @@ export async function readProject(p, { allowMissing = false } = {}) {
       if (f) media.set(m.id, await f.async('nodebuffer'));
     }
   }
+  world.maps.forEach(migrateArchitecture);
+  checkWorld(world);
   const missing = missingMedia(world, (id) => media.has(id));
   if (missing.length && !allowMissing) throw new Error(`缺少媒体文件：${missing.map((m) => `${m.name}（${m.id}）`).join('、')}`);
   return { world, media, missing };

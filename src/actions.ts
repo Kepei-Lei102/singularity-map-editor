@@ -1,8 +1,11 @@
+import { architectureGeometry, architectureWalls, architectureObjectBounds, isArchitectureObject, openingIsOpen, objectStateError, architectureTransitionError, normalizeArchitectureBounds, clipArchitecture, characterPathClear, setTokenPosition, tokenPosition, wallCovered } from './architecture';
+import { checkArchitecture } from './schema.js';
 import type { Draft } from 'immer';
 import JSZip from 'jszip';
 import { getUI, getWorld, reachableWorlds, replaceWorld, setUI, toast, update, worldContext, type Selection } from './store';
-import { pcWithin } from './perception';
+import { pcWithin, seesPoint, sightCosts } from './perception';
 import type { Flow, GameMap, LogEntry, MapObject, MediaAttach, Room, RoomObjectSnapshot, Tier, World } from './types';
+import { newObject } from './defaults';
 import { NODE_H, NODE_W } from './flow';
 export { NODE_H, NODE_W, reachable } from './flow';
 import { CONN_LABEL } from './types';
@@ -35,20 +38,21 @@ export function partyTags(w: World) {
 /** 当前仍在房间的物件，加上已选排布和复位点跟踪的物件（推出房间也不丢）。 */
 export function collectRoomObjects(map: GameMap, room: Room): RoomObjectSnapshot[] {
   const tracked = new Set([...room.reset?.objects ?? [], ...room.layouts?.find((l) => l.id === room.activeLayoutId)?.objects ?? []].map((s) => s.id));
-  return map.objects.filter((o) => o.kind === 'object' && (tracked.has(o.id) || (() => {
-    for (let y = Math.max(0, o.y); y < Math.min(map.height, o.y + o.h); y++)
-      for (let x = Math.max(0, o.x); x < Math.min(map.width, o.x + o.w); x++)
+  return map.objects.filter((o) => o.kind === 'object' && (!o.geometry || o.states.length > 1) && (tracked.has(o.id) || (() => {
+    const bounds = isArchitectureObject(o) ? architectureObjectBounds(map, o) : o;
+    for (let y = Math.max(0, bounds.y - (isArchitectureObject(o) ? 1 : 0)); y < Math.min(map.height, bounds.y + bounds.h); y++)
+      for (let x = Math.max(0, bounds.x - (isArchitectureObject(o) ? 1 : 0)); x < Math.min(map.width, bounds.x + bounds.w); x++)
         if (map.roomCells[y * map.width + x] === room.id) return true;
     return false;
   })())).map((o) => ({ id: o.id, x: o.x, y: o.y, state: o.state }));
 }
 
 function roomSnapshotError(map: GameMap, room: Room, objects: RoomObjectSnapshot[]): string | null {
-  const ids = new Set(objects.map((s) => s.id));
-  const conflict = map.rooms.find((r) => r.id !== room.id &&
-    [...r.reset?.objects ?? [], ...r.layouts?.flatMap((l) => l.objects) ?? []].some((s) => ids.has(s.id)));
+  const ids = new Set(objects.map(s => s.id));
+  const conflict = map.rooms.find(r => r.id !== room.id && [...r.reset?.objects ?? [], ...r.layouts?.flatMap(l => l.objects) ?? []].some(s => ids.has(s.id)));
   if (conflict) return `物件已属于「${conflict.name}」的排布或复位点，不能跨房间共用`;
-  try { checkRoomObjects(map, objects); return null; } catch (e) { return (e as Error).message; }
+  try { checkRoomObjects(map, objects); } catch (e) { return (e as Error).message; }
+  return architectureTransitionError(map, { ...map, objects: map.objects.map(o => ({ ...o, ...objects.find(s => s.id === o.id) })) });
 }
 
 /** 编辑房间：命名保存当前位置、状态。返回错误；成功返回 null。 */
@@ -134,14 +138,16 @@ export function resetRoom(mapId: string, roomId: string) {
 
 export function deleteMapObject(mapId: string, objectId: string) {
   const map = findMap(getWorld(), mapId);
-  if (map?.slidingPuzzles?.some((p) => p.objectIds.includes(objectId) || p.gateId === objectId)) return toast('这是滑块棋盘的块或关联门，请先在工程数据里解除棋盘关联');
+  if (map?.slidingPuzzles?.some((p) => p.objectIds.includes(objectId) || p.gateId === objectId || map.objects.some(o => o.id === p.gateId && o.opening?.wallId === objectId))) return toast('这是滑块棋盘的块或关联门，请先在工程数据里解除棋盘关联');
   update((d) => {
     const m = findMap(d, mapId);
     if (!m) return;
-    m.objects = m.objects.filter((o) => o.id !== objectId);
+    const removed = new Set([objectId, ...m.objects.filter(o => o.opening?.wallId === objectId).map(o => o.id)]);
+    m.objects = m.objects.filter(o => !removed.has(o.id));
+    for (const f of d.flows) for (const n of f.nodes) { if (n.effect?.mapId === mapId && removed.has(n.effect.objectId)) n.effect = null; if (n.applied?.mapId === mapId && removed.has(n.applied.objectId)) delete n.applied; }
     for (const r of m.rooms) {
-      if (r.reset) r.reset.objects = r.reset.objects.filter((s) => s.id !== objectId);
-      for (const l of r.layouts ?? []) l.objects = l.objects.filter((s) => s.id !== objectId);
+      if (r.reset) r.reset.objects = r.reset.objects.filter((s) => !removed.has(s.id));
+      for (const l of r.layouts ?? []) l.objects = l.objects.filter((s) => !removed.has(s.id));
     }
   });
   setUI({ selection: null });
@@ -164,7 +170,10 @@ export function moveSlidingObject(mapId: string, objectId: string, x: number, y:
   return error;
 }
 
-export function setObjectState(mapId: string, objId: string, idx: number) {
+export function setObjectState(mapId: string, objId: string, idx: number): string | null {
+  const m = findMap(getWorld(), mapId);
+  const error = m ? doorInteractionError(m, objId) ?? objectStateError(m, objId, idx) : '找不到地图';
+  if (error) { toast(error); return error; }
   update((d) => {
     const o = findObj(d, mapId, objId);
     if (!o || o.state === idx) return;
@@ -172,6 +181,7 @@ export function setObjectState(mapId: string, objId: string, idx: number) {
     o.state = idx;
     log(d, 'state', `${o.name}：${from} → ${o.states[idx]}`, mapId);
   });
+  return null;
 }
 
 // ---------- 检定揭示 ----------
@@ -260,7 +270,7 @@ export function checkEnterTriggers(mapId: string, tokenId: string, fromX: number
   const inside = (o: { x: number; y: number; w: number; h: number }, x: number, y: number) =>
     x >= o.x && x < o.x + o.w && y >= o.y && y < o.y + o.h;
   for (const o of m.objects) {
-    if (!inside(o, t.x, t.y) || inside(o, fromX, fromY)) continue;
+    if (!inside(o, tokenPosition(t).x, tokenPosition(t).y) || inside(o, fromX, fromY)) continue;
     const triggers = o.media.filter((a) => a.trigger === 'enter' && !(a.once && a.fired));
     if (o.kind === 'zone' || triggers.length) update((d) => log(d, 'enter', `${t.name} 进入「${o.name}」`, mapId), { history: false });
     triggers.forEach((a) => fireAttach(mapId, o.id, a));
@@ -337,6 +347,7 @@ export function setObjectStates(mapId: string, objId: string, states: string[]) 
     const rev0 = o.stateRev ?? 0, cur = to(o.state);
     const renumbered = cur >= 0 && cur !== o.state;
     o.state = Math.max(0, cur);
+    if (o.opening) o.opening.openStates = [...new Set(o.opening.openStates.map(to).filter(i => i >= 0))];
     if (o.blocksWhen) o.blocksWhen = [...new Set(o.blocksWhen.map(to).filter((i) => i >= 0))];
     for (const r of findMap(d, mapId)!.rooms) for (const s of [...r.reset?.objects ?? [], ...r.layouts?.flatMap((l) => l.objects) ?? []])
       if (s.id === objId) s.state = Math.max(0, to(s.state));
@@ -377,6 +388,11 @@ export function setNodeStatus(flowId: string, nodeId: string, status: 'predicted
     const f = findFlow(d, flowId);
     const n = f?.nodes.find((x) => x.id === nodeId);
     if (!f || !n || n.status === status) return;
+    const change = status === 'happened' ? n.effect : n.applied && { ...n.applied, toState: n.applied.from };
+    if (change) { const m = findMap(d, change.mapId), o = m?.objects.find(o => o.id === change.objectId);
+      const needs = status === 'happened' || n.applied?.rev === (o?.stateRev ?? 0) && o?.state === n.applied?.to;
+      if (m && o && needs) { const error = objectStateError(m, o.id, change.toState); if (error) { toast(error); return; } }
+    }
     n.status = status;
     n.at = Date.now();
     n.session = d.session;
@@ -484,6 +500,7 @@ export function reshapeMaps(mapIds: string[], left: number, top: number, right: 
     p.x + left + p.w > m.width + left + right || p.y + top + p.h > m.height + top + bottom ||
     (p.gateId ? [p.gateId] : []).some((id) => { const o = m.objects.find((x) => x.id === id); return !o || o.x + left < 0 || o.y + top < 0 || o.x + left + o.w > m.width + left + right || o.y + top + o.h > m.height + top + bottom; })));
   if (cutPuzzle) return toast(`改不了：会裁掉「${cutPuzzle.name}」的滑块棋盘或关联门`);
+  if (maps.some(m => architectureWalls(m).some(w => [w.a, w.b].some(p => p.x + left * 3 < 0 || p.y + top * 3 < 0 || p.x + left * 3 > (m.width + left + right) * 3 || p.y + top * 3 > (m.height + top + bottom) * 3)))) return toast('会裁断建筑墙或门，请先编辑建筑层');
   if (!maps.length || (left === 0 && top === 0 && right === 0 && bottom === 0)) return;
   const ids = new Set(maps.map((m) => m.id));
   let droppedConns: string[] = [];
@@ -500,6 +517,16 @@ export function reshapeMaps(mapIds: string[], left: number, top: number, right: 
           }
         return out;
       };
+      const oldWidth = m.width;
+      m.subdivisions = m.subdivisions?.flatMap(i => { const x = i % oldWidth + left, y = Math.floor(i / oldWidth) + top; return x >= 0 && y >= 0 && x < W && y < H ? [y * W + x] : []; });
+      for (const o of m.objects) for (const p of o.geometry ? [o.geometry.a, o.geometry.b] : []) { p.x += left * 3; p.y += top * 3; }
+      for (const t of m.tokens) if (t.subcell) { t.subcell.x += left * 3; t.subcell.y += top * 3; }
+      for (const L of [m, ...Object.values(m.views)]) {
+        const shiftSub = <T,>(data: Record<number, T>) => Object.fromEntries(Object.entries(data).flatMap(([key, v]) => { const x = +key % (oldWidth * 3) + left * 3, y = Math.floor(+key / (oldWidth * 3)) + top * 3; return x >= 0 && y >= 0 && x < W * 3 && y < H * 3 ? [[y * W * 3 + x, v]] : []; }));
+        if (L.subFog) L.subFog = shiftSub(L.subFog);
+        if (L.seen.subCells) L.seen.subCells = shiftSub(L.seen.subCells);
+        if (L.seen.architecture) L.seen.architecture = L.seen.architecture.map(r => ({ ...r, x: r.x + left, y: r.y + top })).filter(r => r.x + r.w > 0 && r.y + r.h > 0 && r.x < W && r.y < H);
+      }
       m.cells = remap(m.cells, '');
       m.d100 = remap(m.d100, 0);
       m.roomCells = remap(m.roomCells, '');
@@ -514,7 +541,7 @@ export function reshapeMaps(mapIds: string[], left: number, top: number, right: 
       }
       if (m.spawn) { m.spawn = { x: m.spawn.x + left, y: m.spawn.y + top }; if (!inside(m.spawn)) m.spawn = null; } // 出生点被裁掉了：回到"自动"
       for (const o of [...m.objects, ...m.tokens, ...m.seen.objects]) { o.x += left; o.y += top; }
-      m.objects = m.objects.filter(inside);
+      m.objects = m.objects.filter(o => isArchitectureObject(o) || inside(o));
       m.tokens = m.tokens.filter(inside);
       m.seen.objects = m.seen.objects.filter(inside);
       for (const p of m.slidingPuzzles ?? []) {
@@ -532,6 +559,7 @@ export function reshapeMaps(mapIds: string[], left: number, top: number, right: 
       }
       m.width = W;
       m.height = H;
+      normalizeArchitectureBounds(m);
     }
     for (const c of d.connections)
       for (const e of [c.a, c.b]) if (ids.has(e.mapId)) { e.x += left; e.y += top; }
@@ -571,7 +599,7 @@ export function duplicateMap(mapId: string, layer?: string) {
   copy.id = uid();
   copy.variantOf = src.id;
   const objectIds = new Map(copy.objects.map((o) => [o.id, uid()]));
-  copy.objects = copy.objects.map((o) => ({ ...o, id: objectIds.get(o.id)! }));
+  copy.objects = copy.objects.map((o) => ({ ...o, id: objectIds.get(o.id)!, ...(o.opening ? { opening: { ...o.opening, wallId: objectIds.get(o.opening.wallId)! } } : {}) }));
   copy.slidingPuzzles = copy.slidingPuzzles?.map((p) => ({ ...p, id: uid(), objectIds: p.objectIds.map((id) => objectIds.get(id)!),
     ...(p.targetId ? { targetId: objectIds.get(p.targetId)! } : {}), ...(p.gateId ? { gateId: objectIds.get(p.gateId)! } : {}) }));
   const remapSnapshots = (objects: RoomObjectSnapshot[]) => objects.flatMap((s) => {
@@ -581,6 +609,7 @@ export function duplicateMap(mapId: string, layer?: string) {
     if (r.reset) r.reset.objects = remapSnapshots(r.reset.objects);
     for (const l of r.layouts ?? []) l.objects = remapSnapshots(l.objects);
   }
+  copy.subFog = {};
   copy.tokens = [];
   copy.fog = copy.fog.map(() => 0);
   copy.seen = { cells: copy.cells.map(() => ''), objects: [] };
@@ -956,7 +985,7 @@ export function setVisionMode(mode: World['visionMode']) {
     if (mode === 'individual')
       for (const m of d.maps) {
         m.views = {};
-        for (const p of d.party) m.views[p.id] = { fog: [...m.fog], seen: { cells: [...m.seen.cells], objects: m.seen.objects.map((o) => ({ ...o })) } };
+        for (const p of d.party) m.views[p.id] = { fog: [...m.fog], subFog: { ...m.subFog }, seen: { cells: [...m.seen.cells], objects: m.seen.objects.map((o) => ({ ...o })), subCells: { ...m.seen.subCells }, architecture: m.seen.architecture?.map(r => ({ ...r })) } };
       }
   });
 }
@@ -966,8 +995,14 @@ export function giveMapKnowledge(mapId: string, pcIds?: string[]) {
   update((d) => {
     const m = findMap(d, mapId);
     if (!m) return;
-    const learn = (L: { fog: number[]; seen: { cells: string[] } }) => {
+    const learn = (L: import('./types').VisionLayer) => {
       L.fog.forEach((f, k) => { if (!f) { L.fog[k] = 2; L.seen.cells[k] = m.cells[k]; } });
+      L.subFog ??= {}; L.seen.subCells ??= {};
+      for (const i of m.subdivisions ?? []) for (let sy = 0; sy < 3; sy++) for (let sx = 0; sx < 3; sx++) {
+        const key = (Math.floor(i / m.width) * 3 + sy) * m.width * 3 + i % m.width * 3 + sx;
+        if (!L.subFog[key]) { L.subFog[key] = 2; L.seen.subCells[key] = m.cells[i]; }
+      }
+      L.seen.architecture = [...clipArchitecture(m, L, 1, L.seen.architecture ?? []), ...clipArchitecture(m, L, 2)];
     };
     if (d.visionMode === 'individual') {
       const who = pcIds ?? d.party.map((p) => p.id);
@@ -984,4 +1019,71 @@ export function addMark(mapId: string, author: string, x: number, y: number, sym
     d.marks = d.marks.filter((k) => now - k.createdAt < k.life * 60000); // 顺手清掉过期的
     d.marks.push({ id: uid(), mapId, x, y, author, symbol, text, createdAt: now, life: MARK_LIFE });
   });
+}
+
+/** 选中矩形显式细分；取消前验证墙/门/棋子，不删任何内容。 */
+export function subdivideRegion(mapId: string, r: { x: number; y: number; w: number; h: number }, remove = false): string | null {
+  const m = findMap(getWorld(), mapId); if (!m) return '找不到地图';
+  const cells = new Set<number>();
+  for (let y = Math.max(0, r.y); y < Math.min(m.height, r.y + r.h); y++) for (let x = Math.max(0, r.x); x < Math.min(m.width, r.x + r.w); x++) cells.add(y * m.width + x);
+  const subs = remove ? (m.subdivisions ?? []).filter(i => !cells.has(i)) : [...new Set([...(m.subdivisions ?? []), ...cells])];
+  if (remove) {
+    if (m.tokens.some(t => t.subcell && cells.has(t.y * m.width + t.x))) return '取消细分失败：区域内存在子格棋子';
+    if (architectureWalls(m).some(w => !wallCovered({ ...m, subdivisions: subs }, w))) return '取消细分失败：区域内存在建筑墙或门洞';
+  }
+  update(d => {
+    const dm = findMap(d, mapId)!; dm.subdivisions = subs;
+    for (const L of [dm, ...Object.values(dm.views)]) {
+      L.subFog ??= {}; L.seen.subCells ??= {};
+      for (const i of cells) for (let sy = 0; sy < 3; sy++) for (let sx = 0; sx < 3; sx++) {
+        const key = (Math.floor(i / m.width) * 3 + sy) * m.width * 3 + i % m.width * 3 + sx;
+        if (remove) { delete L.subFog[key]; delete L.seen.subCells[key]; }
+        else if (L.subFog[key] === undefined) { L.subFog[key] = L.fog[i]; L.seen.subCells[key] = L.seen.cells[i]; }
+      }
+    }
+  });
+  return null;
+}
+export function addArchitectureWall(mapId: string, a: { x: number; y: number }, b: { x: number; y: number }, material: 'wall' | 'glass', thickness: number): string | null {
+  const m = findMap(getWorld(), mapId); if (!m) return '找不到地图';
+  const o = { ...newObject('object', 0, 0, 1, 1), name: material === 'glass' ? '玻璃墙' : '墙', height: 2.4, icon: '', states: ['固定'], geometry: { kind: 'wall' as const, a, b, material, thickness } };
+  Object.assign(o, architectureObjectBounds({ ...m, objects: [...m.objects, o] }, o));
+  try { checkArchitecture({ ...m, objects: [...m.objects, o] }); } catch (e) { return (e as Error).message; }
+  update(d => { findMap(d, mapId)!.objects.push(o); });
+  setUI({ selection: { type: 'object', mapId, id: o.id } }); return null;
+}
+export function addArchitectureDoor(mapId: string, wallId: string, offset: number, width = 3): string | null {
+  const m = findMap(getWorld(), mapId); if (!m) return '找不到墙';
+  const o = { ...newObject('object', 0, 0, 1, 1), name: '门', height: 2.4, icon: '', states: ['关闭', '打开'], blocksWhen: [0], opening: { wallId, offset, width, openStates: [1] } };
+  Object.assign(o, architectureObjectBounds(m, o));
+  const candidate = { ...m, objects: [...m.objects, o] };
+  try { checkArchitecture(candidate); } catch (e) { return (e as Error).message; }
+  const error = architectureTransitionError(m, candidate); if (error) return error;
+  update(d => { findMap(d, mapId)!.objects.push(o); });
+  setUI({ selection: { type: 'object', mapId, id: o.id } }); return null;
+}
+function doorInteractionError(m: GameMap, id: string): string | null {
+  const door = m.objects.find(o => o.id === id && o.opening);
+  if (!getUI().trial || !door) return null;
+  const pl = getUI().trial!, t = m.tokens.find(t => t.id === pl.players[pl.current]?.tokenId);
+  const rect = architectureGeometry(m, true).find(r => r.objectId === id);
+  if (!rect || !t || door.hidden) return '需要靠近门才能开关';
+  const mid = { x: rect.x + rect.w / 2, y: rect.y + rect.h / 2 };
+  const geometry = architectureGeometry(m).filter(r => r.objectId !== id);
+  if (Math.hypot(tokenPosition(t).x - mid.x, tokenPosition(t).y - mid.y) > 1.5 || !seesPoint(sightCosts(getWorld(), m), m, t, mid, geometry)) return '需要靠近门才能开关';
+  return null;
+}
+export function toggleArchitectureDoor(mapId: string, id: string): string | null {
+  const m = findMap(getWorld(), mapId), door = m?.objects.find(o => o.id === id && o.opening); if (!m || !door) return '找不到门';
+  const idx = door.states.findIndex((_, i) => door.opening!.openStates.includes(i) !== openingIsOpen(door));
+  return idx < 0 ? '门缺少关闭或打开状态' : setObjectState(mapId, id, idx);
+}
+export function eraseArchitecture(mapId: string, id: string, _doorOnly = false) { deleteMapObject(mapId, id); }
+export function moveMapToken(mapId: string, id: string, p: { x: number; y: number }): string | null {
+  const m = findMap(getWorld(), mapId), t = m?.tokens.find(t => t.id === id); if (!m || !t) return '找不到棋子';
+  if (!Number.isFinite(p.x) || !Number.isFinite(p.y)) return '无效位置';
+  const fine = (m.subdivisions ?? []).includes(Math.floor(p.y) * m.width + Math.floor(p.x));
+  p = fine ? { x: (Math.floor(p.x * 3) + .5) / 3, y: (Math.floor(p.y * 3) + .5) / 3 } : { x: Math.floor(p.x) + .5, y: Math.floor(p.y) + .5 };
+  if (!characterPathClear(getWorld(), m, tokenPosition(t), p, id)) return '人物或墙体挡住了路径';
+  update(d => { const dm = findMap(d, mapId)!; setTokenPosition(dm, dm.tokens.find(t => t.id === id)!, p); }); return null;
 }

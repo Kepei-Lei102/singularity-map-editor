@@ -3,6 +3,7 @@ import { addMark, autoReveal, cancelPendingPlay, checkEnterTriggers, findMap, io
 import type { GameMap, MapObject, World } from './types';
 import { uid } from './util';
 import { blocksMovement, ROUND_MINUTES } from './perception';
+import { characterPathClear, furnitureSweepBlocked, nextTokenStep, setTokenPosition, tokenPosition } from './architecture';
 import { slidingPuzzleForObject } from './sliding';
 
 // 试玩：放白板玩家进去，用 WASD 走，体验视野。退出时一切恢复原样（沙盒）。
@@ -19,6 +20,7 @@ const insideRect = (o: { x: number; y: number; w: number; h: number }, x: number
 /** 可推物件往这个方向挪一格行不行：每一格都要是能站的地形，没有别的挡路物件，也没有人。 */
 function canPush(w: World, m: GameMap, shelf: MapObject, dx: number, dy: number) {
   const sx = shelf.x + dx, sy = shelf.y + dy;
+  if (furnitureSweepBlocked(m, shelf, sx, sy)) return false;
   if (sx < 0 || sy < 0 || sx + shelf.w > m.width || sy + shelf.h > m.height) return false;
   for (let y = sy; y < sy + shelf.h; y++)
     for (let x = sx; x < sx + shelf.w; x++) {
@@ -40,6 +42,7 @@ function walkable(w: World, m: GameMap, x: number, y: number) {
   if (x < 0 || y < 0 || x >= m.width || y >= m.height) return false;
   const t = w.terrains.find((t) => t.id === m.cells[y * m.width + x]);
   if (!t || t.blocksMove) return false; // 空白格（地图外）也不能走
+  if (!characterPathClear(w, { ...m, tokens: [] }, { x: x + 0.5, y: y + 0.5 }, { x: x + 0.5, y: y + 0.5 })) return false;
   return !m.objects.some((o) => o.kind === 'object' && blocksMovement(o) && x >= o.x && x < o.x + o.w && y >= o.y && y < o.y + o.h);
 }
 
@@ -149,31 +152,35 @@ export function trialMove(dx: number, dy: number) {
     else return setTr({ msg: `${pl.name}${tok.status.label}中，暂时不能行动` });
   }
   const used = t.moved[pl.tokenId] ?? 0;
-  if (t.combat && used >= MOVE_PER_TURN) return setTr({ msg: '这回合的移动力用完了，按空格结束回合' });
-  const nx = tok.x + dx, ny = tok.y + dy;
+  const step = nextTokenStep(m, tok, dx, dy);
+  if (t.combat && used + step.cost > MOVE_PER_TURN * 3) return setTr({ msg: '这回合的移动力用完了，按空格结束回合' });
+  const nx = Math.floor(step.b.x), ny = Math.floor(step.b.y);
   // 棋盘块由检查器抽象操控，不能用普通推箱绕过边界、碰撞和门状态规则。
   const puzzleBlock = m.objects.find((o) => slidingPuzzleForObject(m, o.id) && insideRect(o, nx, ny));
   if (puzzleBlock) return setTr({ msg: `${puzzleBlock.name}是滑块，请拖动当前看得见的家具，或使用检查器的方向按钮` });
   // 前面是可推的书架／推车：先把它推一格，再走进去。推不动就停下，不悄悄挪半格。
   const shelf = m.objects.find((o) => o.kind === 'object' && blocksMovement(o) && insideRect(o, nx, ny));
   if (shelf) {
+    if (step.cost !== 3) return setTr({ msg: '推家具需要回到主格中心，整格推动' });
     if (!shelf.pushable) return setTr({ msg: '走不过去' });
     if (shelf.heavy && !hasHelper(m, shelf, pl.tokenId)) return setTr({ msg: `${shelf.name}太沉，要两个人一起推` });
     if (!canPush(w, m, shelf, dx, dy)) return setTr({ msg: `${shelf.name}推不动` });
+    const projected = { ...m, objects: m.objects.map(o => o.id === shelf.id ? { ...o, x: o.x + dx, y: o.y + dy } : o) };
+    if (!characterPathClear(w, projected, step.a, step.b, tok.id)) return setTr({ msg: '人物路径被墙或其它人挡住' });
     update((d) => {
       const o = findMap(d, t.mapId)!.objects.find((x) => x.id === shelf.id)!;
       o.x += dx; o.y += dy;
     });
   }
   const now = getWorld(), m2 = findMap(now, t.mapId);
-  if (!m2 || !walkable(now, m2, nx, ny)) return setTr({ msg: '走不过去' });
-  if (m2.tokens.some((x) => x.x === nx && x.y === ny)) return setTr({ msg: '有人挡着' });
+  if (!m2) return setTr({ msg: '走不过去' });
+  if (!characterPathClear(now, m2, step.a, step.b, tok.id)) return setTr({ msg: '人物或墙体挡住了路径' });
   update((d) => {
     const dt = findMap(d, t.mapId)!.tokens.find((x) => x.id === pl.tokenId)!;
-    dt.x = nx; dt.y = ny;
+    setTokenPosition(findMap(d, t.mapId)!, dt, step.b);
   });
-  setTr({ moved: { ...t.moved, [pl.tokenId]: used + 1 }, msg: '' });
-  checkEnterTriggers(t.mapId, pl.tokenId, tok.x, tok.y); // 和正式带团一样：走进触发区就播，范围里的线索自动浮现（试玩结束都会复原）
+  setTr({ moved: { ...t.moved, [pl.tokenId]: used + step.cost }, msg: '' });
+  checkEnterTriggers(t.mapId, pl.tokenId, step.a.x, step.a.y); // 和正式带团一样：走进触发区就播，范围里的线索自动浮现（试玩结束都会复原）
   autoReveal(t.mapId);
 }
 
@@ -247,7 +254,7 @@ export function trialClick(x: number, y: number) {
   if (!t) return;
   if (t.markMode) { trialPlaceMark(x, y); setTr({ markMode: false }); return; }
   const m = findMap(getWorld(), t.mapId);
-  const i = t.players.findIndex((p) => m?.tokens.some((k) => k.id === p.tokenId && k.x === x && k.y === y));
+  const i = t.players.findIndex((p) => m?.tokens.some((k) => k.id === p.tokenId && Math.floor(tokenPosition(k).x) === x && Math.floor(tokenPosition(k).y) === y));
   if (i >= 0) switchTrialPlayer(i);
 }
 

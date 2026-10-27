@@ -1,3 +1,5 @@
+import { isArchitectureObject, clipArchitecture, fogAt, tokenPosition } from './architecture';
+import { anyVisible } from './memory';
 import type { Endpoint, GameMap, PlayerClue, World } from './types';
 import { visibleMarks } from './perception';
 import { numbering } from './render';
@@ -96,16 +98,23 @@ function playerMap(m: GameMap): GameMap {
     return false;
   };
   // 记忆：只留还落在"去过"的格子里的物件；没去过（黑）的格子不留地形记忆
-  const mem = <L extends { fog: number[]; seen: GameMap['seen'] }>(L: L): L => ({
+  const mem = <L extends { fog: number[]; subFog?: Record<number, number>; seen: GameMap['seen'] }>(L: L): L => ({
     ...L,
+    subFog: Object.fromEntries(Object.entries(L.subFog ?? {}).filter(([,f]) => f !== 0)),
     seen: {
       cells: L.seen.cells.map((c, i) => (L.fog[i] ? c : '')),
       objects: L.seen.objects.filter((r) => touches(r, (i) => L.fog[i] !== 0)),
+      architecture: [...clipArchitecture(m, L, 1, L.seen.architecture ?? []), ...clipArchitecture(m, L, 2, L.seen.architecture ?? [])],
+      subCells: Object.fromEntries(Object.entries(L.seen.subCells ?? {}).filter(([k]) => L.subFog?.[+k])),
     },
   });
   const base = mem(m);
   return {
     ...m,
+    architecture: undefined,
+    subFog: Object.fromEntries(Object.entries(m.subFog ?? {}).filter(([,f]) => f !== 0)),
+    architectureFragments: clipArchitecture(m, m),
+    subdivisions: m.subdivisions?.filter(i => m.fog[i] || Object.values(m.views).some(L => L.fog[i])),
     seen: base.seen,
     views: Object.fromEntries(Object.entries(m.views).map(([pc, L]) => [pc, mem(L)])),
     notes: '',
@@ -115,8 +124,8 @@ function playerMap(m: GameMap): GameMap {
     rooms: [],
     slidingPuzzles: undefined,
     roomCells: m.roomCells.map(() => ''),
-    tokens: m.tokens.filter((t) => t.pcId || live[t.y * m.width + t.x]),
-    objects: m.objects.filter((o) => o.kind === 'object' && !o.hidden && touches(o, (i) => live[i])).map((o) => ({
+    tokens: m.tokens.filter((t) => { const p = tokenPosition(t); return t.pcId || fogAt(m, m, p.x, p.y) === 1; }),
+    objects: m.objects.filter((o) => o.kind === 'object' && !isArchitectureObject(o) && !o.hidden && anyVisible(m, o)).map((o) => ({
       ...o,
       notes: '',
       media: [],
