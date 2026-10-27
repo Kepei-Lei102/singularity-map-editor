@@ -3,6 +3,7 @@ import { addMark, autoReveal, cancelPendingPlay, checkEnterTriggers, findMap, io
 import type { GameMap, MapObject, World } from './types';
 import { uid } from './util';
 import { blocksMovement, ROUND_MINUTES } from './perception';
+import { slidingPuzzleForObject } from './sliding';
 
 // 试玩：放白板玩家进去，用 WASD 走，体验视野。退出时一切恢复原样（沙盒）。
 // 默认是非战斗：不限步数；打开"战斗模式"才是每回合 5 格。
@@ -150,6 +151,9 @@ export function trialMove(dx: number, dy: number) {
   const used = t.moved[pl.tokenId] ?? 0;
   if (t.combat && used >= MOVE_PER_TURN) return setTr({ msg: '这回合的移动力用完了，按空格结束回合' });
   const nx = tok.x + dx, ny = tok.y + dy;
+  // 棋盘块由检查器抽象操控，不能用普通推箱绕过边界、碰撞和门状态规则。
+  const puzzleBlock = m.objects.find((o) => slidingPuzzleForObject(m, o.id) && insideRect(o, nx, ny));
+  if (puzzleBlock) return setTr({ msg: `${puzzleBlock.name}是滑块，请在检查器的滑块棋盘面板操作` });
   // 前面是可推的书架／推车：先把它推一格，再走进去。推不动就停下，不悄悄挪半格。
   const shelf = m.objects.find((o) => o.kind === 'object' && blocksMovement(o) && insideRect(o, nx, ny));
   if (shelf) {

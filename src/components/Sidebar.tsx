@@ -1,10 +1,11 @@
-import { canEditMap, setUI, update, useUI, useWorld, type Mode, type Tool, type UIState } from '../store';
+import { useState } from 'react';
+import { canEditMap, setUI, toast, update, useUI, useWorld, type Mode, type Tool, type UIState } from '../store';
 import { CONN_LABEL, type ConnKind, type Room } from '../types';
 import { numbering } from '../render';
 import { newMap } from '../defaults';
 import { cellName, uid } from '../util';
 import { Area, Check, Num, Row, Section, Txt } from './fields';
-import { captureRoomReset, resetRoom } from '../actions';
+import { captureRoomReset, resetRoom, saveRoomLayout, deleteRoomLayout } from '../actions';
 
 const ALL_TOOLS: [Tool, string, string][] = [
   ['select', '选择/移动', 'V'],
@@ -174,6 +175,9 @@ const ROOM_COLORS = ['#e8a87c', '#85cdca', '#c38d9e', '#e8d67c', '#9ab87a', '#8f
 /** 房间：先选一个房间，再用笔刷刷格子。选"擦掉"刷掉格子的房间归属。 */
 function RoomSection({ mapId, rooms, roomId, tool }: { mapId: string; rooms: Room[]; roomId: string; tool: Tool }) {
   const room = rooms.find((r) => r.id === roomId);
+  const ui = useUI();
+  const [layoutDraft, setLayoutDraft] = useState({ roomId: '', name: '', description: '' });
+  const draft = layoutDraft.roomId === roomId ? layoutDraft : { roomId, name: '', description: '' };
   const up = (fn: (r: Room) => void, key?: string) =>
     update((d) => { const r = d.maps.find((m) => m.id === mapId)?.rooms.find((x) => x.id === roomId); if (r) fn(r); }, { coalesce: key && key + roomId });
   return (
@@ -208,6 +212,26 @@ function RoomSection({ mapId, rooms, roomId, tool }: { mapId: string; rooms: Roo
           {room.reset
             ? <div className="hint">复位点：{room.reset.objects.length} 个物件（{new Date(room.reset.at).toLocaleString()}）。带团或试玩中点「复位」，家具和状态都回到这里。</div>
             : <div className="hint">先把房间摆好，再点「记下当前摆位」；之后推乱的推车、打开的隔断都能一键回去。</div>}
+          {ui.mode === 'edit' && !ui.trial && <>
+            <Row label="排布名称"><Txt value={draft.name} placeholder="例如 通道宽敞 / 书架拥挤"
+              onChange={(name) => setLayoutDraft({ ...draft, name })} /></Row>
+            <Row label="排布说明"><Area rows={2} value={draft.description}
+              onChange={(description) => setLayoutDraft({ ...draft, description })} /></Row>
+            <button className="small" onClick={() => {
+              const error = saveRoomLayout(mapId, room.id, draft.name, draft.description);
+              if (error) toast(error); else setLayoutDraft({ roomId, name: '', description: '' });
+            }}>命名保存当前排布</button>
+            {room.layouts?.map((l) => <div key={l.id} className="card">
+              <div className="card-title"><span>{l.name}{l.id === room.activeLayoutId ? '（本场已选）' : ''}</span><span className="spacer" />
+                <button className="danger small" onClick={() => {
+                  if (!confirm(`删除排布「${l.name}」？`)) return;
+                  const error = deleteRoomLayout(mapId, room.id, l.id); if (error) toast(error);
+                }}>删除排布</button>
+              </div>
+              {l.description && <div className="hint">{l.description}</div>}
+              <div className="hint">{l.objects.length} 个物件；在备团的右侧检查器选择本场排布。</div>
+            </div>)}
+          </>}
           <button className="danger small" onClick={() => {
             if (!confirm(`删除房间「${room.name}」？格子本身不变，只是不再属于这个房间。`)) return;
             update((d) => {

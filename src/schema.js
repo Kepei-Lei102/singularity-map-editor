@@ -112,6 +112,33 @@ export function repairWorld(w) {
   return fixed;
 }
 
+/** 校验整批快照的最终摆位；先投影所有物件，再查滑块，允许互换位置。 */
+export function checkRoomObjects(map, snapshots) {
+  const c = checker('房间排布有问题：');
+  const list = c.arr(snapshots, 'objects');
+  c.unique(list, 'objects');
+  const changes = new Map();
+  for (const s of list) {
+    c.obj(s, '物件快照'); c.id(s.id, '物件快照.id');
+    const o = map.objects.find((o) => o.id === s.id && o.kind === 'object');
+    if (!o) c.fail('objects', `找不到本图物件：${s.id}`);
+    c.int(s.x, `${o.name}.x`, 0); c.int(s.y, `${o.name}.y`, 0);
+    c.int(s.state, `${o.name}.state`, 0, o.states.length - 1);
+    if (s.x + o.w > map.width || s.y + o.h > map.height) c.fail(o.name, '完整尺寸超出地图边界');
+    changes.set(s.id, s);
+  }
+  const objects = map.objects.map((o) => ({ ...o, ...changes.get(o.id) }));
+  const members = new Set(map.slidingPuzzles?.flatMap((p) => p.objectIds));
+  const overlap = (a, b) => a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
+  for (const p of map.slidingPuzzles ?? []) for (const id of p.objectIds) {
+    const o = objects.find((o) => o.id === id);
+    if (!o || o.x < p.x || o.y < p.y || o.x + o.w > p.x + p.w || o.y + o.h > p.y + p.h ||
+      o.x < 0 || o.y < 0 || o.x + o.w > map.width || o.y + o.h > map.height) c.fail(p.name, '滑块超出棋盘边界');
+    if (objects.some((b) => b.id !== o.id && b.kind === 'object' &&
+      (members.has(b.id) || (b.blocksWhen ? b.blocksWhen.includes(b.state) : b.height >= 0.5)) && overlap(o, b))) c.fail(p.name, '滑块与其它滑块或挡路物件相交');
+  }
+}
+
 /**
  * 检查整份工程，有问题就抛出一句能看懂的错误（带出错的位置）。
  * migrated = true：浏览器里迁移（补旧字段）之后再查一遍，这时旧字段都必须在（编辑器直接用它们）。
@@ -201,6 +228,79 @@ export function checkWorld(w, migrated = false) {
       });
     });
     unique(m.objects, `${at}.objects`);
+    if (m.slidingPuzzles !== undefined) {
+      const puzzles = arr(m.slidingPuzzles, `${at}.slidingPuzzles`);
+      const members = new Set(), gates = new Set();
+      const overlaps = (a, b) => a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
+      const within = (a, b) => a.x >= b.x && a.y >= b.y && a.x + a.w <= b.x + b.w && a.y + a.h <= b.y + b.h;
+      const mapBox = { x: 0, y: 0, w: m.width, h: m.height };
+      puzzles.forEach((p, i) => {
+        const pa = `${at}.slidingPuzzles[${i}]`;
+        obj(p, pa); id(p.id, `${pa}.id`); str(p.name, `${pa}.name`);
+        int(p.x, `${pa}.x`, 0); int(p.y, `${pa}.y`, 0); int(p.w, `${pa}.w`, 1, MAX_SIDE); int(p.h, `${pa}.h`, 1, MAX_SIDE);
+        if (!within(p, mapBox)) fail(pa, '棋盘超出地图边界');
+        strings(p.objectIds, `${pa}.objectIds`);
+        if (!p.objectIds.length) fail(`${pa}.objectIds`, '至少需要一个滑块');
+        const goalFields = [p.targetId, p.goal, p.gateId].filter((v) => v !== undefined).length;
+        if (goalFields !== 0 && goalFields !== 3) fail(pa, 'targetId、goal、gateId 必须全有或全无');
+        if (goalFields === 3) {
+          id(p.targetId, `${pa}.targetId`); id(p.gateId, `${pa}.gateId`);
+          obj(p.goal, `${pa}.goal`); int(p.goal.x, `${pa}.goal.x`, 0); int(p.goal.y, `${pa}.goal.y`, 0);
+        }
+        const blocks = p.objectIds.map((oid) => {
+          const block = m.objects.find((o) => o.id === oid && o.kind === 'object');
+          if (!block) fail(`${pa}.objectIds`, `找不到本图的物件：${oid}`);
+          if (members.has(oid)) fail(`${pa}.objectIds`, `滑块重复或属于多个棋盘：${oid}`);
+          members.add(oid);
+          if (!within(block, p)) fail(pa, `滑块「${block.name}」超出棋盘边界`);
+          return block;
+        });
+        if (goalFields === 3) {
+          const target = blocks.find((o) => o.id === p.targetId);
+          if (!target) fail(`${pa}.targetId`, '目标必须是棋盘里的滑块');
+          if (!within({ ...target, ...p.goal }, p)) fail(`${pa}.goal`, '目标位置放不下目标块');
+          const gate = m.objects.find((o) => o.id === p.gateId && o.kind === 'object');
+          if (!gate || gate.states.length < 2 || gate.blocksWhen?.length !== 1 || gate.blocksWhen[0] !== 0) fail(`${pa}.gateId`, '门必须是本图物件，具有状态 0/1 且 blocksWhen=[0]');
+          if (gates.has(p.gateId)) fail(`${pa}.gateId`, '不同棋盘不能共用一扇门');
+          gates.add(p.gateId);
+          if (overlaps(p, gate)) fail(`${pa}.gateId`, '门必须放在棋盘外');
+        }
+        blocks.forEach((block, j) => {
+          if (blocks.slice(j + 1).some((o) => overlaps(block, o))) fail(pa, '滑块不能相交');
+        });
+        if (m.objects.some((o) => o.kind === 'object' && !p.objectIds.includes(o.id) &&
+          (o.blocksWhen ? o.blocksWhen.includes(o.state) : o.height >= 0.5) && overlaps(p, o))) fail(pa, '棋盘范围内不能有其它挡路物件');
+      });
+      unique(puzzles, `${at}.slidingPuzzles`);
+      if ([...gates].some((gid) => members.has(gid))) fail(`${at}.slidingPuzzles`, '门不能同时是滑块');
+    }
+    const owners = new Map();
+    for (const r of m.rooms ?? []) {
+      const ra = `${at}.rooms「${r.name}」`;
+      const snapshots = [];
+      if (r.reset) snapshots.push(r.reset.objects);
+      if (r.layouts !== undefined) {
+        arr(r.layouts, `${ra}.layouts`).forEach((layout, i) => {
+          const la = `${ra}.layouts[${i}]`;
+          obj(layout, la); id(layout.id, `${la}.id`); str(layout.name, `${la}.name`);
+          if (layout.description !== undefined) str(layout.description, `${la}.description`);
+          arr(layout.objects, `${la}.objects`);
+          snapshots.push(layout.objects);
+        });
+        unique(r.layouts, `${ra}.layouts`);
+      }
+      if (r.activeLayoutId !== undefined) {
+        id(r.activeLayoutId, `${ra}.activeLayoutId`);
+        if (!r.layouts?.some((l) => l.id === r.activeLayoutId)) fail(`${ra}.activeLayoutId`, '找不到本房间的排布');
+      }
+      for (const objects of snapshots) {
+        try { checkRoomObjects(m, objects); } catch (e) { fail(ra, e.message); }
+        for (const s of objects) {
+          if (owners.has(s.id) && owners.get(s.id) !== r.id) fail(ra, `物件被其它房间的排布或复位点共用：${s.id}`);
+          owners.set(s.id, r.id);
+        }
+      }
+    }
     arr(m.tokens, `${at}.tokens`).forEach((t, i) => {
       const ta = `${at}.tokens[${i}]`;
       obj(t, ta); id(t.id, `${ta}.id`); str(t.name, `${ta}.name`); str(t.color, `${ta}.color`); int(t.x, `${ta}.x`); int(t.y, `${ta}.y`);

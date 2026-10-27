@@ -1,4 +1,5 @@
-import type { MediaMeta, Npc, World } from './types';
+import type { GameMap, MediaMeta, Npc, RoomObjectSnapshot, World } from './types';
+export function checkRoomObjects(map: GameMap, snapshots: RoomObjectSnapshot[]): void;
 export const MAX_SIDE: number;
 export const MAX_COORD: number;
 export function safeId(id: unknown): boolean;

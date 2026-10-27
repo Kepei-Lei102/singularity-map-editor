@@ -1,6 +1,6 @@
 import { useEffect, useRef } from 'react';
 import { canEditMap, getUI, getWorld, redo, setUI, undo, update, useUI, useWorld, type Mode, type Tab } from './store';
-import { autoLoadFromLauncher, checkDiskTarget, exportProject, findMap, hasBackup, importAnyFile, restoreBackup, saveToDisk, startFreshWorld } from './actions';
+import { autoLoadFromLauncher, checkDiskTarget, deleteMapObject, exportProject, findMap, hasBackup, importAnyFile, restoreBackup, saveToDisk, startFreshWorld } from './actions';
 import { demoWorld, emptyWorld } from './defaults';
 import { broadcastWorld, listenAsEditor, openPlayerWindow, send } from './sync';
 import { storageOK } from './store';
@@ -37,8 +37,8 @@ function deleteSelection() {
   const sel = getUI().selection;
   if (!sel) return;
   if (sel.type !== 'token' && !canEditMap(getUI())) return;
+  if (sel.type === 'object') return deleteMapObject(sel.mapId, sel.id);
   update((d) => {
-    if (sel.type === 'object') { const m = findMap(d, sel.mapId); if (m) m.objects = m.objects.filter((o) => o.id !== sel.id); }
     if (sel.type === 'token') { const m = findMap(d, sel.mapId); if (m) m.tokens = m.tokens.filter((t) => t.id !== sel.id); }
     if (sel.type === 'conn') d.connections = d.connections.filter((c) => c.id !== sel.id);
   });

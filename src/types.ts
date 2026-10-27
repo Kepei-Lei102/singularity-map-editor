@@ -72,6 +72,9 @@ export interface MapObject {
   media: MediaAttach[];
 }
 
+export interface RoomObjectSnapshot { id: Id; x: number; y: number; state: number }
+export interface RoomLayout { id: Id; name: string; description?: string; objects: RoomObjectSnapshot[] }
+
 /** 房间：按格子刷出来的命名区域。tags 预留给十二宫、八门等对应关系。 */
 export interface Room {
   id: Id;
@@ -80,7 +83,9 @@ export interface Room {
   note: string;
   tags: string[];
   /** 分区复位：这个房间里物件的位置和状态。带团中途点「复位」就回到这里。 */
-  reset?: { at: number; objects: { id: Id; x: number; y: number; state: number }[] };
+  reset?: { at: number; objects: RoomObjectSnapshot[] };
+  layouts?: RoomLayout[];
+  activeLayoutId?: Id;
 }
 
 /** 暂时不能行动（晕厥、泡温泉……）：自由行动时按真实时间倒数，战斗中换算成回合（1 回合 = 5 分钟）。 */
@@ -100,6 +105,20 @@ export interface Token {
   status?: TokenStatus;
 }
 
+/** 抽象滑块棋盘：位置均为地图绝对格坐标；goal 对应目标块的左上角。只平移，不要求人物站到推动侧。 */
+export interface SlidingPuzzle {
+  id: Id;
+  name: string;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  objectIds: Id[];
+  targetId?: Id;
+  goal?: { x: number; y: number };
+  gateId?: Id; // 三项全无＝自由滑块区；全有＝目标到位开门（0=关闭、1=打开，blocksWhen=[0]）
+}
+
 export interface GameMap {
   id: Id;
   name: string;
@@ -117,6 +136,7 @@ export interface GameMap {
   views: Record<Id, VisionLayer>; // 视野各自独立时，每个玩家角色（pcId）自己的一份迷雾和记忆
   spawn: { x: number; y: number } | null; // 试玩出生点（null = 自动：最北、最居中的门外）
   objects: MapObject[];
+  slidingPuzzles?: SlidingPuzzle[];
   tokens: Token[];
   notes: string;
   variantOf?: Id; // 从哪张图复制来的（为以后的"继承"预留）

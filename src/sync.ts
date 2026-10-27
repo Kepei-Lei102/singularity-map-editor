@@ -113,6 +113,7 @@ function playerMap(m: GameMap): GameMap {
     cells: m.cells.map((c, i) => (live[i] ? c : '')),
     d100: m.d100.map(() => 0),
     rooms: [],
+    slidingPuzzles: undefined,
     roomCells: m.roomCells.map(() => ''),
     tokens: m.tokens.filter((t) => t.pcId || live[t.y * m.width + t.x]),
     objects: m.objects.filter((o) => o.kind === 'object' && !o.hidden && touches(o, (i) => live[i])).map((o) => ({

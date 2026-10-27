@@ -2,7 +2,8 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { GameMap, World } from '../types';
 import { CS, cellLine, uid } from '../util';
 import { beginBatch, canEditMap, endBatch, getUI, getWorld, setUI, toast, update, useUI, type Selection, type View } from '../store';
-import { checkEnterTriggers, clearPendingFocus, findMap, itemsAt, jumpTo, pendingFocus, sameSel } from '../actions';
+import { checkEnterTriggers, clearPendingFocus, findMap, itemsAt, jumpTo, moveSlidingObject, pendingFocus, sameSel } from '../actions';
+import { slidingPuzzleForObject } from '../sliding';
 import { newObject } from '../defaults';
 import { brushCells, render, type Mode, type Rect } from '../render';
 
@@ -268,9 +269,17 @@ export function MapCanvas({ world, map, mode, playerNumbers = false, follow, vie
     } else if (dr.k === 'obj') {
       const o = m.objects.find((x) => x.id === dr.id);
       if (!o) return gone();
-      const nx = clampX(cx - dr.ox, o.w), ny = clampY(cy - dr.oy, o.h);
-      if (nx !== o.x || ny !== o.y) dr.moved = true;
-      if (nx !== o.x || ny !== o.y) update((d) => { const od = findMap(d, map.id)!.objects.find((x) => x.id === dr.id)!; od.x = nx; od.y = ny; });
+      if (slidingPuzzleForObject(m, o.id)) {
+        const nx = cx - dr.ox, ny = cy - dr.oy;
+        if (nx !== o.x || ny !== o.y) {
+          const error = moveSlidingObject(map.id, o.id, nx, ny);
+          if (error) toast(error); else dr.moved = true;
+        }
+      } else {
+        const nx = clampX(cx - dr.ox, o.w), ny = clampY(cy - dr.oy, o.h);
+        if (nx !== o.x || ny !== o.y) dr.moved = true;
+        if (nx !== o.x || ny !== o.y) update((d) => { const od = findMap(d, map.id)!.objects.find((x) => x.id === dr.id)!; od.x = nx; od.y = ny; });
+      }
     } else if (dr.k === 'tok') {
       const t = m.tokens.find((x) => x.id === dr.id);
       if (!t) return gone();

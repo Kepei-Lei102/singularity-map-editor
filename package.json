@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "test": "node --test scripts/sliding.test.mjs",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
     "build:single": "tsc --noEmit && SINGLE=1 vite build --outDir release-build",

@@ -2,17 +2,18 @@ import type { Draft } from 'immer';
 import JSZip from 'jszip';
 import { getUI, getWorld, reachableWorlds, replaceWorld, setUI, toast, update, worldContext, type Selection } from './store';
 import { pcWithin } from './perception';
-import type { Flow, GameMap, LogEntry, MapObject, MediaAttach, Tier, World } from './types';
+import type { Flow, GameMap, LogEntry, MapObject, MediaAttach, Room, RoomObjectSnapshot, Tier, World } from './types';
 import { NODE_H, NODE_W } from './flow';
 export { NODE_H, NODE_W, reachable } from './flow';
 import { CONN_LABEL } from './types';
 import { TIER_LABEL } from './types';
 import { download, uid } from './util';
 import { contentKey, getRaw, listStored, mediaChanged, putBlobs, storageKey } from './media';
-import { checkWorld, repairWorld } from './schema.js';
+import { checkRoomObjects, checkWorld, repairWorld } from './schema.js';
 import { allSlots, dropSlot, loadSlot, saveSlot } from './persist';
 import { send } from './sync';
 import { emptyLayer, migrateWorld } from './memory';
+import { applySlidingMove } from './sliding';
 
 export const findMap = (w: World | Draft<World>, id: string) => w.maps.find((m) => m.id === id);
 export const findObj = (w: World | Draft<World>, mapId: string, id: string) =>
@@ -31,31 +32,87 @@ export function partyTags(w: World) {
 
 // ---------- 物件状态 ----------
 
-/**
- * 分区复位：把一个房间里物件的当前位置和状态记成复位点。
- * 之后无论推书架、开关隔断，点复位就全部回到这里。只记位置和状态，不记棋子和迷雾。
- */
-export function captureRoomReset(mapId: string, roomId: string) {
+/** 当前仍在房间的物件，加上已选排布和复位点跟踪的物件（推出房间也不丢）。 */
+export function collectRoomObjects(map: GameMap, room: Room): RoomObjectSnapshot[] {
+  const tracked = new Set([...room.reset?.objects ?? [], ...room.layouts?.find((l) => l.id === room.activeLayoutId)?.objects ?? []].map((s) => s.id));
+  return map.objects.filter((o) => o.kind === 'object' && (tracked.has(o.id) || (() => {
+    for (let y = Math.max(0, o.y); y < Math.min(map.height, o.y + o.h); y++)
+      for (let x = Math.max(0, o.x); x < Math.min(map.width, o.x + o.w); x++)
+        if (map.roomCells[y * map.width + x] === room.id) return true;
+    return false;
+  })())).map((o) => ({ id: o.id, x: o.x, y: o.y, state: o.state }));
+}
+
+function roomSnapshotError(map: GameMap, room: Room, objects: RoomObjectSnapshot[]): string | null {
+  const ids = new Set(objects.map((s) => s.id));
+  const conflict = map.rooms.find((r) => r.id !== room.id &&
+    [...r.reset?.objects ?? [], ...r.layouts?.flatMap((l) => l.objects) ?? []].some((s) => ids.has(s.id)));
+  if (conflict) return `物件已属于「${conflict.name}」的排布或复位点，不能跨房间共用`;
+  try { checkRoomObjects(map, objects); return null; } catch (e) { return (e as Error).message; }
+}
+
+/** 编辑房间：命名保存当前位置、状态。返回错误；成功返回 null。 */
+export function saveRoomLayout(mapId: string, roomId: string, name: string, description?: string): string | null {
+  if (getUI().mode !== 'edit' || getUI().trial) return '请在地图编辑中保存排布';
+  const m = findMap(getWorld(), mapId), r = m?.rooms.find((r) => r.id === roomId);
+  if (!m || !r) return '找不到房间';
+  if (!name.trim()) return '请为排布命名';
+  const objects = collectRoomObjects(m, r), error = roomSnapshotError(m, r, objects);
+  if (error) return error;
   update((d) => {
-    const m = findMap(d, mapId);
-    const r = m?.rooms.find((x) => x.id === roomId);
-    if (!m || !r) return;
-    const inside = (o: MapObject) => {
-      for (let y = o.y; y < o.y + o.h; y++)
-        for (let x = o.x; x < o.x + o.w; x++)
-          if (x >= 0 && y >= 0 && x < m.width && y < m.height && m.roomCells[y * m.width + x] === roomId) return true;
-      return false;
-    };
-    r.reset = {
-      at: Date.now(),
-      objects: m.objects.filter((o) => o.kind === 'object' && inside(o)).map((o) => ({ id: o.id, x: o.x, y: o.y, state: o.state })),
-    };
-    log(d, 'note', `记下「${r.name}」的复位点：${r.reset.objects.length} 个物件`, mapId);
+    const room = findMap(d, mapId)!.rooms.find((r) => r.id === roomId)!;
+    (room.layouts ??= []).push({ id: uid(), name: name.trim(), ...(description?.trim() ? { description: description.trim() } : {}), objects });
+  });
+  return null;
+}
+
+export function deleteRoomLayout(mapId: string, roomId: string, layoutId: string): string | null {
+  if (getUI().mode !== 'edit' || getUI().trial) return '请在地图编辑中删除排布';
+  update((d) => {
+    const r = findMap(d, mapId)?.rooms.find((r) => r.id === roomId);
+    if (!r) return;
+    r.layouts = r.layouts?.filter((l) => l.id !== layoutId);
+    if (r.activeLayoutId === layoutId) delete r.activeLayoutId;
+  });
+  return null;
+}
+
+/** 备团选择／显式重新应用：一个 update 同步所有位置、状态、已选项与复位点。 */
+export function applyRoomLayout(mapId: string, roomId: string, layoutId: string): string | null {
+  if (getUI().mode !== 'prep' || getUI().trial) return '只能在备团、非试玩时选择房间排布';
+  const m = findMap(getWorld(), mapId), r = m?.rooms.find((r) => r.id === roomId);
+  const layout = r?.layouts?.find((l) => l.id === layoutId);
+  if (!m || !r || !layout) return '找不到房间排布';
+  const error = roomSnapshotError(m, r, layout.objects);
+  if (error) return error;
+  update((d) => {
+    const map = findMap(d, mapId)!, room = map.rooms.find((r) => r.id === roomId)!;
+    for (const s of layout.objects) Object.assign(map.objects.find((o) => o.id === s.id)!, { x: s.x, y: s.y, state: s.state });
+    room.activeLayoutId = layoutId;
+    room.reset = { at: Date.now(), objects: layout.objects.map((s) => ({ ...s })) };
+    log(d, 'note', `「${room.name}」应用排布「${layout.name}」`, mapId);
+  });
+  return null;
+}
+
+export function captureRoomReset(mapId: string, roomId: string) {
+  const m = findMap(getWorld(), mapId), r = m?.rooms.find((r) => r.id === roomId);
+  if (!m || !r) return;
+  const objects = collectRoomObjects(m, r), error = roomSnapshotError(m, r, objects);
+  if (error) return toast(error);
+  update((d) => {
+    const room = findMap(d, mapId)!.rooms.find((r) => r.id === roomId)!;
+    room.reset = { at: Date.now(), objects };
+    log(d, 'note', `记下「${room.name}」的复位点：${objects.length} 个物件`, mapId);
   });
 }
 
 /** 把房间里的物件挪回复位点记的位置和状态。记录过状态变化的照样记版本号。 */
 export function resetRoom(mapId: string, roomId: string) {
+  const map = findMap(getWorld(), mapId), room = map?.rooms.find((r) => r.id === roomId);
+  if (!map || !room?.reset) return;
+  const error = roomSnapshotError(map, room, room.reset.objects);
+  if (error) return toast(error);
   update((d) => {
     const m = findMap(d, mapId);
     const r = m?.rooms.find((x) => x.id === roomId);
@@ -73,6 +130,33 @@ export function resetRoom(mapId: string, roomId: string) {
     }
     log(d, 'note', `复位「${r.name}」：${n} 个物件回到记录的位置和状态`, mapId);
   });
+}
+
+export function deleteMapObject(mapId: string, objectId: string) {
+  const map = findMap(getWorld(), mapId);
+  if (map?.slidingPuzzles?.some((p) => p.objectIds.includes(objectId) || p.gateId === objectId)) return toast('这是滑块棋盘的块或关联门，请先在工程数据里解除棋盘关联');
+  update((d) => {
+    const m = findMap(d, mapId);
+    if (!m) return;
+    m.objects = m.objects.filter((o) => o.id !== objectId);
+    for (const r of m.rooms) {
+      if (r.reset) r.reset.objects = r.reset.objects.filter((s) => s.id !== objectId);
+      for (const l of r.layouts ?? []) l.objects = l.objects.filter((s) => s.id !== objectId);
+    }
+  });
+  setUI({ selection: null });
+}
+
+/** 同一条规则供方向按钮、坐标输入和 GM 拖动使用。试演只能改当前试演地图。 */
+export function moveSlidingObject(mapId: string, objectId: string, x: number, y: number): string | null {
+  const ui = getUI();
+  if (mapId !== ui.mapId || (ui.trial && mapId !== ui.trial.mapId)) return '只能操作当前地图的滑块';
+  let error: string | null = '找不到地图';
+  update((d) => {
+    const map = findMap(d, mapId);
+    if (map) error = applySlidingMove(d, map, objectId, x, y);
+  });
+  return error;
 }
 
 export function setObjectState(mapId: string, objId: string, idx: number) {
@@ -248,6 +332,9 @@ export function setObjectStates(mapId: string, objId: string, states: string[]) 
     const rev0 = o.stateRev ?? 0, cur = to(o.state);
     const renumbered = cur >= 0 && cur !== o.state;
     o.state = Math.max(0, cur);
+    if (o.blocksWhen) o.blocksWhen = [...new Set(o.blocksWhen.map(to).filter((i) => i >= 0))];
+    for (const r of findMap(d, mapId)!.rooms) for (const s of [...r.reset?.objects ?? [], ...r.layouts?.flatMap((l) => l.objects) ?? []])
+      if (s.id === objId) s.state = Math.max(0, to(s.state));
     if (renumbered) o.stateRev = rev0 + 1;
     for (const f of d.flows) for (const n of f.nodes) {
       if (renumbered && n.applied && n.applied.mapId === mapId && n.applied.objectId === objId && n.applied.rev === rev0) n.applied.rev = rev0 + 1;
@@ -388,6 +475,10 @@ export function reshapeMaps(mapIds: string[], left: number, top: number, right: 
   const maps = mapIds.map((id) => findMap(w0, id)).filter((m): m is GameMap => !!m);
   const bad = maps.filter((m) => { const W = m.width + left + right, H = m.height + top + bottom; return W < 2 || H < 2 || W > 200 || H > 200; });
   if (bad.length) return toast(`改不了：${bad.map((m) => `「${m.name}」`).join('')}改完会小于 2 格或大于 200 格，整批都没改`);
+  const cutPuzzle = maps.find((m) => m.slidingPuzzles?.some((p) => p.x + left < 0 || p.y + top < 0 ||
+    p.x + left + p.w > m.width + left + right || p.y + top + p.h > m.height + top + bottom ||
+    (p.gateId ? [p.gateId] : []).some((id) => { const o = m.objects.find((x) => x.id === id); return !o || o.x + left < 0 || o.y + top < 0 || o.x + left + o.w > m.width + left + right || o.y + top + o.h > m.height + top + bottom; })));
+  if (cutPuzzle) return toast(`改不了：会裁掉「${cutPuzzle.name}」的滑块棋盘或关联门`);
   if (!maps.length || (left === 0 && top === 0 && right === 0 && bottom === 0)) return;
   const ids = new Set(maps.map((m) => m.id));
   let droppedConns: string[] = [];
@@ -421,6 +512,19 @@ export function reshapeMaps(mapIds: string[], left: number, top: number, right: 
       m.objects = m.objects.filter(inside);
       m.tokens = m.tokens.filter(inside);
       m.seen.objects = m.seen.objects.filter(inside);
+      for (const p of m.slidingPuzzles ?? []) {
+        p.x += left; p.y += top;
+        if (p.goal) { p.goal.x += left; p.goal.y += top; }
+      }
+      const shiftSnapshots = (objects: RoomObjectSnapshot[]) => objects.flatMap((s) => {
+        const o = m.objects.find((o) => o.id === s.id);
+        const moved = { ...s, x: s.x + left, y: s.y + top };
+        return o && inside({ ...o, ...moved }) ? [moved] : [];
+      });
+      for (const r of m.rooms) {
+        if (r.reset) r.reset.objects = shiftSnapshots(r.reset.objects);
+        for (const l of r.layouts ?? []) l.objects = shiftSnapshots(l.objects);
+      }
       m.width = W;
       m.height = H;
     }
@@ -461,7 +565,17 @@ export function duplicateMap(mapId: string, layer?: string) {
   const copy: GameMap = structuredClone(src);
   copy.id = uid();
   copy.variantOf = src.id;
-  copy.objects = copy.objects.map((o) => ({ ...o, id: uid() }));
+  const objectIds = new Map(copy.objects.map((o) => [o.id, uid()]));
+  copy.objects = copy.objects.map((o) => ({ ...o, id: objectIds.get(o.id)! }));
+  copy.slidingPuzzles = copy.slidingPuzzles?.map((p) => ({ ...p, id: uid(), objectIds: p.objectIds.map((id) => objectIds.get(id)!),
+    ...(p.targetId ? { targetId: objectIds.get(p.targetId)! } : {}), ...(p.gateId ? { gateId: objectIds.get(p.gateId)! } : {}) }));
+  const remapSnapshots = (objects: RoomObjectSnapshot[]) => objects.flatMap((s) => {
+    const id = objectIds.get(s.id); return id ? [{ ...s, id }] : [];
+  });
+  for (const r of copy.rooms) {
+    if (r.reset) r.reset.objects = remapSnapshots(r.reset.objects);
+    for (const l of r.layouts ?? []) l.objects = remapSnapshots(l.objects);
+  }
   copy.tokens = [];
   copy.fog = copy.fog.map(() => 0);
   copy.seen = { cells: copy.cells.map(() => ''), objects: [] };

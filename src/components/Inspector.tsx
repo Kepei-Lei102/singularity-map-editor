@@ -1,12 +1,13 @@
 import type { Draft } from 'immer';
 import { useState } from 'react';
-import { canEditMap, setUI, update, useUI, useWorld, type UIState } from '../store';
+import { canEditMap, setUI, toast, update, useUI, useWorld, type UIState } from '../store';
 import type { Connection, GameMap, MapObject, Secret, Token, World } from '../types';
 import { CONN_LABEL, TIERS, TIER_LABEL } from '../types';
 import {
   deleteMap, duplicateMap, fillEmptyCells, findMap, giveMapKnowledge, reshapeMaps, setVisionMode, findObj, fireAttach, hideSecret, itemsAt, jumpTo, resizeMap, revealSecret,
-  sameSel, setObjectState, setObjectStates, resetRoom,
+  sameSel, setObjectState, setObjectStates, resetRoom, applyRoomLayout, moveSlidingObject, deleteMapObject,
 } from '../actions';
+import { checkSlidingMove, slidingPuzzleForObject } from '../sliding';
 import { CELL_METERS, nearestPc, type Nearest } from '../perception';
 import { cellName, parseCell, rangeName, uid } from '../util';
 import { MAX_SIDE } from '../schema.js';
@@ -32,6 +33,7 @@ export function Inspector() {
   return (
     <>
       <RoomReset map={map} />
+      <SlidingPuzzles world={w} map={map} ui={ui} />
       <StackList world={w} map={map} ui={ui} />
       {body ?? (
         <>
@@ -45,19 +47,79 @@ export function Inspector() {
 
 /** 记过复位点的房间：带团、试玩时随手把家具和状态挪回去。 */
 function RoomReset({ map }: { map: GameMap }) {
-  const rooms = map.rooms.filter((r) => r.reset);
+  const ui = useUI();
+  const rooms = map.rooms.filter((r) => r.reset || r.layouts?.length);
   if (!rooms.length) return null;
+  const choose = (roomId: string, layoutId: string) => {
+    const error = applyRoomLayout(map.id, roomId, layoutId);
+    if (error) toast(error);
+  };
   return (
-    <Section title="分区复位">
-      {rooms.map((r) => (
-        <div key={r.id} className="btns" style={{ justifyContent: 'space-between' }}>
-          <span>{r.name}</span>
-          <button className="small" onClick={() => resetRoom(map.id, r.id)}>复位</button>
-        </div>
-      ))}
-      <div className="hint">把房间里的推车、隔断、家具挪回记录的位置和状态。复位点在地图编辑的「房间」里记。</div>
+    <Section title="房间排布与复位">
+      {rooms.map((r) => {
+        const active = r.layouts?.find((l) => l.id === r.activeLayoutId);
+        return <div key={r.id} className="card" style={{ borderLeft: `3px solid ${r.color}` }}>
+          <div className="card-title"><b>{r.name}</b><span className="spacer" />
+            {r.reset && <button className="small" onClick={() => resetRoom(map.id, r.id)}>复位</button>}
+          </div>
+          {!!r.layouts?.length && <div className="hint">本场排布：{active?.name ?? '尚未选择'}</div>}
+          {ui.mode === 'prep' && !ui.trial && <>
+            <div role="radiogroup" aria-label={`${r.name}的本场排布`}>
+              {r.layouts?.map((l) => <label key={l.id} className="card" style={{ display: 'block', cursor: 'pointer' }}>
+                <input type="radio" name={`room-layout-${map.id}-${r.id}`} checked={r.activeLayoutId === l.id}
+                  onChange={() => choose(r.id, l.id)} /> {l.name}
+                {l.description && <div className="hint">{l.description}</div>}
+              </label>)}
+            </div>
+            {active && <button className="small" onClick={() => {
+              if (confirm(`重新应用「${active.name}」？将重置当前房间进度，家具的位置和状态会回到这个排布。`)) choose(r.id, active.id);
+            }}>重新应用已选排布</button>}
+            {!!r.layouts?.length && <div className="hint">每个房间本场只选一种。选择会重置当前房间进度，并更新复位点。</div>}
+          </>}
+        </div>;
+      })}
+      <div className="hint">复位恢复家具的位置和状态。编辑地图时在左侧「房间」保存排布；备团时选择本场排布。</div>
     </Section>
   );
+}
+
+/** 棋盘始终可从检查器操作，试玩玩家视角不能直接选图上物件时也能选块。 */
+function SlidingPuzzles({ world, map, ui }: { world: World; map: GameMap; ui: UIState }) {
+  const [message, setMessage] = useState<{ mapId: string; text: string } | null>(null);
+  const allowed = !ui.trial || ui.trial.mapId === map.id;
+  return <>{map.slidingPuzzles?.map((puzzle) => {
+    const selected = ui.selection;
+    const block = selected?.type === 'object' && selected.mapId === map.id && puzzle.objectIds.includes(selected.id)
+      ? map.objects.find((o) => o.id === selected.id) : undefined;
+    const target = map.objects.find((o) => o.id === puzzle.targetId);
+    const solved = puzzle.goal && target?.x === puzzle.goal.x && target?.y === puzzle.goal.y;
+    return <Section key={puzzle.id} title={`滑块棋盘 · ${puzzle.name}`}>
+      <div className="kv">边界 {rangeName(puzzle)}{puzzle.goal ? ` · 目标左上角 ${cellName(puzzle.goal.x, puzzle.goal.y)}${solved ? ' · 已到位，门已打开' : ''}` : ' · 腾挪书架，实际走通通道'}</div>
+      <div className="chips">
+        {puzzle.objectIds.map((id) => {
+          const o = map.objects.find((x) => x.id === id);
+          return o && <button key={id} className={block?.id === id ? 'chip on' : 'chip'} disabled={!allowed}
+            onClick={() => { setMessage(null); setUI({ selection: { type: 'object', mapId: map.id, id } }); }}>
+            {o.name}{id === puzzle.targetId ? '（目标）' : ''} · {cellName(o.x, o.y)} · {o.w}×{o.h}
+          </button>;
+        })}
+      </div>
+      <div className="btns">
+        {([['上', 0, -1], ['下', 0, 1], ['左', -1, 0], ['右', 1, 0]] as const).map(([label, dx, dy]) => {
+          const error = block ? checkSlidingMove(world, map, block.id, block.x + dx, block.y + dy) : '先选一个滑块';
+          return <button key={label} disabled={!allowed || !!error} title={error ?? `向${label}移一格`}
+            onClick={() => {
+              if (!block) return;
+              const error = moveSlidingObject(map.id, block.id, block.x + dx, block.y + dy);
+              setMessage({ mapId: map.id, text: error ?? `${block.name}向${label}移动一格` });
+            }}>{label}</button>;
+        })}
+      </div>
+      {message?.mapId === map.id && <div role="status" className="hint">{message.text}</div>}
+      <div className="hint">选块后按方向按钮，每次平移一格，不旋转。灰色按钮的提示说明阻挡原因。人物不必站在推动侧，沉重只表示费力；不能把书架移到人物身上。{puzzle.goal ? '目标块到位开门，移开关门。' : '腾挪书架，实际走通通道。'}</div>
+      {!allowed && <div className="hint">试玩时只能操作当前试玩地图的棋盘。</div>}
+    </Section>;
+  })}</>;
 }
 
 /** 一格多物：列出这一格上的所有东西。 */
@@ -204,6 +266,7 @@ function ObjectInspector({ world, mapId, o, ui }: { world: World; mapId: string;
   const [privTo, setPrivTo] = useState('');
   const isZone = o.kind === 'zone';
   const map = findMap(world, mapId)!;
+  const puzzle = slidingPuzzleForObject(map, o.id);
   const mapW = map.width, mapH = map.height;
   const near = run ? nearestPc(world, map, o) : null;
   const upSecret = (id: string, fn: (s: Draft<Secret>) => void, key?: string) =>
@@ -212,28 +275,28 @@ function ObjectInspector({ world, mapId, o, ui }: { world: World; mapId: string;
   return (
     <>
       <Section title={isZone ? '触发区' : '物件'} extra={edit && (
-        <button className="danger small" onClick={() => {
-          update((d) => { const m = findMap(d, mapId)!; m.objects = m.objects.filter((x) => x.id !== o.id); });
-          setUI({ selection: null });
-        }}>删除</button>
+        <button className="danger small" onClick={() => deleteMapObject(mapId, o.id)}>删除</button>
       )}>
         {edit ? (
           <>
             <Row label="名字"><Txt value={o.name} onChange={(v) => up((x) => { x.name = v; }, 'name')} /></Row>
             {!isZone && <Row label="图标"><Txt value={o.icon} placeholder="可填 emoji" onChange={(v) => up((x) => { x.icon = v; }, 'icon')} /></Row>}
             <Row label="颜色"><input type="color" value={o.color} onChange={(e) => up((x) => { x.color = e.target.value; }, 'color')} /></Row>
-            <Row label="位置"><CellInput x={o.x} y={o.y} onChange={(p) => up((x) => { x.x = clampInt(p.x, 0, mapW - 1); x.y = clampInt(p.y, 0, mapH - 1); })} /></Row>
+            <Row label="位置"><CellInput x={o.x} y={o.y} onChange={(p) => {
+              if (puzzle) { const error = moveSlidingObject(mapId, o.id, p.x, p.y); if (error) toast(error); }
+              else up((x) => { x.x = clampInt(p.x, 0, mapW - 1); x.y = clampInt(p.y, 0, mapH - 1); });
+            }} /></Row>
             <Row label="大小">
-              <span className="inline">
+              {puzzle ? <span>{o.w}×{o.h}（滑块不旋转）</span> : <span className="inline">
                 <Num value={o.w} min={1} max={MAX_SIDE} onChange={(v) => up((x) => { x.w = clampInt(v, 1, MAX_SIDE); })} />×
                 <Num value={o.h} min={1} max={MAX_SIDE} onChange={(v) => up((x) => { x.h = clampInt(v, 1, MAX_SIDE); })} />
-              </span>
+              </span>}
             </Row>
             {!isZone && <Row label="高度 (m)"><Num value={o.height} step={0.1} min={0} onChange={(v) => up((x) => { x.height = Number.isFinite(v) ? Math.min(1000, Math.max(0, v)) : 0; })} /></Row>}
             {!isZone && <Check label="对玩家隐藏" value={o.hidden} onChange={(v) => up((x) => { x.hidden = v; })} />}
             {!isZone && <Check label="可推动（推书架／推车）" value={!!o.pushable} onChange={(v) => up((x) => { if (v) x.pushable = true; else delete x.pushable; })} />}
-            {!isZone && o.pushable && <Check label="沉重：要两个人一起推" value={!!o.heavy} onChange={(v) => up((x) => { if (v) x.heavy = true; else delete x.heavy; })} />}
-            {!isZone && o.pushable && <div className="hint">试玩时朝着它走过去，整件东西会向同方向挪一格；后面有墙、家具或人时推不动。勾了"沉重"就还要另一个棋子贴着它，才推得动。带团时仍可直接拖动。</div>}
+            {!isZone && o.pushable && !puzzle && <Check label="沉重：要两个人一起推" value={!!o.heavy} onChange={(v) => up((x) => { if (v) x.heavy = true; else delete x.heavy; })} />}
+            {!isZone && o.pushable && !puzzle && <div className="hint">试玩时朝着它走过去，整件东西会向同方向挪一格；后面有墙、家具或人时推不动。勾了"沉重"就还要另一个棋子贴着它，才推得动。带团时仍可直接拖动。</div>}
             <Row label="主持人备注"><Area value={o.notes} onChange={(v) => up((x) => { x.notes = v; }, 'notes')} /></Row>
           </>
         ) : (
