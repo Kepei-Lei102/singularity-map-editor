@@ -361,6 +361,7 @@ export function checkWorld(w, migrated = false) {
           const la = `${ra}.layouts[${i}]`;
           obj(layout, la); id(layout.id, `${la}.id`); str(layout.name, `${la}.name`);
           if (layout.description !== undefined) str(layout.description, `${la}.description`);
+          optBool(layout.interactive, `${la}.interactive`);
           if (layout.doors !== undefined) { arr(layout.doors, `${la}.doors`).forEach(d => { obj(d, la); id(d.id, la); bool(d.open, la); }); unique(layout.doors, `${la}.doors`); }
           arr(layout.objects, `${la}.objects`);
           snapshots.push(layout.objects);

@@ -9,6 +9,7 @@ import { captureRoomReset, resetRoom, saveRoomLayout, deleteRoomLayout, paintFog
 
 const ALL_TOOLS: [Tool, string, string][] = [
   ['select', '选择/移动', 'V'],
+  ['pan', '平移地图', 'P'],
   ['subdivide', '细分为3×3', ''],
   ['unsubdivide', '取消细分', ''],
   ['wall', '薄墙', ''],
@@ -30,9 +31,9 @@ const ALL_TOOLS: [Tool, string, string][] = [
 ];
 // 编辑地图 = 形状；备团 = 内容（棋子初始位置、初始迷雾）；带团 = 跑
 export const MODE_TOOLS: Record<Mode, Tool[]> = {
-  edit: ['subdivide', 'unsubdivide', 'wall', 'glass', 'archDoor', 'archErase', 'select', 'paint', 'fill', 'erase', 'object', 'zone', 'conn', 'room', 'd100'],
-  prep: ['select', 'token', 'fogReveal', 'fogHide', 'fogBlack'],
-  run: ['select', 'token', 'fogReveal', 'fogHide', 'fogBlack'],
+  edit: ['pan', 'subdivide', 'unsubdivide', 'wall', 'glass', 'archDoor', 'archErase', 'select', 'paint', 'fill', 'erase', 'object', 'zone', 'conn', 'room', 'd100'],
+  prep: ['select', 'pan', 'token', 'fogReveal', 'fogHide', 'fogBlack'],
+  run: ['select', 'pan', 'token', 'fogReveal', 'fogHide', 'fogBlack'],
 };
 /** 当前能用的工具：解锁时把"编辑地图"的工具也加进来。 */
 export const toolsFor = (s: UIState): Tool[] =>
@@ -78,6 +79,7 @@ export function Sidebar() {
               onClick={() => setUI({ tool: t, pendingConn: null })}>{label}</button>
           ))}
         </div>
+        {ui.tool === 'pan' && <div className="hint">直接拖动地图平移；从家具、触发区或棋子上拖动也只移动视图，不改变选择。P 切到平移，V 回到选择/移动。</div>}
         {ui.tool.startsWith('fog') && <Row label="迷雾目标"><select value={ui.knowledgeTarget} onChange={e => setUI({ knowledgeTarget: e.target.value })}>
           <option value="">全队</option>{w.party.map(p => <option key={p.id} value={p.id}>{p.name}{w.visionMode === 'grouped' ? ' 所在组' : ''}</option>)}
         </select></Row>}

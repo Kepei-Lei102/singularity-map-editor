@@ -3,7 +3,7 @@ import { checkArchitecture } from './schema.js';
 import type { Draft } from 'immer';
 import JSZip from 'jszip';
 import { getUI, getWorld, reachableWorlds, replaceWorld, setUI, toast, update, worldContext, type Selection } from './store';
-import { pcWithin, seesPoint, sightCosts } from './perception';
+import { blocksMovement, pcWithin, seesPoint, sightCosts } from './perception';
 import type { Flow, GameMap, LogEntry, MapObject, MediaAttach, Room, RoomObjectSnapshot, Tier, World } from './types';
 import { newObject } from './defaults';
 import { NODE_H, NODE_W } from './flow';
@@ -82,20 +82,42 @@ export function deleteRoomLayout(mapId: string, roomId: string, layoutId: string
   return null;
 }
 
-/** 备团选择／显式重新应用：一个 update 同步所有位置、状态、已选项与复位点。 */
+/** Interactive arrangements validate final destinations, not an imagined carrying path. */
+function interactiveLayoutError(world: World, map: GameMap, objects: RoomObjectSnapshot[]): string | null {
+  const snapshots = new Map(objects.map(s => [s.id, s]));
+  const projected = map.objects.map(o => ({ ...o, ...snapshots.get(o.id) }));
+  const overlap = (a: { x: number; y: number; w: number; h: number }, b: { x: number; y: number; w: number; h: number }) =>
+    a.x < b.x + b.w - 1e-8 && a.x + a.w > b.x + 1e-8 && a.y < b.y + b.h - 1e-8 && a.y + a.h > b.y + 1e-8;
+  const walls = new Set(world.terrains.filter(t => t.blocksMove).map(t => t.id));
+  for (const o of projected.filter(o => snapshots.has(o.id) && !isArchitectureObject(o) && blocksMovement(o))) {
+    for (let y = o.y; y < o.y + o.h; y++) for (let x = o.x; x < o.x + o.w; x++)
+      if (walls.has(map.cells[y * map.width + x])) return `「${o.name}」的目标排布被地形挡住了`;
+    if (projected.some(other => other.id !== o.id && other.kind === 'object' && !isArchitectureObject(other) && blocksMovement(other) && overlap(o, other)))
+      return `「${o.name}」的目标排布与挡路物件相交`;
+    if (map.tokens.some(t => { const p = tokenPosition(t); return overlap(o, { x: p.x - 1 / 3, y: p.y - 1 / 3, w: 2 / 3, h: 2 / 3 }); }))
+      return `「${o.name}」的目标排布有人，请先让开`;
+  }
+  return null;
+}
+
+/** Ordinary layouts are preparation choices; interactive layouts also run as mechanisms. */
 export function applyRoomLayout(mapId: string, roomId: string, layoutId: string): string | null {
-  if (getUI().mode !== 'prep' || getUI().trial) return '只能在备团、非试玩时选择房间排布';
-  const m = findMap(getWorld(), mapId), r = m?.rooms.find((r) => r.id === roomId);
-  const layout = r?.layouts?.find((l) => l.id === layoutId);
+  const ui = getUI();
+  const world = getWorld(), m = findMap(world, mapId), r = m?.rooms.find(r => r.id === roomId);
+  const layout = r?.layouts?.find(l => l.id === layoutId);
   if (!m || !r || !layout) return '找不到房间排布';
-  const error = roomSnapshotError(m, r, layout.objects);
+  const preparation = ui.mode === 'prep' && !ui.trial;
+  const running = ui.mode === 'run' || !!ui.trial;
+  if (!preparation && !(layout.interactive && running)) return '普通排布只能在备团、非试玩时选择；带团或试玩仅可切换互动排布';
+  if (ui.trial && ui.trial.mapId !== mapId) return '只能操作当前试玩地图的互动排布';
+  const error = roomSnapshotError(m, r, layout.objects) ?? (layout.interactive ? interactiveLayoutError(world, m, layout.objects) : null);
   if (error) return error;
-  update((d) => {
-    const map = findMap(d, mapId)!, room = map.rooms.find((r) => r.id === roomId)!;
-    for (const s of layout.objects) Object.assign(map.objects.find((o) => o.id === s.id)!, { x: s.x, y: s.y, state: s.state });
+  update(d => {
+    const map = findMap(d, mapId)!, room = map.rooms.find(r => r.id === roomId)!;
+    for (const snap of layout.objects) Object.assign(map.objects.find(o => o.id === snap.id)!, { x: snap.x, y: snap.y, state: snap.state });
     room.activeLayoutId = layoutId;
-    room.reset = { at: Date.now(), objects: layout.objects.map((s) => ({ ...s })) };
-    log(d, 'note', `「${room.name}」应用排布「${layout.name}」`, mapId);
+    if (preparation) room.reset = { at: Date.now(), objects: layout.objects.map(s => ({ ...s })) };
+    log(d, 'note', `「${room.name}」${layout.interactive ? '切换互动排布' : '应用排布'}「${layout.name}」`, mapId);
   });
   return null;
 }
@@ -133,6 +155,12 @@ export function resetRoom(mapId: string, roomId: string) {
       if (restated) { o.state = s.state; o.stateRev = (o.stateRev ?? 0) + 1; }
       n++;
     }
+    const matching = (r.layouts ?? []).filter(layout => layout.objects.length > 0 && layout.objects.every(s => {
+      const o = m.objects.find(o => o.id === s.id);
+      return o && o.x === s.x && o.y === s.y && o.state === s.state;
+    }));
+    // Prefer the current name when equivalent layouts share an exact arrangement.
+    r.activeLayoutId = matching.find(layout => layout.id === r.activeLayoutId)?.id ?? matching[0]?.id;
     log(d, 'note', `复位「${r.name}」：${n} 个物件回到记录的位置和状态`, mapId);
   });
 }

@@ -170,6 +170,8 @@ export function MapCanvas({ world, map, mode, playerNumbers = false, follow, vie
     if (e.button !== 0 || space.current) return startPan();
 
     const s = getUI();
+    // 平移工具先于任何命中/选择/编辑逻辑；从家具、触发区边框或棋子起拖都一样。
+    if (mode !== 'player' && s.tool === 'pan') return startPan();
     const w = mode === 'player' && !s.trial ? world : getWorld();
     const m = findMap(w, map.id) ?? map;
     // 试玩允许直接拖棋盘块；独立玩家窗口仍只平移，标记模式仍交给点击处理。
@@ -342,7 +344,8 @@ export function MapCanvas({ world, map, mode, playerNumbers = false, follow, vie
   };
 
   // 拖到一半切走了（换模式、换地图、关面板）：丢掉这次拖动并收尾，免得之后的修改都不进撤销
-  useEffect(() => { drag.current = null; endBatch(); }, [mode, map.id]);
+  // 换工具也终止旧拖动，保证切到平移后不会继续移动刚才抓住的对象。
+  useEffect(() => { drag.current = null; endBatch(); setPreview(null); }, [mode, map.id, ui.tool]);
   useEffect(() => () => endBatch(), []);
 
   const onUp = (e: React.PointerEvent) => {
@@ -389,7 +392,7 @@ export function MapCanvas({ world, map, mode, playerNumbers = false, follow, vie
     }
   };
 
-  const cursor = cursorProp ?? (mode === 'player' ? (onCellClick ? 'pointer' : 'grab') : ui.tool === 'select' ? 'default' : 'crosshair');
+  const cursor = cursorProp ?? (mode === 'player' ? (onCellClick ? 'pointer' : 'grab') : ui.tool === 'pan' ? 'grab' : ui.tool === 'select' ? 'default' : 'crosshair');
   return (
     <div ref={wrap} className="canvas-wrap">
       <canvas

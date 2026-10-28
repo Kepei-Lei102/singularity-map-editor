@@ -210,12 +210,19 @@ function drawObject(ctx: CanvasRenderingContext2D, o: MapObject, player: boolean
   if (outlined) { ctx.strokeStyle = 'rgba(18,18,24,0.8)'; ctx.lineWidth = 1 / zoom; ctx.lineJoin = 'round'; }
   const label = (text: string, x: number, y: number) => { if (outlined) ctx.strokeText(text, x, y); ctx.fillText(text, x, y); };
   if (big) {
+    const width = W - 10;
+    const lineHeight = 12;
+    // Bottom padding and the height footer never belong to the name/state text area.
+    const rows = Math.max(0, Math.floor((H - 10 - (o.height > 0 ? 10 : 0)) / lineHeight));
+    const state = o.states.length > 1 ? `[${o.states[o.state] ?? ''}]` : '';
     ctx.font = '600 10px system-ui, sans-serif';
-    label((o.icon ? o.icon + ' ' : '') + o.name, X + 5, Y + 13);
+    const nameLines = wrapLabel(ctx, (o.icon ? o.icon + ' ' : '') + o.name, width, Math.max(0, rows - (state && rows > 1 ? 1 : 0)));
+    nameLines.forEach((line, i) => label(line, X + 5, Y + 13 + i * lineHeight));
     ctx.font = '9px system-ui, sans-serif';
-    if (o.states.length > 1) label(`[${o.states[o.state] ?? ''}]`, X + 5, Y + 24);
+    const stateLines = wrapLabel(ctx, state, width, rows - nameLines.length);
+    stateLines.forEach((line, i) => label(line, X + 5, Y + 13 + (nameLines.length + i) * lineHeight));
     if (o.height > 0) {
-      const t = `${o.height}m`;
+      const t = fitLabel(ctx, `${o.height}m`, width);
       label(t, X + W - 5 - ctx.measureText(t).width, Y + H - 5);
     }
   } else {
@@ -285,11 +292,37 @@ function cellsPath(map: GameMap, x0: number, y0: number, x1: number, y1: number,
   return p;
 }
 
+// Keep combining marks and emoji sequences intact when wrapping or shortening text.
+const segmenter = (Intl as typeof Intl & {
+  Segmenter?: new (locale?: string, options?: { granularity: string }) => { segment(text: string): Iterable<{ segment: string }> };
+}).Segmenter;
+const labelSegmenter = segmenter ? new segmenter(undefined, { granularity: 'grapheme' }) : null;
+function labelChars(text: string) {
+  return labelSegmenter ? Array.from(labelSegmenter.segment(text), part => part.segment) : Array.from(text);
+}
+
 function fitLabel(ctx: CanvasRenderingContext2D, text: string, width: number) {
+  if (width <= 0) return '';
   if (ctx.measureText(text).width <= width) return text;
-  let clipped = text;
-  while (clipped && ctx.measureText(clipped + '…').width > width) clipped = clipped.slice(0, -1);
-  return clipped + '…';
+  if (ctx.measureText('…').width > width) return '';
+  const chars = labelChars(text);
+  while (chars.length && ctx.measureText(chars.join('') + '…').width > width) chars.pop();
+  return chars.join('') + '…';
+}
+
+/** Canvas widths are measured in the same map coordinates as the object rectangle. */
+function wrapLabel(ctx: CanvasRenderingContext2D, text: string, width: number, maxLines: number): string[] {
+  if (!text || width <= 0 || maxLines < 1) return [];
+  const lines: string[] = [];
+  let line = '';
+  for (const char of labelChars(text)) {
+    if (char === '\n' || ctx.measureText(line + char).width > width) {
+      if (lines.length === maxLines - 1) return [...lines, fitLabel(ctx, line + '…', width)];
+      lines.push(line);
+      line = char === '\n' ? '' : char;
+    } else line += char;
+  }
+  return [...lines, fitLabel(ctx, line, width)];
 }
 
 function drawZone(ctx: CanvasRenderingContext2D, o: MapObject, active: boolean, zoom: number) {

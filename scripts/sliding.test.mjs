@@ -659,3 +659,94 @@ test('component edits cannot bypass safe closing and cropped static geometry is 
   assert.equal(JSON.stringify(api.getWorld()), before);
   api.reshapeMaps([map.id], -5, 0, 0, 0); assert.equal(JSON.stringify(api.getWorld()), before);
 });
+
+
+function interactiveFixture() {
+  const world = api.emptyWorld(), map = api.newMap('桌游机关', '现实', 0, 12, 10, 'floor', false);
+  map.autoFog = false; world.maps = [map];
+  const specs = [['left-table',4,4,2,2],['right-table',6,4,2,2],['chair-a',4,3,1,1],['chair-b',7,3,1,1],['chair-c',4,6,1,1],['chair-d',7,6,1,1]];
+  map.objects = specs.map(([id,x,y,w,h]) => ({...api.newObject('object',x,y,w,h),id,height:1,states:['收起','就位'],state:0}));
+  const joined = map.objects.map(o=>({id:o.id,x:o.x,y:o.y,state:0}));
+  const separateX = [3,7,3,7,3,7];
+  const separated = joined.map((s,i)=>({...s,x:separateX[i],state:i===0?1:0}));
+  const room = {id:'games',name:'桌游桌',color:'#fff',note:'',tags:[],activeLayoutId:'game-joined',reset:{at:123,objects:structuredClone(joined)},layouts:[
+    {id:'game-joined',name:'合桌',interactive:true,objects:joined},
+    {id:'game-separated',name:'分桌',interactive:true,objects:separated},
+    {id:'prep-only',name:'普通备团排布',objects:joined},
+  ]};
+  map.rooms=[room]; map.roomCells.fill(room.id);
+  return {world,map,room};
+}
+
+test('interactive table arrangements run atomically, keep reset, bump state revisions and undo/redo as one action', () => {
+  const {world,map}=interactiveFixture(); install(world); api.setUI({mode:'run'});
+  const reset=structuredClone(api.getWorld().maps[0].rooms[0].reset);
+  assert.equal(api.applyRoomLayout(map.id,'games','game-separated'),null);
+  let m=api.getWorld().maps[0];assert.deepEqual(m.objects.map(o=>o.x),[3,7,3,7,3,7]);
+  assert.equal(m.rooms[0].activeLayoutId,'game-separated');assert.deepEqual(m.rooms[0].reset,reset);assert.equal(m.objects[0].stateRev,1);
+  api.undo();m=api.getWorld().maps[0];assert.deepEqual(m.objects.map(o=>o.x),[4,6,4,7,4,7]);assert.equal(m.rooms[0].activeLayoutId,'game-joined');
+  api.redo();assert.equal(api.getWorld().maps[0].objects[0].stateRev,1);
+  assert.equal(api.applyRoomLayout(map.id,'games','game-joined'),null);assert.equal(api.getWorld().maps[0].objects[0].stateRev,2);
+  assert.deepEqual(api.getWorld().maps[0].rooms[0].reset,reset);
+  const before=api.getWorld();assert.match(api.applyRoomLayout(map.id,'games','prep-only'),/备团/);assert.equal(api.getWorld(),before);
+  api.setUI({mode:'prep'});assert.equal(api.applyRoomLayout(map.id,'games','game-separated'),null);
+  assert.deepEqual(api.getWorld().maps[0].rooms[0].reset.objects,api.getWorld().maps[0].rooms[0].layouts[1].objects);
+});
+
+test('interactive destination occupancy rejects the whole batch and allows edge touching and nonblocking decorations', () => {
+  for (const obstacle of ['object','person','terrain','geometry']) {
+    const {world,map}=interactiveFixture();
+    if(obstacle==='object')map.objects.push({...api.newObject('object',3,4,1,1),id:'blocker',height:1});
+    if(obstacle==='person')map.tokens.push({id:'person',pcId:null,name:'人',color:'#fff',x:3,y:4});
+    if(obstacle==='terrain')map.cells[4*map.width+3]='wall';
+    if(obstacle==='geometry'){
+      map.subdivisions=Array.from({length:map.width*map.height},(_,i)=>i);
+      map.objects.push({...api.newObject('object',3,4,1,1),id:'thin',geometry:{kind:'wall',a:{x:10,y:12},b:{x:10,y:15},thickness:100,material:'wall'}});
+    }
+    install(world);api.setUI({mode:'run'});const before=api.getWorld();
+    assert.ok(api.applyRoomLayout(map.id,'games','game-separated'));assert.equal(api.getWorld(),before,obstacle+' must not partially move tables/chairs');
+  }
+  const {world,map}=interactiveFixture();
+  map.objects.push(api.newObject('zone',3,4,2,2),{...api.newObject('object',3,4,1,1),height:0},
+    {...api.newObject('object',3,4,1,1),height:3,blocksWhen:[]},
+    {...api.newObject('object',3,4,1,1),height:3,physical:{blocksMove:false}},
+    {...api.newObject('object',2,4,1,2),height:1}); // touches destination edge only
+  install(world);api.setUI({mode:'run'});assert.equal(api.applyRoomLayout(map.id,'games','game-separated'),null);
+  assert.equal(api.applyRoomLayout(map.id,'games','game-joined'),null); // two 2x2 tables touch, not intersect
+});
+
+test('interactive final projection permits swaps without carrying-path checks but obeys physical state blockers', () => {
+  const {world,map,room}=interactiveFixture();
+  room.layouts[1].objects[0].x=6;room.layouts[1].objects[1].x=4;
+  install(world);api.setUI({mode:'run'});assert.equal(api.applyRoomLayout(map.id,'games','game-separated'),null);
+  for(const blocker of [{height:0,physical:{blocksMove:true}},{height:0,blocksWhen:[0],state:0}]) {
+    const f=interactiveFixture();f.map.objects.push({...api.newObject('object',3,4,1,1),...blocker});install(f.world);api.setUI({mode:'run'});
+    assert.match(api.applyRoomLayout(f.map.id,'games','game-separated'),/相交/);
+  }
+});
+
+test('interactive layout works in the current trial sandbox and ending trial restores arrangement and reset', () => {
+  const {world,map}=interactiveFixture();map.spawn={x:0,y:0};install(world);api.startTrial();
+  assert.equal(api.applyRoomLayout(map.id,'games','game-separated'),null);assert.equal(api.getWorld().maps[0].objects[0].x,3);
+  assert.equal(api.getWorld().maps[0].rooms[0].reset.at,123);
+  api.endTrial();assert.equal(api.getWorld().maps[0].objects[0].x,4);assert.equal(api.getWorld().maps[0].rooms[0].activeLayoutId,'game-joined');
+  api.setUI({mode:'edit'});assert.match(api.applyRoomLayout(map.id,'games','game-separated'),/备团/);
+});
+
+test('interactive is an optional boolean in project schema; old ordinary layouts remain compatible', () => {
+  const {world}=interactiveFixture();api.checkWorld(world,true);
+  const malformed=structuredClone(world);malformed.maps[0].rooms[0].layouts[0].interactive='true';assert.throws(()=>api.checkWorld(malformed,true),/interactive/);
+  delete world.maps[0].rooms[0].layouts[0].interactive;api.checkWorld(world,true);
+});
+
+
+test('room reset reconciles the active interactive layout with restored positions and state, or clears it', () => {
+  const {world,map}=interactiveFixture();install(world);api.setUI({mode:'run'});
+  assert.equal(api.applyRoomLayout(map.id,'games','game-separated'),null);
+  api.resetRoom(map.id,'games');let m=api.getWorld().maps[0];
+  assert.equal(m.rooms[0].activeLayoutId,'game-joined');assert.equal(m.objects[0].x,4);assert.equal(m.objects[0].state,0);
+  api.undo();assert.equal(api.getWorld().maps[0].rooms[0].activeLayoutId,'game-separated');assert.equal(api.getWorld().maps[0].objects[0].x,3);
+  api.redo();assert.equal(api.getWorld().maps[0].rooms[0].activeLayoutId,'game-joined');
+  api.update(d=>{d.maps[0].rooms[0].reset.objects[0].x=1;});
+  api.resetRoom(map.id,'games');m=api.getWorld().maps[0];assert.equal(m.objects[0].x,1);assert.equal(m.rooms[0].activeLayoutId,undefined);
+});

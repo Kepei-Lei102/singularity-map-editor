@@ -78,7 +78,7 @@ export interface MapObject {
 }
 
 export interface RoomObjectSnapshot { id: Id; x: number; y: number; state: number }
-export interface RoomLayout { id: Id; name: string; description?: string; objects: RoomObjectSnapshot[]; doors?: { id: Id; open: boolean }[] }
+export interface RoomLayout { id: Id; name: string; description?: string; interactive?: boolean; objects: RoomObjectSnapshot[]; doors?: { id: Id; open: boolean }[] }
 
 /** 房间：按格子刷出来的命名区域。tags 预留给十二宫、八门等对应关系。 */
 export interface Room {

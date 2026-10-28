@@ -167,7 +167,7 @@ function Editor() {
             <div className="map-badge">{map.layer} · F{map.floor} · {map.name}　<span className="muted">{map.width}×{map.height}</span></div>
             <button className="fit-btn" title="把整张图缩放到可见范围" onClick={() => setUI((st) => { const v = { ...st.views }; delete v[map.id]; return { views: v }; })}>⤢ 适配</button>
             {ui.pendingConn && <div className="banner">正在连线：起点在「{findMap(world, ui.pendingConn.mapId)?.name}」{cellName(ui.pendingConn.x, ui.pendingConn.y)}，点终点（可以先切到别的地图），Esc 取消</div>}
-            <div className="help">滚轮缩放 · 空格+拖动 / 右键拖动 平移 · 双击连接点跳转</div>
+            <div className="help">滚轮缩放 · P 平移地图 · 空格+拖动 / 右键拖动 平移 · 双击连接点跳转</div>
             <MediaDock />
         
           </div>

@@ -168,7 +168,7 @@ export const useWorld = () => useSyncExternalStore(subscribe, getWorld);
 // ---------- 界面状态（不进历史、不保存） ----------
 
 export type Tool =
-  | 'select' | 'paint' | 'fill' | 'erase' | 'object' | 'zone' | 'conn' | 'token'
+  | 'select' | 'pan' | 'paint' | 'fill' | 'erase' | 'object' | 'zone' | 'conn' | 'token'
   | 'subdivide' | 'unsubdivide' | 'wall' | 'glass' | 'archDoor' | 'archErase'
   | 'd100' | 'room' | 'fogReveal' | 'fogHide' | 'fogBlack';
 

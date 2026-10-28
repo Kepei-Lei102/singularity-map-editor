@@ -76,6 +76,12 @@ function RoomReset({ map }: { map: GameMap }) {
             {r.reset && <button className="small" onClick={() => resetRoom(map.id, r.id)}>复位</button>}
           </div>
           {!!r.layouts?.length && <div className="hint">本场排布：{active?.name ?? '尚未选择'}</div>}
+          {(ui.mode === 'run' || ui.trial) && r.layouts?.some(l => l.interactive) && <>
+            <div className="btns">{r.layouts.filter(l => l.interactive).map(l => <button key={l.id} className={r.activeLayoutId === l.id ? 'small on' : 'small'}
+              title={l.description} onClick={() => choose(r.id, l.id)}>{l.name}</button>)}</div>
+            <div className="hint">互动排布：一次切换到目标位置，不模拟搬运路径；目标被人物或挡路物件占用时拒绝，保留原复位点。</div>
+          </>}
+          {ui.trial && r.layouts?.some(l => l.interactive) && <div className="hint">试玩同样可在右侧「检查器」切换；关闭右侧面板时按 ] 展开。</div>}
           {ui.mode === 'prep' && !ui.trial && <>
             <div role="radiogroup" aria-label={`${r.name}的本场排布`}>
               {r.layouts?.map((l) => <label key={l.id} className="card" style={{ display: 'block', cursor: 'pointer' }}>
