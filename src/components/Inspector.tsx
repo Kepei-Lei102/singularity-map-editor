@@ -35,6 +35,14 @@ export function Inspector() {
   }
   return (
     <>
+      {body}
+      <StackList world={w} map={map} ui={ui} />
+      {!body && (
+        <>
+          {sel?.type === 'cell' && sel.mapId === map.id && <CellInfo world={w} map={map} x={sel.x} y={sel.y} />}
+          <MapInspector world={w} map={map} editable={canEditMap(ui)} />
+        </>
+      )}
       <RoomReset map={map} />
       <Section title="建筑层">
         {!ui.trial && canEditMap(ui) && sel?.type === 'cell' && <div className="btns"><button onClick={() => { const e = subdivideRegion(map.id, { x: sel.x, y: sel.y, w: 1, h: 1 }); if (e) toast(e); }}>此格细分为3×3</button><button onClick={() => { const e = subdivideRegion(map.id, { x: sel.x, y: sel.y, w: 1, h: 1 }, true); if (e) toast(e); }}>取消细分</button></div>}
@@ -47,13 +55,6 @@ export function Inspector() {
         </div>)}
       </Section>
       <SlidingPuzzles world={w} map={map} ui={ui} />
-      <StackList world={w} map={map} ui={ui} />
-      {body ?? (
-        <>
-          {sel?.type === 'cell' && sel.mapId === map.id && <CellInfo world={w} map={map} x={sel.x} y={sel.y} />}
-          <MapInspector world={w} map={map} editable={canEditMap(ui)} />
-        </>
-      )}
     </>
   );
 }
@@ -337,6 +338,49 @@ function ObjectInspector({ world, mapId, o, ui }: { world: World; mapId: string;
         )}
       </Section>
 
+      <Section title="多媒体" extra={edit && world.media.length > 0 && (
+        <button className="small" onClick={() => up((x) => {
+          x.media.push({ id: uid(), mediaId: world.media[0].id, label: '', trigger: isZone ? 'enter' : 'manual', broadcast: true, once: false });
+        })}>＋</button>
+      )}>
+        {o.media.length === 0 && <div className="hint">没有。{edit && world.media.length === 0 && '先去「媒体库」上传，再回来挂上。'}</div>}
+        {o.media.map((a) => {
+          const set = (fn: (y: Draft<MapObject['media'][number]>) => void, key?: string) =>
+            up((x) => { fn(x.media.find((y) => y.id === a.id)!); }, key);
+          const meta = world.media.find((m) => m.id === a.mediaId);
+          return (
+            <div key={a.id} className="card">
+              {edit ? (
+                <>
+                  <div className="inline">
+                    <select value={a.mediaId} onChange={(e) => set((y) => { y.mediaId = e.target.value; })}>
+                      {world.media.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
+                    </select>
+                    <button className="danger small" onClick={() => up((x) => { x.media = x.media.filter((y) => y.id !== a.id); })}>×</button>
+                  </div>
+                  <Row label="标签"><Txt value={a.label} placeholder={meta?.name} onChange={(v) => set((y) => { y.label = v; }, 'ml' + a.id)} /></Row>
+                  <Row label="触发">
+                    <select value={a.trigger} onChange={(e) => set((y) => { y.trigger = e.target.value as 'manual' | 'enter'; })}>
+                      <option value="manual">主持人手动</option>
+                      <option value="enter">棋子走进来自动播</option>
+                    </select>
+                  </Row>
+                  <div className="inline">
+                    <Check label="同步给玩家" value={a.broadcast} onChange={(v) => set((y) => { y.broadcast = v; })} />
+                    <Check label="只触发一次" value={a.once} onChange={(v) => set((y) => { y.once = v; y.fired = false; })} />
+                  </div>
+                </>
+              ) : (
+                <div className="list-row">
+                  <span>{a.label || meta?.name || '（丢失的文件）'}{a.trigger === 'enter' && ' · 自动'}{a.fired && ' · 已触发'}</span>
+                </div>
+              )}
+              {run && <button className="small" onClick={() => fireAttach(mapId, o.id, a)}>▶ 播放</button>}
+            </div>
+          );
+        })}
+      </Section>
+
       {!isZone && (
         <Section title="状态">
           <div className="chips">
@@ -436,49 +480,6 @@ function ObjectInspector({ world, mapId, o, ui }: { world: World; mapId: string;
           </div>
         ))}
         {run && o.secrets.some((s) => s.kind === 'auto') && <div className="hint">自动浮现：玩家角色走到范围内、中间没墙，就自动揭示给全队。</div>}
-      </Section>
-
-      <Section title="多媒体" extra={edit && world.media.length > 0 && (
-        <button className="small" onClick={() => up((x) => {
-          x.media.push({ id: uid(), mediaId: world.media[0].id, label: '', trigger: isZone ? 'enter' : 'manual', broadcast: true, once: false });
-        })}>＋</button>
-      )}>
-        {o.media.length === 0 && <div className="hint">没有。{edit && world.media.length === 0 && '先去「媒体库」上传，再回来挂上。'}</div>}
-        {o.media.map((a) => {
-          const set = (fn: (y: Draft<MapObject['media'][number]>) => void, key?: string) =>
-            up((x) => { fn(x.media.find((y) => y.id === a.id)!); }, key);
-          const meta = world.media.find((m) => m.id === a.mediaId);
-          return (
-            <div key={a.id} className="card">
-              {edit ? (
-                <>
-                  <div className="inline">
-                    <select value={a.mediaId} onChange={(e) => set((y) => { y.mediaId = e.target.value; })}>
-                      {world.media.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
-                    </select>
-                    <button className="danger small" onClick={() => up((x) => { x.media = x.media.filter((y) => y.id !== a.id); })}>×</button>
-                  </div>
-                  <Row label="标签"><Txt value={a.label} placeholder={meta?.name} onChange={(v) => set((y) => { y.label = v; }, 'ml' + a.id)} /></Row>
-                  <Row label="触发">
-                    <select value={a.trigger} onChange={(e) => set((y) => { y.trigger = e.target.value as 'manual' | 'enter'; })}>
-                      <option value="manual">主持人手动</option>
-                      <option value="enter">棋子走进来自动播</option>
-                    </select>
-                  </Row>
-                  <div className="inline">
-                    <Check label="同步给玩家" value={a.broadcast} onChange={(v) => set((y) => { y.broadcast = v; })} />
-                    <Check label="只触发一次" value={a.once} onChange={(v) => set((y) => { y.once = v; y.fired = false; })} />
-                  </div>
-                </>
-              ) : (
-                <div className="list-row">
-                  <span>{a.label || meta?.name || '（丢失的文件）'}{a.trigger === 'enter' && ' · 自动'}{a.fired && ' · 已触发'}</span>
-                </div>
-              )}
-              {run && <button className="small" onClick={() => fireAttach(mapId, o.id, a)}>▶ 播放</button>}
-            </div>
-          );
-        })}
       </Section>
     </>
   );
