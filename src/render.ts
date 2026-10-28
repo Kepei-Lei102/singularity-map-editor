@@ -226,12 +226,25 @@ function drawObject(ctx: CanvasRenderingContext2D, o: MapObject, player: boolean
       label(t, X + W - 5 - ctx.measureText(t).width, Y + H - 5);
     }
   } else {
-    const glyph = o.icon || o.name.charAt(0);
-    const fs = Math.min(W, H) * 0.55;
+    const glyph = o.icon || labelChars(o.name)[0] || '';
+    const chars = labelChars(glyph);
+    let fs = Math.min(W, H) * 0.55;
+    let lines = [glyph];
     ctx.font = `600 ${fs}px system-ui, sans-serif`;
+    if (chars.length > 1) {
+      const width = Math.max(1, W - 10), height = Math.max(1, H - 10);
+      // Keep the original icon size as a ceiling; tall objects can wrap before shrinking.
+      // Check individual graphemes too, so wrapLabel never needs to ellipsize a glyph.
+      while (true) {
+        lines = wrapLabel(ctx, glyph, width, Infinity);
+        if (chars.every(char => ctx.measureText(char).width <= width) && lines.length * fs * 1.15 <= height) break;
+        fs *= 0.9;
+        ctx.font = `600 ${fs}px system-ui, sans-serif`;
+      }
+    }
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    label(glyph, X + W / 2, Y + H / 2 + 1);
+    lines.forEach((line, i) => label(line, X + W / 2, Y + H / 2 + 1 + (i - (lines.length - 1) / 2) * fs * 1.15));
     ctx.textAlign = 'start';
     ctx.textBaseline = 'alphabetic';
   }

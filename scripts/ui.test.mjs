@@ -84,14 +84,65 @@ function drawing(world, map, mode = 'edit', zoom = 4) {
     font: '', fillStyle: '', textAlign: 'start', textBaseline: 'alphabetic',
     save() { state.push({ font: this.font, fillStyle: this.fillStyle, textAlign: this.textAlign, textBaseline: this.textBaseline }); },
     restore() { Object.assign(this, state.pop()); },
-    measureText(value) { const size = +(this.font.match(/([\d.]+)px/)?.[1] ?? 10); return { width: Array.from(value).reduce((n,c) => n + (c === 'W' ? 1 : c === 'i' ? .2 : .7) * size, 0) }; },
-    fillText(value,x,y) { text.push({ value,x,y,font: this.font, color: this.fillStyle, width: this.measureText(value).width }); },
+    measureText(value) {
+      const size = +(this.font.match(/([\d.]+)px/)?.[1] ?? 10);
+      const chars = Array.from(new Intl.Segmenter(undefined, { granularity: 'grapheme' }).segment(value), part => part.segment);
+      return { width: chars.reduce((n,c) => n + (c === 'W' || /\p{Script=Han}|\p{Extended_Pictographic}|\p{Regional_Indicator}/u.test(c) ? 1 : c === 'i' ? .2 : .7) * size, 0) };
+    },
+    fillText(value,x,y) { text.push({ value,x,y,font: this.font, color: this.fillStyle, width: this.measureText(value).width, align: this.textAlign, baseline: this.textBaseline }); },
     strokeText(value) { strokes.push(value); },
     fillRect(...rect) { fills.push({ rect, color: this.fillStyle }); },
   }, { get: (target,key) => key in target ? target[key] : () => {} });
   api.render(ctx, 1400, 1000, 1, world, map, { zoom, panX: 0, panY: 0 }, { mode, tool: 'pan', selection: null, hover: null, preview: null, brush: 1, pending: null, showFog: false });
   return { text,strokes,fills };
 }
+
+test('compact multi-character icons fit the actual footprint without clipping or losing Chinese characters', () => {
+  const { world,map } = fixture(); map.tokens = []; map.objects = [map.objects[0]];
+  const obj = map.objects[0];
+  for (const [icon,w,h,rows] of [['打印',1,2,2], ['工具',1,1,1], ['打印',2,1,1], ['Wi',1,1,1]]) {
+    Object.assign(obj, { icon, w, h });
+    for (const zoom of [.75,1,1.5]) {
+      const result = drawing(world,map,'edit',zoom);
+      const lines = result.text.filter(l => l.font.startsWith('600 '));
+      assert.equal(lines.length, rows, `${icon} ${w}x${h} row count`);
+      assert.equal(lines.map(l => l.value).join(''),icon, 'all characters must remain complete, without ellipsis');
+      for (const line of lines) {
+        const size = +line.font.match(/([\d.]+)px/)[1];
+        assert.ok(size >= 10 && size <= Math.min(w,h) * 32 * .55, 'readable font capped at the original icon size');
+        assert.ok(line.width <= w * 32 - 10, 'measured text width fits inside the padding');
+        assert.equal(line.align,'center'); assert.equal(line.baseline,'middle');
+        assert.ok(line.x - line.width / 2 >= obj.x * 32 + 5);
+        assert.ok(line.x + line.width / 2 <= (obj.x + w) * 32 - 5);
+        assert.ok(line.y - size / 2 >= obj.y * 32 + 5);
+        assert.ok(line.y + size / 2 <= (obj.y + h) * 32 - 5);
+      }
+      assert.equal(result.strokes.length,0, 'ordinary icons gain no outline');
+      obj.icon = '柜';
+      assert.deepEqual(result.fills,drawing(world,map,'edit',zoom).fills, 'wrapping adds no background');
+      obj.icon = icon;
+    }
+  }
+});
+
+test('compact single characters and emoji retain their size, and wrapping never splits emoji graphemes', () => {
+  const { world,map } = fixture(); map.tokens = []; map.objects = [map.objects[0]];
+  const obj = map.objects[0]; obj.w = 1; obj.h = 2;
+  const emoji = ['👩🏽‍🔧', '👨‍👩‍👧‍👦', '🇨🇳', '🖨️'];
+  for (const icon of ['柜', ...emoji]) {
+    obj.icon = icon;
+    const lines = drawing(world,map,'edit',1).text.filter(l => l.font.startsWith('600 '));
+    assert.equal(lines.length,1); assert.equal(lines[0].value,icon);
+    assert.equal(+lines[0].font.match(/([\d.]+)px/)[1],32 * .55);
+    assert.equal(lines[0].x,(obj.x + .5) * 32);
+    assert.equal(lines[0].y,(obj.y + 1) * 32 + 1);
+  }
+  obj.icon = emoji[0] + emoji[1];
+  const lines = drawing(world,map,'edit',1).text.filter(l => l.font.startsWith('600 '));
+  assert.deepEqual(lines.map(l => l.value),emoji.slice(0,2));
+  obj.icon = ''; obj.name = emoji[0] + '维修柜';
+  assert.equal(drawing(world,map,'edit',1).text.find(l => l.font.startsWith('600 ')).value,emoji[0], 'name fallback also uses a complete grapheme');
+});
 
 test('object name and state wrap by measured width, ellipsize in full rows and leave height footer clear', () => {
   const { world,map } = fixture(); map.tokens = []; map.objects = [map.objects[0]];
