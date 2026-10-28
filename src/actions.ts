@@ -15,7 +15,8 @@ import { contentKey, getRaw, listStored, mediaChanged, putBlobs, storageKey } fr
 import { checkRoomObjects, checkWorld, repairWorld } from './schema.js';
 import { allSlots, dropSlot, loadSlot, saveSlot } from './persist';
 import { send } from './sync';
-import { emptyLayer, migrateWorld } from './memory';
+import { migrateWorld } from './memory';
+import { knowledgeLayers, spatialKeys, visionMembers } from './vision';
 import { applySlidingMove, seesSlidingObject } from './sliding';
 
 export const findMap = (w: World | Draft<World>, id: string) => w.maps.find((m) => m.id === id);
@@ -212,7 +213,7 @@ export function revealSecret(mapId: string, objId: string, secretId: string, tie
   if (why && !confirm(`${why}。\n\n主持人仍然要揭示「${s.label}」吗？（会在记录里注明是主持人决定的）`)) return;
   update((d) => {
     const ds = findObj(d, mapId, objId)!.secrets.find((x) => x.id === secretId)!;
-    ds.revealed = { tier, scope, to, at: Date.now() };
+    ds.revealed = { tier, scope, to, ...(scope === 'private' ? { recipients: d.party.filter(p => p.name === to).map(p => p.id) } : {}), at: Date.now() };
     const how = s.kind === 'auto' ? '浮现' : `${s.check}${TIER_LABEL[tier]}`;
     log(d, 'reveal', `${o.name}·${s.label}（${how}${scope === 'private' ? `，私密给 ${to || '?'}` : '，全队'}${why ? `，主持人决定：${why}` : ''}）：${s.tiers[tier]}`, mapId);
   });
@@ -222,7 +223,7 @@ export function revealSecret(mapId: string, objId: string, secretId: string, tie
 export function hideSecret(mapId: string, objId: string, secretId: string) {
   update((d) => {
     const s = findObj(d, mapId, objId)?.secrets.find((x) => x.id === secretId);
-    if (s) delete s.revealed;
+    if (s) { delete s.revealed; delete s.discoveries; }
   });
 }
 
@@ -280,18 +281,23 @@ export function checkEnterTriggers(mapId: string, tokenId: string, fromX: number
 
 /** 带团时：玩家角色走进"自动浮现"的范围（且中间没墙），信息自动出现给全队。 */
 export function autoReveal(mapId: string) {
-  const w = getWorld();
-  const m = findMap(w, mapId);
-  if (!m) return;
-  for (const o of m.objects)
-    for (const s of o.secrets) {
-      if (s.kind !== 'auto' || s.revealed) continue;
-      const pc = pcWithin(w, m, o, s.range);
-      if (pc) {
-        revealSecret(mapId, o.id, s.id, 'success', 'party');
-        toast(`自动浮现：${o.name}·${s.label}（${pc.name} 走近了）`);
-      }
+  const w = getWorld(), m = findMap(w, mapId); if (!m) return;
+  for (const o of m.objects) for (const s of o.secrets) {
+    if (s.kind !== 'auto' || s.revealed?.scope === 'party') continue;
+    const recipients = new Set<string>();
+    for (const p of w.party) {
+      if (pcWithin(w, { ...m, tokens: m.tokens.filter(t => t.pcId === p.id) }, o, s.range))
+        for (const id of visionMembers(w, p.id)) if (!s.discoveries?.[id]) recipients.add(id);
     }
+    if (!recipients.size) continue;
+    update(d => {
+      const secret = findObj(d, mapId, o.id)!.secrets.find(x => x.id === s.id)!;
+      secret.discoveries ??= {};
+      for (const id of recipients) secret.discoveries[id] = { tier: 'success', at: Date.now() };
+      log(d, 'reveal', `自动浮现：${o.name}·${s.label}（${d.party.filter(p => recipients.has(p.id)).map(p => p.name).join('、')}）`, mapId);
+    });
+    toast(`自动浮现：${o.name}·${s.label}`);
+  }
 }
 
 // ---------- 一格多物 ----------
@@ -525,6 +531,10 @@ export function reshapeMaps(mapIds: string[], left: number, top: number, right: 
         const shiftSub = <T,>(data: Record<number, T>) => Object.fromEntries(Object.entries(data).flatMap(([key, v]) => { const x = +key % (oldWidth * 3) + left * 3, y = Math.floor(+key / (oldWidth * 3)) + top * 3; return x >= 0 && y >= 0 && x < W * 3 && y < H * 3 ? [[y * W * 3 + x, v]] : []; }));
         if (L.subFog) L.subFog = shiftSub(L.subFog);
         if (L.seen.subCells) L.seen.subCells = shiftSub(L.seen.subCells);
+        if (L.seen.observed) L.seen.observed = shiftSub(L.seen.observed);
+        if (L.seen.subRevs) L.seen.subRevs = shiftSub(L.seen.subRevs);
+        if (L.seen.architectureRevs) L.seen.architectureRevs = shiftSub(L.seen.architectureRevs);
+        if (L.seen.cellRevs) L.seen.cellRevs = remap(L.seen.cellRevs, 0);
         if (L.seen.architecture) L.seen.architecture = L.seen.architecture.map(r => ({ ...r, x: r.x + left, y: r.y + top })).filter(r => r.x + r.w > 0 && r.y + r.h > 0 && r.x < W && r.y < H);
       }
       m.cells = remap(m.cells, '');
@@ -979,14 +989,15 @@ export const MARK_LIFE = 20; // 标记默认能留多少分钟（战斗里 = 4 �
 
 /** 切到"各自独立"时，每个人从全队已知的那份开始（之前一起看到的大家都知道）。 */
 export function setVisionMode(mode: World['visionMode']) {
-  update((d) => {
-    if (d.visionMode === mode) return;
-    d.visionMode = mode;
-    if (mode === 'individual')
-      for (const m of d.maps) {
-        m.views = {};
-        for (const p of d.party) m.views[p.id] = { fog: [...m.fog], subFog: { ...m.subFog }, seen: { cells: [...m.seen.cells], objects: m.seen.objects.map((o) => ({ ...o })), subCells: { ...m.seen.subCells }, architecture: m.seen.architecture?.map(r => ({ ...r })) } };
-      }
+  update(d => { d.visionMode = mode; });
+}
+export function setVisionGroup(pcId: string, groupId: string | null | undefined) {
+  update(d => { const p = d.party.find(p => p.id === pcId); if (p) p.visionGroupId = groupId; });
+}
+export function deleteVisionGroup(groupId: string) {
+  update(d => {
+    d.visionGroups = (d.visionGroups ?? []).filter(g => g.id !== groupId);
+    for (const p of d.party) if (p.visionGroupId === groupId) p.visionGroupId = null;
   });
 }
 
@@ -996,20 +1007,37 @@ export function giveMapKnowledge(mapId: string, pcIds?: string[]) {
     const m = findMap(d, mapId);
     if (!m) return;
     const learn = (L: import('./types').VisionLayer) => {
-      L.fog.forEach((f, k) => { if (!f) { L.fog[k] = 2; L.seen.cells[k] = m.cells[k]; } });
+      L.seen.cellRevs ??= Array(m.width * m.height).fill(0); L.seen.subRevs ??= {}; L.seen.architectureRevs ??= {};
+      const rev = (d.observationSeq ?? 0) + 1;
+      L.fog.forEach((f, k) => { if (!f) { L.fog[k] = 2; L.seen.cells[k] = m.cells[k]; L.seen.cellRevs![k] = rev; } });
       L.subFog ??= {}; L.seen.subCells ??= {};
       for (const i of m.subdivisions ?? []) for (let sy = 0; sy < 3; sy++) for (let sx = 0; sx < 3; sx++) {
         const key = (Math.floor(i / m.width) * 3 + sy) * m.width * 3 + i % m.width * 3 + sx;
-        if (!L.subFog[key]) { L.subFog[key] = 2; L.seen.subCells[key] = m.cells[i]; }
+        if (!L.subFog[key]) { L.subFog[key] = 2; L.seen.subCells[key] = m.cells[i]; L.seen.subRevs[key] = rev; }
       }
       L.seen.architecture = [...clipArchitecture(m, L, 1, L.seen.architecture ?? []), ...clipArchitecture(m, L, 2)];
+      for (let key = 0; key < m.width * m.height * 9; key++) L.seen.architectureRevs![key] = rev;
     };
-    if (d.visionMode === 'individual') {
-      const who = pcIds ?? d.party.map((p) => p.id);
-      for (const id of who) { m.views[id] ??= emptyLayer(m.width * m.height); learn(m.views[id]); }
-    }
-    learn(m);
+    for (const L of knowledgeLayers(d, m, pcIds)) learn(L);
     log(d, 'reveal', `玩家拿到了「${m.name}」的地图`, mapId);
+  });
+}
+
+/** 默认全队；角色目标在分组模式下扩至其有效组。 */
+export function paintFog(mapId: string, cells: [number, number][], kind: 'fogReveal' | 'fogHide' | 'fogBlack', pcIds?: string[]) {
+  update(d => {
+    const m = findMap(d, mapId); if (!m) return;
+    for (const L of knowledgeLayers(d, m, pcIds)) for (const [x, y] of cells) {
+      if (x < 0 || y < 0 || x >= m.width || y >= m.height) continue;
+      const i = y * m.width + x;
+      L.fog[i] = kind === 'fogReveal' ? 1 : kind === 'fogHide' && L.fog[i] ? 2 : 0;
+      L.subFog ??= {};
+      for (const key of spatialKeys(m, { x, y, w: 1, h: 1 })) {
+        if (m.subdivisions?.includes(i)) L.subFog[key] = kind === 'fogReveal' ? 1 : kind === 'fogHide' && L.subFog[key] ? 2 : 0;
+        if (kind === 'fogBlack') { delete L.seen.observed?.[key]; delete L.seen.subCells?.[key]; delete L.seen.subRevs?.[key]; delete L.seen.architectureRevs?.[key]; }
+      }
+      if (kind === 'fogBlack') { L.seen.cells[i] = ''; if (L.seen.cellRevs) L.seen.cellRevs[i] = 0; }
+    }
   });
 }
 
@@ -1037,8 +1065,8 @@ export function subdivideRegion(mapId: string, r: { x: number; y: number; w: num
       L.subFog ??= {}; L.seen.subCells ??= {};
       for (const i of cells) for (let sy = 0; sy < 3; sy++) for (let sx = 0; sx < 3; sx++) {
         const key = (Math.floor(i / m.width) * 3 + sy) * m.width * 3 + i % m.width * 3 + sx;
-        if (remove) { delete L.subFog[key]; delete L.seen.subCells[key]; }
-        else if (L.subFog[key] === undefined) { L.subFog[key] = L.fog[i]; L.seen.subCells[key] = L.seen.cells[i]; }
+        if (remove) { delete L.subFog[key]; delete L.seen.subCells[key]; delete L.seen.subRevs?.[key]; }
+        else if (L.subFog[key] === undefined) { L.subFog[key] = L.fog[i]; L.seen.subCells[key] = L.seen.cells[i]; L.seen.subRevs ??= {}; L.seen.subRevs[key] = L.seen.cellRevs?.[i] ?? 0; }
       }
     }
   });

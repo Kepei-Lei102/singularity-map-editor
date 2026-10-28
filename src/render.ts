@@ -1,8 +1,9 @@
+import { effectiveLayer, visionMembers } from './vision';
 import { isArchitectureObject, architectureGeometry, clipArchitecture, fogAt, isSubdivided, tokenPosition } from './architecture';
 import { anyVisible } from './memory';
 import type { Selection, Tool, View } from './store';
 import type { GameMap, MapObject, SeenObject, World } from './types';
-import { staleMemories, emptyLayer } from './memory';
+import { staleMemories } from './memory';
 import { CONN_ICON, CONN_LABEL } from './types';
 import { CS, colName, distToRect, gridDist } from './util';
 import { CLEAR_BANDS, seesPoint, sightCosts, visibleMarks } from './perception';
@@ -81,7 +82,7 @@ export function playerNumbering(world: World, map: GameMap): PlayerNumbered[] {
   for (const n of all) {
     if (n.kind === 'token') {
       const t = map.tokens.find((x) => x.id === n.id);
-      if (t && (t.pcId || fogAt(map, map, tokenPosition(t).x, tokenPosition(t).y) === 1)) out.push({ ...n, state: null, height: 0, icon: '', memory: false });
+      if (t && (t.pcId === world.viewerId || fogAt(map, map, tokenPosition(t).x, tokenPosition(t).y) === 1)) out.push({ ...n, state: null, height: 0, icon: '', memory: false });
     } else if (n.kind === 'conn') {
       const c = world.connections.find((x) => x.id === n.id);
       if (c && !c.hidden && map.fog[n.y * W + n.x] === 1) out.push({ ...n, state: null, height: 0, icon: '', memory: false });
@@ -162,53 +163,60 @@ const tokenGlyph = (name: string) => {
   return s.trim().charAt(0) || '?';
 };
 
-function drawObject(ctx: CanvasRenderingContext2D, o: MapObject, player: boolean, zoom: number, scale: number) {
+function drawObject(ctx: CanvasRenderingContext2D, o: MapObject, player: boolean, zoom: number, scale: number, labelOnly = false, showLabel = true) {
   const X = o.x * CS, Y = o.y * CS, W = o.w * CS, H = o.h * CS;
   // 靠状态开合的物件（隔断、门）：此刻不挡路时只画虚线轮廓，表示板片收起了、人可以从这里过去。
   const ghost = !!o.blocksWhen && !o.blocksWhen.includes(o.state);
-  if (ghost) {
-    ctx.save();
-    ctx.globalAlpha = player ? 0.5 : 0.75;
-    ctx.setLineDash([5, 4]);
-    ctx.lineWidth = 2;
-    ctx.strokeStyle = o.color;
-    ctx.strokeRect(X + 2, Y + 2, W - 4, H - 4);
-    ctx.restore();
-  } else {
-    // 2.5D：越高，影子拉得越长、边缘越虚（羽化）。canvas 的阴影参数不跟着缩放走，所以乘上 scale。
-    const lift = Math.min(o.height, 8) * 5;
-    ctx.save();
-    ctx.shadowColor = 'rgba(0,0,0,0.5)';
-    ctx.shadowBlur = (4 + lift * 0.9) * scale;
-    ctx.shadowOffsetX = lift * 0.7 * scale;
-    ctx.shadowOffsetY = lift * scale;
-    ctx.globalAlpha = !player && o.hidden ? 0.55 : 1;
-    ctx.fillStyle = o.color;
-    ctx.fillRect(X + 2, Y + 2, W - 4, H - 4);
-    ctx.restore();
-    ctx.lineWidth = 1.5;
-    ctx.strokeStyle = 'rgba(0,0,0,0.55)';
-    if (!player && o.hidden) ctx.setLineDash([4, 3]);
-    ctx.strokeRect(X + 2, Y + 2, W - 4, H - 4);
-    ctx.setLineDash([]);
-  }
+  if (!labelOnly) {
+    if (ghost) {
+      ctx.save();
+      ctx.globalAlpha = player ? 0.5 : 0.75;
+      ctx.setLineDash([5, 4]);
+      ctx.lineWidth = 2;
+      ctx.strokeStyle = o.color;
+      ctx.strokeRect(X + 2, Y + 2, W - 4, H - 4);
+      ctx.restore();
+    } else {
+      // 2.5D：越高，影子拉得越长、边缘越虚（羽化）。canvas 的阴影参数不跟着缩放走，所以乘上 scale。
+      const lift = Math.min(o.height, 8) * 5;
+      ctx.save();
+      ctx.shadowColor = 'rgba(0,0,0,0.5)';
+      ctx.shadowBlur = (4 + lift * 0.9) * scale;
+      ctx.shadowOffsetX = lift * 0.7 * scale;
+      ctx.shadowOffsetY = lift * scale;
+      ctx.globalAlpha = !player && o.hidden ? 0.55 : 1;
+      ctx.fillStyle = o.color;
+      ctx.fillRect(X + 2, Y + 2, W - 4, H - 4);
+      ctx.restore();
+      ctx.lineWidth = 1.5;
+      ctx.strokeStyle = 'rgba(0,0,0,0.55)';
+      if (!player && o.hidden) ctx.setLineDash([4, 3]);
+      ctx.strokeRect(X + 2, Y + 2, W - 4, H - 4);
+      ctx.setLineDash([]);
+    }
 
+  }
   // 细节多少看屏幕上有多大：够大才写字，太小只放图标，详情靠悬停/选中时的浮签
+  if (showLabel) {
   const big = W * zoom >= 110 && H * zoom >= 44;
   ctx.save();
-  if (ghost) ctx.globalAlpha = 0.6;
   ctx.beginPath();
   ctx.rect(X + 2, Y + 2, W - 4, H - 4);
   ctx.clip();
-  ctx.fillStyle = textColor(o.color);
+  // Only flat outline markers need help against an unknown terrain background.
+  const outlined = o.height === 0 && ghost;
+  if (ghost && !outlined) ctx.globalAlpha = 0.6;
+  ctx.fillStyle = outlined ? '#f4f1ea' : textColor(o.color);
+  if (outlined) { ctx.strokeStyle = 'rgba(18,18,24,0.8)'; ctx.lineWidth = 1 / zoom; ctx.lineJoin = 'round'; }
+  const label = (text: string, x: number, y: number) => { if (outlined) ctx.strokeText(text, x, y); ctx.fillText(text, x, y); };
   if (big) {
     ctx.font = '600 10px system-ui, sans-serif';
-    ctx.fillText((o.icon ? o.icon + ' ' : '') + o.name, X + 5, Y + 13);
+    label((o.icon ? o.icon + ' ' : '') + o.name, X + 5, Y + 13);
     ctx.font = '9px system-ui, sans-serif';
-    if (o.states.length > 1) ctx.fillText(`[${o.states[o.state] ?? ''}]`, X + 5, Y + 24);
+    if (o.states.length > 1) label(`[${o.states[o.state] ?? ''}]`, X + 5, Y + 24);
     if (o.height > 0) {
       const t = `${o.height}m`;
-      ctx.fillText(t, X + W - 5 - ctx.measureText(t).width, Y + H - 5);
+      label(t, X + W - 5 - ctx.measureText(t).width, Y + H - 5);
     }
   } else {
     const glyph = o.icon || o.name.charAt(0);
@@ -216,11 +224,13 @@ function drawObject(ctx: CanvasRenderingContext2D, o: MapObject, player: boolean
     ctx.font = `600 ${fs}px system-ui, sans-serif`;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.fillText(glyph, X + W / 2, Y + H / 2 + 1);
+    label(glyph, X + W / 2, Y + H / 2 + 1);
     ctx.textAlign = 'start';
     ctx.textBaseline = 'alphabetic';
   }
   ctx.restore();
+  }
+  if (labelOnly) return;
   // 角标：黄点 = 有隐藏信息，蓝点 = 有媒体
   if (!player) {
     const dots = [o.secrets.length ? '#ffd166' : '', o.media.length ? '#7aa2f7' : ''].filter(Boolean);
@@ -241,9 +251,10 @@ function drawTag(ctx: CanvasRenderingContext2D, o: MapObject, zoom: number) {
   const parts = [(o.icon ? o.icon + ' ' : '') + o.name];
   if (o.states.length > 1) parts.push(`[${o.states[o.state] ?? ''}]`);
   if (o.kind === 'object' && o.height > 0) parts.push(`${o.height}m`);
-  const text = parts.join(' ');
+  const fullText = parts.join(' ');
   const fs = 12 / zoom;
   ctx.font = `600 ${fs}px system-ui, sans-serif`;
+  const text = fitLabel(ctx, fullText, 240 / zoom);
   const tw = ctx.measureText(text).width;
   const pad = 5 / zoom;
   const cx = (o.x + o.w / 2) * CS;
@@ -274,18 +285,22 @@ function cellsPath(map: GameMap, x0: number, y0: number, x1: number, y1: number,
   return p;
 }
 
-function drawZone(ctx: CanvasRenderingContext2D, o: MapObject) {
+function fitLabel(ctx: CanvasRenderingContext2D, text: string, width: number) {
+  if (ctx.measureText(text).width <= width) return text;
+  let clipped = text;
+  while (clipped && ctx.measureText(clipped + '…').width > width) clipped = clipped.slice(0, -1);
+  return clipped + '…';
+}
+
+function drawZone(ctx: CanvasRenderingContext2D, o: MapObject, active: boolean, zoom: number) {
   const X = o.x * CS, Y = o.y * CS, W = o.w * CS, H = o.h * CS;
-  ctx.fillStyle = o.color + '33';
-  ctx.fillRect(X, Y, W, H);
+  ctx.save();
   ctx.strokeStyle = o.color;
-  ctx.lineWidth = 1.5;
-  ctx.setLineDash([5, 4]);
+  ctx.globalAlpha = active ? .9 : .35;
+  ctx.lineWidth = (active ? 1.5 : 1) / zoom;
+  ctx.setLineDash([5 / zoom, 4 / zoom]);
   ctx.strokeRect(X + 1, Y + 1, W - 2, H - 2);
-  ctx.setLineDash([]);
-  ctx.fillStyle = o.color;
-  ctx.font = '600 9px system-ui, sans-serif';
-  ctx.fillText('◇ ' + o.name + (o.media.length ? ' ♪' : ''), X + 4, Y + 11);
+  ctx.restore();
 }
 
 export function render(
@@ -293,7 +308,7 @@ export function render(
   world: World, map0: GameMap, view: View, o: RenderOpts,
 ) {
   // 视野各自独立时，玩家视角换成这个人自己的那份迷雾和记忆；后面的代码照常读 map.fog / map.seen
-  const own = o.mode === 'player' && o.viewer && world.visionMode === 'individual' ? map0.views[o.viewer] ?? emptyLayer(map0.width * map0.height) : undefined; // 这个人还没有视野层：什么都没看过
+  const own = o.mode === 'player' && o.viewer ? effectiveLayer(world, map0, o.viewer) : undefined; // 这个人还没有视野层：什么都没看过
   const map: GameMap = own ? { ...map0, fog: own.fog, subFog: own.subFog, seen: own.seen } : map0;
   const player = o.mode === 'player';
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
@@ -391,20 +406,24 @@ export function render(
 
   // 物件（矮的先画）、触发区
   const byHeight = (a: { height: number }, b: { height: number }) => a.height - b.height;
-  if (!player) {
-    map.objects.filter((ob) => ob.kind === 'object' && !isArchitectureObject(ob)).sort(byHeight).forEach((ob) => drawObject(ctx, ob, false, view.zoom, view.zoom * dpr));
-  } else {
-    // 看得见的格子画现实，灰格子画记忆
-    ctx.save();
-    ctx.clip(cellsPath(map, x0, y0, x1, y1, 1));
-    map.objects.filter((ob) => ob.kind === 'object' && !isArchitectureObject(ob) && !ob.hidden).sort(byHeight).forEach((ob) => drawObject(ctx, ob, true, view.zoom, view.zoom * dpr));
-    ctx.restore();
-    ctx.save();
-    ctx.clip(cellsPath(map, x0, y0, x1, y1, 2));
-    [...map.seen.objects].sort(byHeight).forEach((r) => drawObject(ctx, fromMemory(r), true, view.zoom, view.zoom * dpr));
-    ctx.restore();
+  const labelSets: { objects: MapObject[]; fog?: number }[] = [];
+  const drawObjects = (objects: MapObject[], fog?: number) => {
+    if (fog) { ctx.save(); ctx.clip(cellsPath(map, x0, y0, x1, y1, fog)); }
+    objects.sort(byHeight).forEach(ob => drawObject(ctx, ob, player, view.zoom, view.zoom * dpr, false, false));
+    if (fog) ctx.restore();
+    labelSets.push({ objects, fog });
+  };
+  if (!player) drawObjects(map.objects.filter(ob => ob.kind === 'object' && !isArchitectureObject(ob)));
+  else {
+    drawObjects(map.objects.filter(ob => ob.kind === 'object' && !isArchitectureObject(ob) && !ob.hidden && anyVisible(map, ob)), 1);
+    drawObjects(map.seen.objects.map(fromMemory).filter(ob => {
+      for (let y = ob.y; y < ob.y + ob.h; y++) for (let x = ob.x; x < ob.x + ob.w; x++)
+        if (fogAt(map, map, x + .5, y + .5) === 2) return true;
+      return false;
+    }), 2);
   }
-  if (!player) map.objects.filter((ob) => ob.kind === 'zone').forEach((ob) => drawZone(ctx, ob));
+  if (!player) map.objects.filter(ob => ob.kind === 'zone').forEach(ob => drawZone(ctx, ob,
+    o.selection?.type === 'object' && o.selection.id === ob.id || o.tool === 'zone', view.zoom));
 
   // 建筑层：使用碰撞的实际矩形尺寸；玩家只画可见裁片与历史。
   const drawArchitecture = (fragments: import('./types').ArchitectureFragment[]) => {
@@ -442,9 +461,31 @@ export function render(
     }
   }
 
+  // Only the representative label is drawn for objects sharing an anchor cell.
+  // This is display aggregation: all object footprints and interactions stay intact.
+  for (const { objects, fog } of labelSets) {
+    if (fog) { ctx.save(); ctx.clip(cellsPath(map, x0, y0, x1, y1, fog)); }
+    const stacks = new Map<string, MapObject[]>();
+    for (const ob of objects) {
+      const key = `${Math.floor(ob.x + ob.w / 2)},${Math.floor(ob.y + ob.h / 2)}`;
+      const stack = stacks.get(key) ?? []; stack.push(ob); stacks.set(key, stack);
+    }
+    for (const stack of stacks.values()) {
+      const representative = stack.find(ob => ob.id === so?.id) ?? [...stack].sort((a, b) => a.id.localeCompare(b.id))[0];
+      drawObject(ctx, representative, player, view.zoom, view.zoom * dpr, true);
+      if (stack.length > 1) {
+        const x = (representative.x + representative.w) * CS - 3 / view.zoom, y = representative.y * CS + 11 / view.zoom;
+        ctx.save(); ctx.font = `${9 / view.zoom}px system-ui, sans-serif`; ctx.textAlign = 'right';
+        ctx.lineWidth = 2 / view.zoom; ctx.strokeStyle = 'rgba(18,18,24,.85)'; ctx.fillStyle = '#f4f1ea';
+        ctx.strokeText(`+${stack.length - 1}`, x, y); ctx.fillText(`+${stack.length - 1}`, x, y); ctx.restore();
+      }
+    }
+    if (fog) ctx.restore();
+  }
+
   // 棋子
   for (const t of map.tokens) {
-    if (player && !t.pcId && fogAt(map, map, tokenPosition(t).x, tokenPosition(t).y) !== 1) continue;
+    if (player && !(t.pcId && o.viewer && visionMembers(world, o.viewer).includes(t.pcId)) && t.pcId !== world.viewerId && fogAt(map, map, tokenPosition(t).x, tokenPosition(t).y) !== 1) continue;
     const pos = tokenPosition(t), cx = pos.x * CS, cy = pos.y * CS;
     ctx.beginPath();
     ctx.arc(cx, cy, CS * 0.38, 0, Math.PI * 2);
@@ -551,16 +592,16 @@ export function render(
     ctx.strokeRect(p.x * CS, p.y * CS, p.w * CS, p.h * CS);
     ctx.setLineDash([]);
   }
+  const tagged = new Set<MapObject>();
   if (!player) {
-    const tagged = new Set<MapObject>();
     if (so) tagged.add(so);
+    if (o.tool === 'zone') map.objects.filter(ob => ob.kind === 'zone').forEach(ob => tagged.add(ob));
     if (o.hover && o.tool === 'select') {
       const h = o.hover;
       const ho = map.objects.filter((x) => h.x >= x.x && h.x < x.x + x.w && h.y >= x.y && h.y < x.y + x.h)
-        .sort((a, b) => b.height - a.height)[0];
+        .sort((a, b) => Number(a.kind === 'zone') - Number(b.kind === 'zone') || b.height - a.height)[0];
       if (ho) tagged.add(ho);
     }
-    tagged.forEach((t) => drawTag(ctx, t, view.zoom));
   }
   if (o.hover && !player && ['paint', 'erase', 'd100', 'room', 'fogReveal', 'fogHide', 'fogBlack'].includes(o.tool)) {
     ctx.strokeStyle = 'rgba(255,255,255,0.7)';
@@ -583,12 +624,18 @@ export function render(
     ctx.textBaseline = 'alphabetic';
   }
   if (o.rulers) drawRulers(ctx, cw, ch, map, view);
+  if (tagged.size) {
+    ctx.save();
+    ctx.translate(view.panX, view.panY); ctx.scale(view.zoom, view.zoom);
+    tagged.forEach(t => drawTag(ctx, t, view.zoom));
+    ctx.restore();
+  }
 }
 
 /** 房间名写在房间中间（屏幕坐标，房间在屏幕上太小就不写）。 */
 function drawRoomLabels(ctx: CanvasRenderingContext2D, map: GameMap, view: View) {
   const cellsOf = new Map<string, number[]>();
-  map.roomCells.forEach((id, i) => { if (id) cellsOf.set(id, [...(cellsOf.get(id) ?? []), i]); });
+  map.roomCells.forEach((id, i) => { if (id) { const cells = cellsOf.get(id) ?? []; cells.push(i); cellsOf.set(id, cells); } });
   const cell = CS * view.zoom;
   ctx.font = '600 12px system-ui, sans-serif';
   ctx.textAlign = 'center';
@@ -600,9 +647,20 @@ function drawRoomLabels(ctx: CanvasRenderingContext2D, map: GameMap, view: View)
     if ((Math.max(...xs) - Math.min(...xs) + 1) * cell < ctx.measureText(r.name).width + 10) continue;
     // 环形的房间（比如回廊）中心不在房间里，所以取房间内离中心最近的那一格
     const mx = xs.reduce((a, b) => a + b, 0) / xs.length, my = ys.reduce((a, b) => a + b, 0) / ys.length;
-    let best = 0, bd = Infinity;
-    xs.forEach((x, k) => { const d = (x - mx) ** 2 + (ys[k] - my) ** 2; if (d < bd) { bd = d; best = k; } });
-    const sx = view.panX + (xs[best] + 0.5) * cell, sy = view.panY + (ys[best] + 0.5) * cell;
+    const width = ctx.measureText(r.name).width + 12, height = 20;
+    const candidates = cs.map((i, k) => ({ x: xs[k], y: ys[k], distance: (xs[k] - mx) ** 2 + (ys[k] - my) ** 2 })).sort((a, b) => a.distance - b.distance);
+    // Test the entire label footprint, not just its anchor: nearby furniture and
+    // narrow/disconnected room shapes must not end up behind the name.
+    const anchor = candidates.find(({ x, y }) => {
+      const left = x + .5 - width / (2 * cell), top = y + .5 - height / (2 * cell);
+      const right = left + width / cell, bottom = top + height / cell;
+      for (let cy = Math.floor(top); cy < Math.ceil(bottom); cy++) for (let cx = Math.floor(left); cx < Math.ceil(right); cx++)
+        if (cx < 0 || cy < 0 || cx >= map.width || cy >= map.height || map.roomCells[cy * map.width + cx] !== r.id) return false;
+      return !map.objects.some(ob => ob.kind === 'object' && left < ob.x + ob.w && right > ob.x && top < ob.y + ob.h && bottom > ob.y) &&
+        !map.tokens.some(t => left < t.x + 1 && right > t.x && top < t.y + 1 && bottom > t.y);
+    });
+    if (!anchor) continue;
+    const sx = view.panX + (anchor.x + .5) * cell, sy = view.panY + (anchor.y + .5) * cell;
     ctx.lineWidth = 3;
     ctx.strokeStyle = 'rgba(20,20,26,0.75)';
     ctx.strokeText(r.name, sx, sy);

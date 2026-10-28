@@ -1,7 +1,7 @@
 import { architectureBlocksSight, architectureGeometry, isArchitectureObject, segmentHitsRect, tokenPosition, isSubdivided, subKey } from './architecture';
 import { produce } from 'immer';
 import type { GameMap, MapObject, VisionLayer, World } from './types';
-import { emptyLayer } from './memory';
+import { cloneLayer, emptyVision, mergeLayers, visionKey } from './vision';
 import { cellLine, gridDist } from './util';
 
 // 视野。尺度：1 格 = 0.75 米。
@@ -124,27 +124,37 @@ const step = (f: number, seeing: number) => (seeing ? 1 : f === 1 ? 2 : f);
  * 各自独立：每个玩家角色一份（map.views），只算他自己的眼睛；地图上那份是所有人的并集，给主持人看。
  */
 export function withVision(next: World, prev: World): World {
-  const dirty = next.maps.filter(m => {
-    const p = prev.maps.find(p => p.id === m.id);
-    return m.autoFog && (!p || !p.autoFog || p.cells !== m.cells || p.objects !== m.objects || p.tokens !== m.tokens || p.architecture !== m.architecture || p.subdivisions !== m.subdivisions || next.terrains !== prev.terrains || next.visionMode !== prev.visionMode);
-  });
-  if (!dirty.length) return next;
   return produce(next, d => {
-    for (const src of dirty) {
-      const m = d.maps.find(m => m.id === src.id)!;
-      const apply = (L: VisionLayer, eyes: typeof src.tokens) => {
-        const { vis, sub } = detailedVision(next, src, eyes);
+    const membershipChanged = next.party !== prev.party || next.visionGroups !== prev.visionGroups || next.visionMode !== prev.visionMode;
+    for (const m of d.maps) {
+      const src = next.maps.find(x => x.id === m.id)!;
+      const before = prev.maps.find(x => x.id === m.id);
+      const dirty = membershipChanged || !before || !before.autoFog || before.cells !== src.cells || before.objects !== src.objects || before.tokens !== src.tokens || before.architecture !== src.architecture || before.subdivisions !== src.subdivisions || next.terrains !== prev.terrains;
+      const ids = new Set(d.party.map(p => p.id));
+      for (const id of Object.keys(m.views)) if (!ids.has(id)) delete m.views[id];
+      for (const p of d.party) m.views[p.id] ??= emptyVision(m.width * m.height);
+      const apply = (L: VisionLayer, members: Set<string>) => {
+        const { vis, sub } = detailedVision(next, src, src.tokens.filter(t => t.pcId && members.has(t.pcId)));
         L.fog = L.fog.map((f, i) => step(f, vis[i]));
         const old = L.subFog ?? {};
         L.subFog = Object.fromEntries(Object.entries(sub).map(([k, v]) => [k, step(old[+k] ?? 0, v)]));
       };
-      if (next.visionMode === 'individual') {
-        const pcs = new Set([...Object.keys(m.views), ...src.tokens.flatMap(t => t.pcId ? [t.pcId] : [])]);
-        for (const pc of pcs) { const L = m.views[pc] ??= emptyLayer(m.width * m.height); apply(L, src.tokens.filter(t => t.pcId === pc)); }
-        m.fog = m.fog.map((f, i) => Object.values(m.views).some(L => L.fog[i] === 1) ? 1 : f || Object.values(m.views).some(L => L.fog[i]) ? 2 : 0);
-        const keys = Object.keys(detailedVision(next, src, []).sub);
-        m.subFog = Object.fromEntries(keys.map(k => [k, Object.values(m.views).some(L => L.subFog?.[+k] === 1) ? 1 : Object.values(m.views).some(L => L.subFog?.[+k]) ? 2 : 0]));
-      } else apply(m, src.tokens.filter(t => t.pcId));
+      if (prev.visionMode === 'shared' && next.visionMode !== 'shared' && before)
+        for (const p of d.party) m.views[p.id] = cloneLayer(before);
+      if (next.visionMode === 'shared') {
+        if (prev.visionMode !== 'shared') Object.assign(m, mergeLayers(src, d.party.map(p => m.views[p.id])));
+        if (m.autoFog && dirty) apply(m, ids);
+        for (const p of d.party) m.views[p.id] = cloneLayer(m);
+      } else {
+        const groups = new Map<string, string[]>();
+        for (const p of d.party) { const key = visionKey(next, p.id); groups.set(key, [...groups.get(key) ?? [], p.id]); }
+        for (const members of groups.values()) {
+          const L = members.length === 1 ? cloneLayer(m.views[members[0]]) : mergeLayers(src, members.map(id => m.views[id]));
+          if (m.autoFog && dirty) apply(L, new Set(members));
+          for (const id of members) m.views[id] = cloneLayer(L);
+        }
+        Object.assign(m, mergeLayers(src, d.party.map(p => m.views[p.id])));
+      }
     }
   });
 }

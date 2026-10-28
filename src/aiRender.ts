@@ -11,10 +11,10 @@ const CELL = 40;
 const M = 34;
 const LEGEND_W = 440;
 
-export function renderMapForAI(world0: World, map0: GameMap, view: 'kp' | 'player' = 'kp'): HTMLCanvasElement {
+export function renderMapForAI(world0: World, map0: GameMap, view: 'kp' | 'player' = 'kp', pcId?: string): HTMLCanvasElement {
   const player = view === 'player';
   // 玩家视角：先换成发给玩家窗口的那份世界（主持人才知道的已经删掉），地图和图例都只从它取，图例里灰区的东西用记忆
-  const world = player ? playerWorld(world0, map0.id) : world0;
+  const world = player ? playerWorld(world0, map0.id, pcId) : world0;
   const map = player ? world.maps[0] : map0;
   const mw = map.width * CELL, mh = map.height * CELL;
   const items: (Numbered & Partial<PlayerNumbered>)[] = player ? playerNumbering(world, map) : numbering(world, map);

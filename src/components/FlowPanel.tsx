@@ -439,10 +439,11 @@ function AIBridge({ world, flow, onClose }: { world: World; flow: Flow; onClose:
   const ui = useUI();
   const [mapId, setMapId] = useState(flow.mapId ?? ui.mapId);
   const [pov, setPov] = useState<'kp' | 'player'>('kp');
+  const [viewer, setViewer] = useState(world.party[0]?.id ?? '');
   const shot = async (how: 'copy' | 'download') => {
     const m = world.maps.find((x) => x.id === mapId);
     if (!m) return;
-    const blob = await canvasToBlob(renderMapForAI(world, m, pov));
+    const blob = await canvasToBlob(renderMapForAI(world, m, pov, viewer));
     if (how === 'download') return download(`${m.layer}-${m.name}-AI视图.png`, blob);
     try {
       await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]);
@@ -475,6 +476,9 @@ function AIBridge({ world, flow, onClose }: { world: World; flow: Flow; onClose:
           <option value="kp">主持人视角</option>
           <option value="player">玩家视角（迷雾）</option>
         </select>
+        {pov === 'player' && <select value={viewer} onChange={e => setViewer(e.target.value)}>
+          {world.party.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+        </select>}
         <button className="small" onClick={() => shot('copy')}>复制地图图片</button>
         <button className="small" onClick={() => shot('download')}>下载</button>
       </div>

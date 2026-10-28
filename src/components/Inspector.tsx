@@ -181,6 +181,7 @@ function CellInfo({ world, map, x, y }: { world: World; map: GameMap; x: number;
 }
 
 function MapInspector({ world, map, editable }: { world: World; map: GameMap; editable: boolean }) {
+  const ui = useUI();
   const [size, setSize] = useState({ w: map.width, h: map.height, id: map.id });
   if (size.id !== map.id) setSize({ w: map.width, h: map.height, id: map.id });
   const up = (fn: (m: Draft<GameMap>) => void, key?: string) =>
@@ -217,15 +218,20 @@ function MapInspector({ world, map, editable }: { world: World; map: GameMap; ed
       {map.variantOf && <div className="hint">复制自：{mapName(map.variantOf)}</div>}
       <div className="sub">
         <div className="sub-title">视野与试玩</div>
+        <Row label="迷雾 / 赠图目标"><select value={ui.knowledgeTarget} onChange={e => setUI({ knowledgeTarget: e.target.value })}>
+          <option value="">全队</option>
+          {world.party.map(p => <option key={p.id} value={p.id}>{p.name}{world.visionMode === 'grouped' ? ' 所在视野组' : ''}</option>)}
+        </select></Row>
         <Row label="视野">
           <select value={world.visionMode} onChange={(e) => setVisionMode(e.target.value as World['visionMode'])}>
             <option value="shared">全队共享</option>
+            <option value="grouped">按组共享</option>
             <option value="individual">各自独立（A 看到的 B 看不到）</option>
           </select>
         </Row>
         <div className="kv">试玩出生点：{map.spawn ? <>{cellName(map.spawn.x, map.spawn.y)} <a className="link" onClick={() => update((d) => { const m = findMap(d, map.id); if (m) m.spawn = null; })}>改回自动</a></> : '自动（最北、最居中的门外）'}</div>
         <div className="btns">
-          <button className="small" title="所有没去过的地方变成灰色记忆，只知道地形，不知道里面有什么" onClick={() => giveMapKnowledge(map.id)}>玩家拿到了这张图的地图</button>
+          <button className="small" title="所有没去过的地方变成灰色记忆，只知道地形，不知道里面有什么" onClick={() => giveMapKnowledge(map.id, ui.knowledgeTarget ? [ui.knowledgeTarget] : undefined)}>玩家拿到了这张图的地图</button>
         </div>
       </div>
       <div className="btns">

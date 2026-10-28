@@ -1,20 +1,21 @@
 import { isArchitectureObject, clipArchitecture, fogAt, tokenPosition } from './architecture';
 import { anyVisible } from './memory';
-import type { Endpoint, GameMap, PlayerClue, World } from './types';
+import type { Endpoint, GameMap, PlayerClue, VisionLayer, World } from './types';
 import { visibleMarks } from './perception';
 import { numbering } from './render';
 import { getRealWorld, getUI, saveNow } from './store';
 import { SESSION, rand, renewSession } from './session';
+import { effectiveLayer, emptyVision } from './vision';
+import { onProjectReplaced, projectContext } from './store';
 
 // 主持人窗口 ↔ 玩家窗口。玩家窗口用来共享屏幕给玩家（第一阶段还没有联网，靠共享屏幕）。
-// 两条路同时走：
-//   1. window.postMessage 直接发给"打开玩家窗口"开出来的那个窗口（双击 html 用 file:// 打开时也能通）；
-//   2. BroadcastChannel（玩家窗口是手动开的、或者刷新过时兜底）。
-// 每条消息带编号，接收方去重。
+// world / 播放仅通过已绑定窗口的 postMessage 定向发送。
+// 公共 BroadcastChannel 只传会话占用与存活，不传 world、角色或绑定凭据。
 
 export type SyncBody =
   | { type: 'world'; world: World }
-  | { type: 'hello' }
+  | { type: 'hello'; binding?: string }
+  | { type: 'clear' }
   | { type: 'play'; mediaId: string; label: string; mime: string; blob?: Blob }
   | { type: 'stop' }
   | { type: 'claim' } // 编辑器启动时：这个会话标识有人在用吗？
@@ -30,9 +31,22 @@ const BORN = Date.now();
 let channel: BroadcastChannel | null = null;
 try { channel = new BroadcastChannel('ts-map-sync'); } catch { /* 不支持就只走 postMessage */ }
 
-let playerWin: Window | null = null;
-export function openPlayerWindow() {
-  playerWin = window.open(`?view=player&session=${SESSION}`, `ts-player-${SESSION}`, 'width=1280,height=800');
+// Binding is held only by the host; the URL carries an opaque reconnect capability, never a selectable pcId.
+const players = new Map<string, { win: Window | null; pcId: string; context: number }>();
+const bindingsKey = () => `ts-player-bindings-${SESSION}`;
+try {
+  const saved = JSON.parse(sessionStorage.getItem(bindingsKey()) ?? '{}') as Record<string, string>;
+  for (const [binding, pcId] of Object.entries(saved)) if (typeof pcId === 'string') players.set(binding, { win: null, pcId, context: projectContext() });
+} catch { /* no reconnect state */ }
+function saveBindings() {
+  try { sessionStorage.setItem(bindingsKey(), JSON.stringify(Object.fromEntries([...players].map(([key, p]) => [key, p.pcId])))); } catch { /* unavailable */ }
+}
+export function openPlayerWindow(pcId?: string) {
+  const w = getRealWorld(), id = pcId ?? w.party[0]?.id;
+  if (!id || !w.party.some(p => p.id === id)) return;
+  const binding = rand();
+  const win = window.open(`?view=player&session=${SESSION}&binding=${binding}`, `ts-player-${binding}`, 'width=1280,height=800');
+  if (win) { players.set(binding, { win, pcId: id, context: projectContext() }); saveBindings(); }
 }
 
 const isMsg = (d: unknown): d is SyncMsg => !!d && typeof d === 'object' && (d as SyncMsg).__ts === 'ts-map' && typeof (d as SyncMsg).from === 'string' && typeof (d as SyncMsg).inst === 'string' && typeof (d as SyncMsg).born === 'number';
@@ -43,21 +57,23 @@ const isMsg = (d: unknown): d is SyncMsg => !!d && typeof d === 'object' && (d a
  * - 地形：现在有人看得见的格子才带实时地形；灰区靠各人的记忆（seen）画，黑区什么都没有；地形定义也只带用得上的；
  * - 物件：没隐藏、现在有人看得见的才带，备注、挂的媒体、线索删掉，其他状态的名字也删掉（只留当前这个）；
  *   记忆里的物件只留至少还有一格在灰区或看得见的（抹黑了的就不带）；
- * - 棋子：玩家角色的都带，其余的只在有人看得见时带；
+ * - 棋子：绑定角色自己始终保留，其他角色仅当前可见时保留；
  * - 连接点：没隐藏、这一头有人看得见的才带；另一头只在那张图去过时留下图的 ID，坐标一律不带；
  * - 线索：全队公开过的单独列在 clues 里（只带揭示到的那一档）；
  * - 标记：谁能看到（听得见）在完整的世界里算好，写进 audience（玩家窗口没有完整地形，自己算会算错）；
  * - 房间、D100、出生点、备注、流程图、记录、NPC、媒体列表都不带。
  * 编号（O/Z/T/C）在删之前按完整的世界算好放进 labels，所以玩家和主持人看到的编号一样。
  */
-export function playerWorld(w: World, mapId: string | null = w.playerMapId): World {
+export function playerWorld(w: World, mapId: string | null = w.playerMapId, pcId?: string): World {
+  const valid = pcId ? w.party.some(p => p.id === pcId) : w.visionMode === 'shared';
+  const layer = (m: GameMap) => !valid ? emptyVision(m.width * m.height) : pcId ? effectiveLayer(w, m, pcId) : m;
   const src = w.maps.find((m) => m.id === mapId);
-  const pm = src && playerMap(src);
-  const known = (id: string) => { const m = w.maps.find((x) => x.id === id); return !!m && [m, ...Object.values(m.views ?? {})].some((L) => L.fog.some(Boolean)); };
+  const pm = src && playerMap(src, layer(src), pcId);
+  const known = (id: string) => { const m = w.maps.find((x) => x.id === id); return !!m && layer(m).fog.some(Boolean); };
   const hidden = { mapId: '', x: 0, y: 0 };
   const connections = !src ? [] : w.connections.flatMap((c) => {
     if (c.hidden) return [];
-    const show = (e: Endpoint) => e.mapId === src.id && liveAt(src, e.y * src.width + e.x);
+    const show = (e: Endpoint) => e.mapId === src.id && fogAt(src, layer(src), e.x + .5, e.y + .5) === 1;
     if (!show(c.a) && !show(c.b)) return [];
     const far = (e: Endpoint) => (show(e) ? e : e.mapId !== src.id && known(e.mapId) ? { mapId: e.mapId, x: 0, y: 0 } : hidden);
     return [{ ...c, a: far(c.a), b: far(c.b) }];
@@ -70,14 +86,17 @@ export function playerWorld(w: World, mapId: string | null = w.playerMapId): Wor
   const labels: Record<string, string> = {};
   if (src) numbering(w, src).forEach((n) => { if (keep.has(n.id)) labels[n.id] = n.label; });
   const usedTerrains = new Set(pm ? [...pm.cells, ...pm.seen.cells, ...Object.values(pm.views).flatMap((L) => L.seen.cells)] : []);
-  const clues: PlayerClue[] = w.maps.flatMap((m) => m.objects.flatMap((o) => o.secrets.filter((s) => s.revealed?.scope === 'party').map((s) => ({
-    id: s.id, object: o.name, label: s.label, kind: s.kind, check: s.check, tier: s.revealed!.tier, text: s.tiers[s.revealed!.tier], at: s.revealed!.at,
-  }))));
-  const marks = w.marks.filter((k) => k.mapId === mapId).map((k) => ({
-    ...k, audience: w.party.filter((p) => visibleMarks(w, k.mapId, p.id).some((x) => x.id === k.id)).map((p) => p.id),
-  }));
+  const clues: PlayerClue[] = valid ? w.maps.flatMap(m => m.objects.flatMap(o => o.secrets.flatMap(s => {
+    const r = s.revealed;
+    const manual = r && (r.scope === 'party' || pcId && (r.recipients ? r.recipients.includes(pcId) : r.to === w.party.find(p => p.id === pcId)?.name)) ? r : undefined;
+    const known = manual ?? (pcId ? s.discoveries?.[pcId] : undefined);
+    return known ? [{ id: s.id, object: o.name, label: s.label, kind: s.kind, check: s.check, tier: known.tier, text: s.tiers[known.tier], at: known.at }] : [];
+  }))) : [];
+  const marks = valid && pcId ? visibleMarks(w, mapId ?? '', pcId).map(k => ({ ...k, audience: [pcId] })) : valid ? w.marks.filter(k => k.mapId === mapId) : [];
   return {
     ...w,
+    visionGroups: undefined, observationSeq: undefined, viewerId: pcId,
+    party: pcId ? w.party.filter(p => p.id === pcId).map(p => ({ id: p.id, name: p.name, tags: [], color: p.color })) : [],
     terrains: w.terrains.filter((t) => usedTerrains.has(t.id)),
     flows: [], log: [], npcs: [], media: [],
     labels, clues, marks, connections,
@@ -85,55 +104,38 @@ export function playerWorld(w: World, mapId: string | null = w.playerMapId): Wor
   };
 }
 
-/** 这一格现在有没有人看得见（共享那份，或者任何一个人自己那份）。 */
-function liveAt(m: GameMap, i: number) {
-  return m.fog[i] === 1 || Object.values(m.views ?? {}).some((L) => L.fog[i] === 1);
-}
-
-function playerMap(m: GameMap): GameMap {
-  const live = m.fog.map((_, i) => liveAt(m, i));
-  const touches = (r: { x: number; y: number; w: number; h: number }, ok: (i: number) => boolean) => {
-    for (let y = Math.max(0, r.y); y < Math.min(m.height, r.y + r.h); y++)
-      for (let x = Math.max(0, r.x); x < Math.min(m.width, r.x + r.w); x++) if (ok(y * m.width + x)) return true;
-    return false;
+/** Only the bound role's live cells and memory leave the host. */
+export function playerMap(m: GameMap, L: VisionLayer, pcId?: string): GameMap {
+  const seen = {
+    cells: L.seen.cells.map((c, i) => L.fog[i] ? c : ''),
+    objects: L.seen.objects.filter(r => {
+      for (let y = r.y; y < r.y + r.h; y++) for (let x = r.x; x < r.x + r.w; x++) if (L.fog[y * m.width + x]) return true;
+      return false;
+    }),
+    architecture: [...clipArchitecture(m, L, 1, L.seen.architecture ?? []), ...clipArchitecture(m, L, 2, L.seen.architecture ?? [])],
+    subCells: Object.fromEntries(Object.entries(L.seen.subCells ?? {}).filter(([key]) => L.subFog?.[+key])),
   };
-  // 记忆：只留还落在"去过"的格子里的物件；没去过（黑）的格子不留地形记忆
-  const mem = <L extends { fog: number[]; subFog?: Record<number, number>; seen: GameMap['seen'] }>(L: L): L => ({
-    ...L,
-    subFog: Object.fromEntries(Object.entries(L.subFog ?? {}).filter(([,f]) => f !== 0)),
-    seen: {
-      cells: L.seen.cells.map((c, i) => (L.fog[i] ? c : '')),
-      objects: L.seen.objects.filter((r) => touches(r, (i) => L.fog[i] !== 0)),
-      architecture: [...clipArchitecture(m, L, 1, L.seen.architecture ?? []), ...clipArchitecture(m, L, 2, L.seen.architecture ?? [])],
-      subCells: Object.fromEntries(Object.entries(L.seen.subCells ?? {}).filter(([k]) => L.subFog?.[+k])),
-    },
-  });
-  const base = mem(m);
   return {
-    ...m,
-    architecture: undefined,
-    subFog: Object.fromEntries(Object.entries(m.subFog ?? {}).filter(([,f]) => f !== 0)),
-    architectureFragments: clipArchitecture(m, m),
-    subdivisions: m.subdivisions?.filter(i => m.fog[i] || Object.values(m.views).some(L => L.fog[i])),
-    seen: base.seen,
-    views: Object.fromEntries(Object.entries(m.views).map(([pc, L]) => [pc, mem(L)])),
-    notes: '',
-    spawn: null,
-    cells: m.cells.map((c, i) => (live[i] ? c : '')),
-    d100: m.d100.map(() => 0),
-    rooms: [],
-    slidingPuzzles: undefined,
-    roomCells: m.roomCells.map(() => ''),
-    tokens: m.tokens.filter((t) => { const p = tokenPosition(t); return t.pcId || fogAt(m, m, p.x, p.y) === 1; }),
-    objects: m.objects.filter((o) => o.kind === 'object' && !isArchitectureObject(o) && !o.hidden && anyVisible(m, o)).map((o) => ({
-      ...o,
-      notes: '',
-      media: [],
-      states: o.states.map((s, k) => (k === o.state ? s : '')),
-      secrets: [],
+    id: m.id, name: m.name, layer: m.layer, floor: m.floor, width: m.width, height: m.height,
+    fog: [...L.fog], subFog: { ...L.subFog }, seen, views: {}, autoFog: false,
+    architectureFragments: clipArchitecture(m, L),
+    subdivisions: m.subdivisions?.filter(i => L.fog[i]),
+    cells: m.cells.map((c, i) => L.fog[i] === 1 ? c : ''),
+    d100: m.d100.map(() => 0), rooms: [], roomCells: m.roomCells.map(() => ''), notes: '', spawn: null,
+    tokens: m.tokens.filter(t => { const p = tokenPosition(t); return t.pcId === pcId || fogAt(m, L, p.x, p.y) === 1; }),
+    objects: m.objects.filter(o => o.kind === 'object' && !isArchitectureObject(o) && !o.hidden && anyVisible({ ...m, ...L }, o)).map(o => ({
+      id: o.id, kind: o.kind, name: o.name, x: o.x, y: o.y, w: o.w, h: o.h, height: o.height, color: o.color, icon: o.icon,
+      state: o.state, states: o.states.map((s, k) => k === o.state ? s : ''), notes: '', hidden: false, media: [], secrets: [],
     })),
   };
 }
+
+onProjectReplaced(() => {
+  for (const p of players.values()) if (p.win && !p.win.closed) {
+    try { p.win.postMessage({ type: 'clear', __ts: 'ts-map', seq: rand(), from: SESSION, inst: INST, born: BORN }, target()); } catch { /* closed */ }
+  }
+  players.clear(); saveBindings();
+});
 
 // 只发给自己的同源窗口（双击 html 用 file:// 打开时没有正经的 origin，只能用 '*'）
 const target = () => (location.origin && location.origin !== 'null' ? location.origin : '*');
@@ -147,11 +149,27 @@ export function send(body: SyncBody, to?: string) {
   }
   // 试玩是主持人自己的测试：试玩期间不往玩家窗口推播放；世界一律推真正的那份（试玩前的）
   if ((body.type === 'play' || body.type === 'stop') && getUI().trial) return;
-  const out: SyncBody = body.type === 'world' ? { type: 'world', world: playerWorld(getRealWorld()) } : body;
-  const msg: SyncMsg = { ...out, __ts: 'ts-map', seq: rand(), from: SESSION, inst: INST, born: BORN, ...(to ? { to } : {}) };
-  try { channel?.postMessage(msg); } catch { /* 有的浏览器不能用 BroadcastChannel 传 Blob */ }
-  const targets = [playerWin, window.opener as Window | null].filter((w): w is Window => !!w && !w.closed && w !== window);
-  targets.forEach((w) => { try { w.postMessage(msg, target()); } catch { /* 窗口已关 */ } });
+  const msg = (out: SyncBody): SyncMsg => ({ ...out, __ts: 'ts-map', seq: rand(), from: SESSION, inst: INST, born: BORN, ...(to ? { to } : {}) });
+  if (body.type === 'world' || body.type === 'play' || body.type === 'stop' || body.type === 'clear') {
+    const w = getRealWorld();
+    for (const [binding, p] of players) {
+      if (!p.win) { if (p.context !== projectContext() || !w.party.some(pc => pc.id === p.pcId)) { players.delete(binding); saveBindings(); } continue; }
+      if (p.win.closed) { players.delete(binding); saveBindings(); continue; }
+      // A new project requires a fresh host binding. Trial leaves the real project untouched.
+      const context = projectContext();
+      const valid = p.context === context && w.party.some(pc => pc.id === p.pcId);
+      const out: SyncBody = !valid ? { type: 'clear' } : body.type === 'world' ? { type: 'world', world: playerWorld(w, w.playerMapId, p.pcId) } : body;
+      try { p.win.postMessage(msg(out), target()); } catch { /* closed */ }
+      if (!valid) { players.delete(binding); saveBindings(); }
+    }
+    return;
+  }
+  const out = msg(body);
+  if (body.type === 'hello') {
+    if (window.opener && !window.opener.closed) window.opener.postMessage(out, target());
+    return;
+  }
+  try { channel?.postMessage(out); } catch { /* unavailable */ }
 }
 
 /** 订阅消息（两条路都听，按编号去重）。 */
@@ -189,7 +207,9 @@ export function listenAsEditor(onHello: () => void) {
     }
     if (m.type === 'claim' || m.type === 'taken' || m.type === 'alive') return;
     if (m.type !== 'hello' || (m.to && m.to !== SESSION)) return;
-    if (source && source !== window && 'postMessage' in source) playerWin = source as Window;
+    const p = m.binding && players.get(m.binding);
+    if (!p || !source || !('postMessage' in source) || p.win && source !== p.win) return;
+    p.win = source as Window;
     onHello();
   });
   if (channel) { quietUntil = Date.now() + 250; send({ type: 'claim' }); }
@@ -199,36 +219,36 @@ export function listenAsEditor(onHello: () => void) {
 
 /**
  * 玩家窗口这边：只接收绑定的那个编辑器的世界和播放。
- * 从编辑器的按钮打开的，网址里带着会话；手动打开的，认第一个推来世界的编辑器，并把它写进网址（刷新后还认它）。
+ * 网址带会话和主持人创建的绑定凭据；不提供玩家端换角色或全队总览。
  * 一段时间没收到消息就再打个招呼（编辑器刷新过、只能走 postMessage 时靠这个重新连上）。
  */
 export function listenAsPlayer(fn: (m: SyncMsg) => void) {
   const url = new URL(location.href);
-  let bound = url.searchParams.get('session');
+  const bound = url.searchParams.get('session');
+  const binding = url.searchParams.get('binding');
   // 只认一个编辑器实例：同一个会话标识出现第二个实例（复制了标签页、还没来得及换号）时不理它；
   // 只有原来那个实例安静了一阵（关了、刷新了），才改认新的实例
   let inst: string | null = null;
   let lastHeard = 0;
   const QUIET = 5000;
-  const off = listen((m) => {
-    if (m.type !== 'world' && m.type !== 'play' && m.type !== 'stop' && m.type !== 'alive') return;
-    if (!bound) {
-      if (m.type !== 'world') return;
-      bound = m.from;
-      url.searchParams.set('session', bound);
-      try { history.replaceState(null, '', url.toString()); } catch { /* file:// 下可能不让改 */ }
-    }
+  const off = listen((m, source) => {
+    if (m.type !== 'world' && m.type !== 'play' && m.type !== 'stop' && m.type !== 'clear' && m.type !== 'alive') return;
+    if (!bound || !binding) return;
+    if (m.type !== 'alive' && (!source || source !== window.opener)) return;
     if (m.from !== bound) return;
     if (inst && m.inst !== inst) {
       if (Date.now() - lastHeard < QUIET) return; // 原来那个还活着：这是复制出来的，不认
-      if (m.type !== 'world') { send({ type: 'hello' }, bound); return; } // 换认新实例：先请它推一整份世界，从世界开始认
+      if (m.type !== 'world' && m.type !== 'clear') { send({ type: 'hello', binding: binding ?? undefined }, bound); return; } // 换认新实例：先请它推一整份世界，从世界开始认
     }
     inst = m.inst;
     lastHeard = Date.now();
     if (m.type !== 'alive') fn(m);
   });
-  send({ type: 'hello' }, bound ?? undefined);
-  const beat = window.setInterval(() => { if (Date.now() - lastHeard > 10000) send({ type: 'hello' }, bound ?? undefined); }, 5000);
+  send({ type: 'hello', binding: binding ?? undefined }, bound ?? undefined);
+  const beat = window.setInterval(() => {
+    if (lastHeard && Date.now() - lastHeard > 10000) fn({ type: 'clear', __ts: 'ts-map', seq: rand(), from: bound ?? '', inst: INST, born: BORN });
+    if (Date.now() - lastHeard > 10000 || !inst) send({ type: 'hello', binding: binding ?? undefined }, bound ?? undefined);
+  }, 5000);
   return () => { off(); clearInterval(beat); };
 }
 

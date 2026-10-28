@@ -130,7 +130,9 @@ function Editor() {
         <span className="muted">玩家看到：{playerMap ? `${playerMap.layer}·${playerMap.name}` : '（没推送）'}</span>
         {map.id !== world.playerMapId && <button onClick={() => update((d) => { d.playerMapId = map.id; })}>推送当前地图</button>}
         <button className={ui.trial ? 'trial-btn on' : 'trial-btn'} onClick={() => (ui.trial ? endTrial() : startTrial())}>{ui.trial ? '■ 结束试玩' : '▶ 试玩'}</button>
-        <button onClick={openPlayerWindow}>打开玩家窗口</button>
+        <select aria-label="打开绑定角色的玩家窗口" value="" onChange={e => { if (e.target.value) openPlayerWindow(e.target.value); }}>
+          <option value="">打开玩家窗口…</option>{world.party.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+        </select>
         <button title="撤销 ⌘Z" onClick={undo}>↶</button>
         <button title="重做 ⇧⌘Z" onClick={redo}>↷</button>
         <details className="menu">

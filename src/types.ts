@@ -32,7 +32,8 @@ export interface Secret {
   kind: 'auto' | 'roll'; // auto = 走进范围自动浮现（文字放在 tiers.success）；roll = 走进范围后可以投骰
   range: number; // 需要靠近到几格以内（圆形距离，向下取整）
   tiers: SecretTiers;
-  revealed?: { tier: Tier; scope: 'party' | 'private'; to?: string; at: number };
+  revealed?: { tier: Tier; scope: 'party' | 'private'; to?: string; recipients?: Id[]; at: number };
+  discoveries?: Record<Id, { tier: Tier; at: number }>; // 自动发现按当时的接收角色保存，不随换组转发
 }
 
 export interface MediaAttach {
@@ -181,6 +182,11 @@ export interface VisionLayer {
 }
 
 export interface Memory {
+  cellRevs?: number[];
+  subRevs?: Record<number, number>;
+  architectureRevs?: Record<number, number>;
+  observed?: Record<number, number>; // 子格空间的实际观察版本，空地同样是消失证据
+  objectRevs?: Record<Id, number>;
   architecture?: ArchitectureFragment[];
   subCells?: Record<number, string>;
   cells: string[]; // 记得的地形，'' = 不记得
@@ -217,6 +223,7 @@ export interface Connection {
 }
 
 export interface PC {
+  visionGroupId?: Id | null; // undefined = 公共组，null = 独立
   id: Id;
   name: string;
   tags: string[]; // 途径/职业，例如 工程师、歌唱家
@@ -381,7 +388,10 @@ export interface World {
   media: MediaMeta[];
   session: number;
   playerMapId: Id | null;
-  visionMode: 'shared' | 'individual'; // 视野：全队共享 / 各自独立（A 看到的，B 默认看不到）
+  visionMode: 'shared' | 'individual' | 'grouped';
+  visionGroups?: { id: Id; name: string }[]; // 公共组隐含存在，不能删除
+  observationSeq?: number;
+  viewerId?: Id; // 仅定向玩家载荷，由主持人绑定
   marks: Mark[];
   npcs: Npc[];
   labels?: Record<Id, string>; // 只在发给玩家窗口的世界里有：删东西之前算好的编号，保证和主持人那边一致

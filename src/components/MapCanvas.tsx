@@ -1,5 +1,6 @@
+import { effectiveLayer } from '../vision';
 import { architectureWalls, architectureDoors, isArchitectureObject, characterPathClear, furnitureSweepBlocked, isSubdivided, tokenPosition } from '../architecture';
-import { addArchitectureDoor, addArchitectureWall, eraseArchitecture, moveMapToken, subdivideRegion, toggleArchitectureDoor } from '../actions';
+import { addArchitectureDoor, addArchitectureWall, eraseArchitecture, moveMapToken, paintFog, subdivideRegion, toggleArchitectureDoor } from '../actions';
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { GameMap, World } from '../types';
 import { CS, cellLine, uid } from '../util';
@@ -19,6 +20,13 @@ type Drag =
   | { k: 'click'; next: Selection };
 
 const PAINT_TOOLS = ['paint', 'erase', 'd100', 'room', 'fogReveal', 'fogHide', 'fogBlack'];
+
+/** Zones are background: only their visible border is an explicit selection/drag target. */
+export function zoneBorderHit(r: { x: number; y: number; w: number; h: number }, gx: number, gy: number, zoom: number) {
+  const margin = 6 / (CS * zoom);
+  return gx >= r.x - margin && gx <= r.x + r.w + margin && gy >= r.y - margin && gy <= r.y + r.h + margin &&
+    Math.min(Math.abs(gx - r.x), Math.abs(gx - r.x - r.w), Math.abs(gy - r.y), Math.abs(gy - r.y - r.h)) <= margin;
+}
 
 function fitView(map: GameMap, w: number, h: number): View {
   const zoom = Math.min(w / (map.width * CS), h / (map.height * CS)) * 0.9;
@@ -138,7 +146,8 @@ export function MapCanvas({ world, map, mode, playerNumbers = false, follow, vie
   };
 
   const paintCells = (cells: [number, number][], value: number) => {
-    const { tool, terrainId, roomId } = getUI();
+    const { tool, terrainId, roomId, knowledgeTarget } = getUI();
+    if (tool.startsWith('fog')) return paintFog(map.id, cells, tool as 'fogReveal' | 'fogHide' | 'fogBlack', knowledgeTarget ? [knowledgeTarget] : undefined);
     update((d) => {
       const m = findMap(d, map.id)!;
       for (const [x, y] of cells) {
@@ -148,19 +157,7 @@ export function MapCanvas({ world, map, mode, playerNumbers = false, follow, vie
         else if (tool === 'erase') m.cells[i] = '';
         else if (tool === 'd100') m.d100[i] = value;
         else if (tool === 'room') m.roomCells[i] = roomId;
-        else if (tool.startsWith('fog')) {
-          // 各自独立时，主持人改迷雾是改所有人的（全队那份 + 每个人自己那份）
-          for (const L of [m, ...Object.values(m.views)]) {
-            if (tool === 'fogReveal') L.fog[i] = 1;
-            else if (tool === 'fogHide') { if (L.fog[i] === 1) L.fog[i] = 2; }
-            else { L.fog[i] = 0; L.seen.cells[i] = ''; }
-            if (isSubdivided(m, x, y)) for (let sy = 0; sy < 3; sy++) for (let sx = 0; sx < 3; sx++) {
-              const key = (y * 3 + sy) * m.width * 3 + x * 3 + sx; L.subFog ??= {};
-              L.subFog[key] = tool === 'fogReveal' ? 1 : tool === 'fogHide' && L.subFog[key] ? 2 : 0;
-              if (tool === 'fogBlack') { if (L.seen.subCells) delete L.seen.subCells[key]; }
-            }
-          }
-        }
+
       }
     });
   };
@@ -173,14 +170,14 @@ export function MapCanvas({ world, map, mode, playerNumbers = false, follow, vie
     if (e.button !== 0 || space.current) return startPan();
 
     const s = getUI();
-    const w = getWorld();
-    const m = findMap(w, map.id)!;
+    const w = mode === 'player' && !s.trial ? world : getWorld();
+    const m = findMap(w, map.id) ?? map;
     // 试玩允许直接拖棋盘块；独立玩家窗口仍只平移，标记模式仍交给点击处理。
     if (mode === 'player') {
       const trial = s.trial;
       const obj = trial?.mapId === m.id && !trial.markMode
         ? m.objects.find(o => !o.hidden && slidingPuzzleForObject(m, o.id) &&
-          (w.visionMode === 'individual' ? m.views[viewer ?? '']?.fog : m.fog)?.[cy * m.width + cx] === 1 &&
+          (viewer ? effectiveLayer(w, m, viewer).fog : m.fog)?.[cy * m.width + cx] === 1 &&
           cx >= o.x && cx < o.x + o.w && cy >= o.y && cy < o.y + o.h)
         : undefined;
       if (!obj) return startPan();
@@ -207,7 +204,16 @@ export function MapCanvas({ world, map, mode, playerNumbers = false, follow, vie
       return;
     }
     if (tool === 'select') {
-      const items = inMap ? itemsAt(w, m, cx, cy) : [];
+      const { gx, gy } = toCell(e);
+      const hits = inMap ? itemsAt(w, m, cx, cy) : [];
+      const foreground = hits.filter(it => it.kind !== '触发区');
+      // Furniture keeps priority even where a zone border crosses it. An already
+      // selected zone still pans from its interior; drag only starts on its border.
+      const items = foreground.length ? foreground : hits.filter(it => {
+        const sel = it.sel;
+        const zone = sel.type === 'object' && m.objects.find(o => o.id === sel.id);
+        return zone && zoneBorderHit(zone, gx, gy, v.zoom);
+      });
       if (e.detail >= 2) {
         const c = items.find((it) => it.sel.type === 'conn');
         const conn = c && w.connections.find((x) => c.sel.type === 'conn' && x.id === c.sel.id);

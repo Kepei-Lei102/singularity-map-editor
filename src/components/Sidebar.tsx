@@ -5,7 +5,7 @@ import { numbering } from '../render';
 import { newMap } from '../defaults';
 import { cellName, uid } from '../util';
 import { Area, Check, Num, Row, Section, Txt } from './fields';
-import { captureRoomReset, resetRoom, saveRoomLayout, deleteRoomLayout } from '../actions';
+import { captureRoomReset, resetRoom, saveRoomLayout, deleteRoomLayout, paintFog } from '../actions';
 
 const ALL_TOOLS: [Tool, string, string][] = [
   ['select', '选择/移动', 'V'],
@@ -78,6 +78,9 @@ export function Sidebar() {
               onClick={() => setUI({ tool: t, pendingConn: null })}>{label}</button>
           ))}
         </div>
+        {ui.tool.startsWith('fog') && <Row label="迷雾目标"><select value={ui.knowledgeTarget} onChange={e => setUI({ knowledgeTarget: e.target.value })}>
+          <option value="">全队</option>{w.party.map(p => <option key={p.id} value={p.id}>{p.name}{w.visionMode === 'grouped' ? ' 所在组' : ''}</option>)}
+        </select></Row>}
         {['paint', 'erase', 'd100', 'room', 'fogReveal', 'fogHide', 'fogBlack'].includes(ui.tool) && (
           <Row label="笔刷">
             <span className="inline">
@@ -121,9 +124,9 @@ export function Sidebar() {
             </div>
             <Check label="自动视野（按玩家角色的视线）" value={cur.autoFog} onChange={(v) => update((d) => { d.maps.find((m) => m.id === cur.id)!.autoFog = v; })} />
             <div className="btns">
-              <button className="small" onClick={() => update((d) => { const m = d.maps.find((x) => x.id === cur.id)!; for (const L of [m, ...Object.values(m.views)]) { L.fog = L.fog.map((f) => (f === 1 ? 2 : f)); if (L.subFog) for (const k of Object.keys(L.subFog)) if (L.subFog[+k] === 1) L.subFog[+k] = 2; } })}>可见的全部变灰</button>
-              <button className="small" onClick={() => update((d) => { const m = d.maps.find((x) => x.id === cur.id)!; for (const L of [m, ...Object.values(m.views)]) { L.fog.fill(1); L.subFog ??= {}; for (const i of m.subdivisions ?? []) for (let sy = 0; sy < 3; sy++) for (let sx = 0; sx < 3; sx++) L.subFog[(Math.floor(i / m.width) * 3 + sy) * m.width * 3 + i % m.width * 3 + sx] = 1; } })}>全部看得见</button>
-              <button className="small" onClick={() => update((d) => { const m = d.maps.find((x) => x.id === cur.id)!; for (const L of [m, ...Object.values(m.views)]) { L.fog.fill(0); L.subFog = {}; L.seen = { cells: m.cells.map(() => ''), objects: [] }; } })}>全部抹黑</button>
+              <div className="hint">以下整图操作始终作用于全队。</div>
+              {([['fogHide', '全队可见的全部变灰'], ['fogReveal', '全队全部看得见'], ['fogBlack', '全队全部抹黑']] as const).map(([kind, label]) =>
+                <button key={kind} className="small" onClick={() => paintFog(cur.id, cur.cells.map((_, i) => [i % cur.width, Math.floor(i / cur.width)]), kind)}>{label}</button>)}
             </div>
           </>
         )}

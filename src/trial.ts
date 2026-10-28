@@ -1,3 +1,4 @@
+import { effectiveLayer } from './vision';
 import { beginSandbox, endSandbox, getUI, getWorld, setUI, toast, update, type UIState } from './store';
 import { addMark, autoReveal, cancelPendingPlay, checkEnterTriggers, findMap, ioBusy } from './actions';
 import type { GameMap, MapObject, World } from './types';
@@ -266,7 +267,7 @@ export function trialPlaceMark(x: number, y: number) {
   const w = getWorld();
   const m = findMap(w, t.mapId);
   if (!m || x < 0 || y < 0 || x >= m.width || y >= m.height) return;
-  const fog = w.visionMode === 'individual' ? m.views[pl.pcId]?.fog : m.fog;
+  const fog = effectiveLayer(w, m, pl.pcId).fog;
   if (!fog?.[y * m.width + x]) return setTr({ msg: '没去过的地方标不了' });
   addMark(t.mapId, pl.pcId, x, y, t.markSymbol, t.markText.trim());
   setTr({ msg: '' });

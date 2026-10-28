@@ -38,6 +38,8 @@ function fixture() {
 }
 
 function install(world) {
+  // Eyes represent registered characters; orphan pcIds must never become knowledge sources.
+  for (const t of world.maps.flatMap(m => m.tokens)) if (t.pcId && !world.party.some(p => p.id === t.pcId)) world.party.push({ id: t.pcId, name: t.name, color: t.color, tags: [] });
   api.replaceWorld(world);
   api.setUI({ mapId: world.maps[0].id, trial: null, selection: null, mode: 'edit' });
 }

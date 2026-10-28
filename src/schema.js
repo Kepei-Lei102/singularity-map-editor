@@ -198,6 +198,11 @@ export function checkWorld(w, migrated = false) {
   const fragments = (v, where) => arr(v, where).forEach(r => { obj(r, where); for (const k of ['x', 'y', 'w', 'h']) num(r[k], `${where}.${k}`, k === 'w' || k === 'h' ? .0000001 : -MAX_COORD, MAX_COORD); oneOf(r.material, ['wall', 'glass', 'door', 'opening'], where); });
   const memory = (v, where, n) => {
     obj(v, where); strings(v.cells, `${where}.cells`, n); seenObjects(v.objects, `${where}.objects`);
+    if (v.cellRevs !== undefined) arr(v.cellRevs, `${where}.cellRevs`).forEach(r => int(r, `${where}.cellRevs`, 0, Number.MAX_SAFE_INTEGER));
+    for (const field of ['observed', 'objectRevs', 'subRevs', 'architectureRevs']) if (v[field] !== undefined) for (const [key, value] of Object.entries(obj(v[field], `${where}.${field}`))) {
+      if (field !== 'objectRevs') int(+key, `${where}.observed key`, 0, n * 9 - 1);
+      int(value, `${where}.${field}`, 0, Number.MAX_SAFE_INTEGER);
+    }
     if (v.architecture !== undefined) fragments(v.architecture, `${where}.architecture`);
     if (v.subCells !== undefined) for (const [key, value] of Object.entries(obj(v.subCells, `${where}.subCells`))) { int(+key, `${where}.subCells key`, 0, n * 9 - 1); str(value, `${where}.subCells value`); }
   };
@@ -285,8 +290,10 @@ export function checkWorld(w, migrated = false) {
         if (s.kind !== undefined) oneOf(s.kind, ['auto', 'roll'], `${sa}.kind`);
         if (s.range !== undefined) int(s.range, `${sa}.range`, 0, MAX_SIDE * 2);
         obj(s.tiers, `${sa}.tiers`); for (const t of ['crit', 'success', 'fail', 'fumble']) str(s.tiers[t], `${sa}.tiers.${t}`);
+        if (s.discoveries !== undefined) for (const value of Object.values(obj(s.discoveries, `${sa}.discoveries`))) { obj(value, sa); oneOf(value.tier, ['crit', 'success', 'fail', 'fumble'], sa); num(value.at, sa); }
         if (s.revealed !== undefined) {
           obj(s.revealed, `${sa}.revealed`); oneOf(s.revealed.tier, ['crit', 'success', 'fail', 'fumble'], `${sa}.revealed.tier`);
+          if (s.revealed.recipients !== undefined) strings(s.revealed.recipients, `${sa}.revealed.recipients`);
           oneOf(s.revealed.scope, ['party', 'private'], `${sa}.revealed.scope`); optStr(s.revealed.to, `${sa}.revealed.to`); num(s.revealed.at, `${sa}.revealed.at`);
         }
       });
@@ -394,6 +401,15 @@ export function checkWorld(w, migrated = false) {
   unique(w.connections, 'connections');
   arr(w.party, 'party').forEach((p, i) => { obj(p, `party[${i}]`); id(p.id, `party[${i}].id`); str(p.name, `party[${i}].name`); str(p.color, `party[${i}].color`); strings(p.tags, `party[${i}].tags`); });
   unique(w.party, 'party');
+  if (w.visionGroups !== undefined) {
+    arr(w.visionGroups, 'visionGroups').forEach(g => { obj(g, 'visionGroups'); id(g.id, 'visionGroups.id'); str(g.name, 'visionGroups.name'); });
+    unique(w.visionGroups, 'visionGroups');
+  }
+  for (const p of w.party) if (p.visionGroupId !== undefined && p.visionGroupId !== null) {
+    id(p.visionGroupId, 'party.visionGroupId');
+    if (!(w.visionGroups ?? []).some(g => g.id === p.visionGroupId)) fail('party.visionGroupId', '视野组不存在');
+  }
+  if (w.observationSeq !== undefined) int(w.observationSeq, 'observationSeq', 0, Number.MAX_SAFE_INTEGER);
   if (w.flows !== undefined || w.lines === undefined) {
     arr(w.flows, 'flows').forEach((f, i) => {
       const fa = `流程图「${typeof f?.name === 'string' ? f.name : i}」`;
@@ -429,7 +445,7 @@ export function checkWorld(w, migrated = false) {
   unique(w.media, 'media');
   num(w.session, 'session');
   if (w.playerMapId !== null && w.playerMapId !== undefined) str(w.playerMapId, 'playerMapId');
-  if (w.visionMode !== undefined) oneOf(w.visionMode, ['shared', 'individual'], 'visionMode');
+  if (w.visionMode !== undefined) oneOf(w.visionMode, ['shared', 'individual', 'grouped'], 'visionMode');
   if (w.marks !== undefined) arr(w.marks, 'marks').forEach((k, i) => {
     const ka = `marks[${i}]`;
     obj(k, ka); id(k.id, `${ka}.id`); str(k.mapId, `${ka}.mapId`); int(k.x, `${ka}.x`); int(k.y, `${ka}.y`); str(k.author, `${ka}.author`);

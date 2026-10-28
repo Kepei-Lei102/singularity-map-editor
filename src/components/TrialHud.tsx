@@ -54,9 +54,10 @@ export function TrialHud() {
         <span className="muted">视野</span>
         <select value={w.visionMode} onChange={(e) => setVisionMode(e.target.value as typeof w.visionMode)}>
           <option value="shared">全队共享</option>
+            <option value="grouped">按组共享</option>
           <option value="individual">各自独立</option>
         </select>
-        <button className="small" title="所有没去过的地方变成灰色记忆，只知道地形" onClick={() => giveMapKnowledge(t.mapId)}>拿到地图</button>
+        <button className="small" title="所有没去过的地方变成灰色记忆，只知道地形" onClick={() => giveMapKnowledge(t.mapId, cur ? [cur.pcId] : [])}>当前角色 / 组拿到地图</button>
       </div>
       <div className="trial-row">
         <button className={`small ${t.markMode ? 'on' : ''}`} onClick={() => toggleMarkMode()}>{t.markMode ? '点地图放下（Esc 取消）' : '放置标记（G）'}</button>

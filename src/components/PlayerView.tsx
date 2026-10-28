@@ -11,11 +11,11 @@ export function PlayerView() {
   const [media, setMedia] = useState<{ mediaId: string; label: string; mime: string; blob?: Blob } | null>(null);
   const [armed, setArmed] = useState(false);
   const [nums, setNums] = useState(false);
-  const [viewer, setViewer] = useState('');
 
   useEffect(() => {
     const off = listenAsPlayer((m) => {
       if (m.type === 'world') setWorld(m.world);
+      else if (m.type === 'clear') { setWorld(null); setMedia(null); }
       else if (m.type === 'play') setMedia({ mediaId: m.mediaId, label: m.label, mime: m.mime, blob: m.blob });
       else if (m.type === 'stop') setMedia(null);
     });
@@ -28,15 +28,10 @@ export function PlayerView() {
 
   return (
     <div className="player">
-      {map ? <MapCanvas world={world!} map={map} mode="player" playerNumbers={nums} viewer={viewer || undefined} /> : <div className="player-wait">等待主持人推送地图……</div>}
+      {map ? <MapCanvas world={world!} map={map} mode="player" playerNumbers={nums} viewer={undefined} /> : <div className="player-wait">等待主持人推送地图……</div>}
       {map && <div className="player-title">{map.layer} · {map.name}</div>}
       {map && <button className="player-nums" onClick={() => setNums(!nums)}>{nums ? '隐藏编号' : '显示编号'}</button>}
-      {map && world!.visionMode === 'individual' && (
-        <select className="player-viewer" value={viewer} onChange={(e) => setViewer(e.target.value)}>
-          <option value="">（全队合起来）</option>
-          {world!.party.map((p) => <option key={p.id} value={p.id}>{p.name} 的视角</option>)}
-        </select>
-      )}
+      {map && <span className="player-viewer">{world!.party[0]?.name} 的视角</span>}
       {clues.length > 0 && (
         <div className="clues">
           <div className="clues-title">线索</div>

@@ -64,6 +64,10 @@ export const reachableWorlds = (): World[] => [world, ...past, ...future, ...(sa
  * 异步操作（导入、上传、播放）开始时记下它，完成时对不上就不再动世界——结果属于一个已经不在的上下文。
  */
 let epoch = 0;
+let projectEpoch = 0;
+const projectListeners = new Set<() => void>();
+export function onProjectReplaced(fn: () => void) { projectListeners.add(fn); return () => { projectListeners.delete(fn); }; }
+export const projectContext = () => projectEpoch;
 export const worldContext = () => `${epoch}${sandbox ? ':trial' : ''}`;
 /** 真正的世界：试玩中是试玩开始前那份（发给玩家、保存都用它）。 */
 export const getRealWorld = () => sandbox?.world ?? world;
@@ -144,7 +148,8 @@ export function redo() {
 }
 
 export function replaceWorld(w: World) {
-  epoch++;
+  epoch++; projectEpoch++;
+  projectListeners.forEach(fn => fn());
   past = [];
   future = [];
   batching = false;
@@ -209,6 +214,7 @@ export interface UIState {
   flowId: string | null;
   connKind: 'stairs' | 'portal' | 'door' | 'other';
   tokenPcId: string | null;
+  knowledgeTarget: string; // 空字符串=全队，否则为角色有效组
   tab: Tab;
   showFogInEdit: boolean;
   showNumbers: boolean;
@@ -238,6 +244,7 @@ let ui: UIState = {
   flowId: null,
   connKind: 'stairs',
   tokenPcId: null,
+  knowledgeTarget: '',
   tab: 'inspect',
   showFogInEdit: false,
   showNumbers: false,
