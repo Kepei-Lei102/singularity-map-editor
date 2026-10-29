@@ -1,4 +1,5 @@
 import { isArchitectureObject, openingIsOpen, architectureObjectBounds, furnitureSweepBlocked, tokenPosition } from '../architecture';
+import { objectEnabled } from '../objectData.js';
 import { subdivideRegion, toggleArchitectureDoor } from '../actions';
 import type { Draft } from 'immer';
 import { useState } from 'react';
@@ -7,7 +8,7 @@ import type { Connection, GameMap, MapObject, Secret, Token, World } from '../ty
 import { CONN_LABEL, TIERS, TIER_LABEL } from '../types';
 import {
   deleteMap, duplicateMap, fillEmptyCells, findMap, giveMapKnowledge, reshapeMaps, setVisionMode, findObj, fireAttach, hideSecret, itemsAt, jumpTo, resizeMap, revealSecret,
-  sameSel, setObjectState, setObjectStates, resetRoom, applyRoomLayout, moveSlidingObject, deleteMapObject,
+  sameSel, setObjectEnabled, setObjectState, setObjectStates, resetRoom, applyRoomLayout, moveSlidingObject, deleteMapObject,
 } from '../actions';
 import { checkSlidingMove, seesSlidingObject, slidingPuzzleForObject } from '../sliding';
 import { CELL_METERS, nearestPc, type Nearest } from '../perception';
@@ -24,7 +25,9 @@ export function Inspector() {
   let body: JSX.Element | null = null;
   if (sel?.type === 'object') {
     const o = findObj(w, sel.mapId, sel.id);
-    if (o && (!ui.trial || !slidingPuzzleForObject(map, o.id) || seesSlidingObject(w, map, o.id, ui.trial.players[ui.trial.current]?.tokenId ?? '')))
+    const selectedMap = findMap(w, sel.mapId);
+    if (o && selectedMap && (objectEnabled(selectedMap, o) || canEditMap(ui) && !ui.trial) &&
+      (!ui.trial || !slidingPuzzleForObject(selectedMap, o.id) || seesSlidingObject(w, selectedMap, o.id, ui.trial.players[ui.trial.current]?.tokenId ?? '')))
       body = <ObjectInspector key={o.id} world={w} mapId={sel.mapId} o={o} ui={ui} />;
   } else if (sel?.type === 'token') {
     const t = findMap(w, sel.mapId)?.tokens.find((x) => x.id === sel.id);
@@ -46,7 +49,7 @@ export function Inspector() {
       <RoomReset map={map} />
       <Section title="建筑层">
         {!ui.trial && canEditMap(ui) && sel?.type === 'cell' && <div className="btns"><button onClick={() => { const e = subdivideRegion(map.id, { x: sel.x, y: sel.y, w: 1, h: 1 }); if (e) toast(e); }}>此格细分为3×3</button><button onClick={() => { const e = subdivideRegion(map.id, { x: sel.x, y: sel.y, w: 1, h: 1 }, true); if (e) toast(e); }}>取消细分</button></div>}
-        {map.objects.filter(o => isArchitectureObject(o) && (!ui.trial || !o.hidden && (() => {
+        {map.objects.filter(o => objectEnabled(map, o) && isArchitectureObject(o) && (!ui.trial || !o.hidden && (() => {
           const t = map.tokens.find(t => t.id === ui.trial!.players[ui.trial!.current]?.tokenId), b = architectureObjectBounds(map, o);
           return t && Math.hypot(tokenPosition(t).x - b.x - b.w / 2, tokenPosition(t).y - b.y - b.h / 2) <= 1.5;
         })())).map(o => <div key={o.id} className="card">
@@ -107,13 +110,16 @@ function RoomReset({ map }: { map: GameMap }) {
 function SlidingPuzzles({ world, map, ui }: { world: World; map: GameMap; ui: UIState }) {
   const [message, setMessage] = useState<{ mapId: string; text: string } | null>(null);
   const allowed = !ui.trial || ui.trial.mapId === map.id;
-  const visible = (id: string) => !ui.trial || seesSlidingObject(world, map, id, ui.trial.players[ui.trial.current]?.tokenId ?? '');
+  const visible = (id: string) => objectEnabled(map, map.objects.find(o => o.id === id)) &&
+    (!ui.trial || seesSlidingObject(world, map, id, ui.trial.players[ui.trial.current]?.tokenId ?? ''));
   return <>{map.slidingPuzzles?.map((puzzle) => {
     const selected = ui.selection;
     const block = selected?.type === 'object' && selected.mapId === map.id && puzzle.objectIds.includes(selected.id) && visible(selected.id)
       ? map.objects.find((o) => o.id === selected.id) : undefined;
     const target = map.objects.find((o) => o.id === puzzle.targetId);
-    const solved = puzzle.goal && target?.x === puzzle.goal.x && target?.y === puzzle.goal.y;
+    const gate = map.objects.find((o) => o.id === puzzle.gateId);
+    const solved = puzzle.goal && objectEnabled(map, target) && objectEnabled(map, gate) && gate?.state === 1 &&
+      target?.x === puzzle.goal.x && target?.y === puzzle.goal.y;
     return <Section key={puzzle.id} title={`滑块棋盘 · ${puzzle.name}`}>
       <div className="kv">边界 {rangeName(puzzle)}{puzzle.goal ? ` · 目标左上角 ${cellName(puzzle.goal.x, puzzle.goal.y)}${solved ? ' · 已到位，门已打开' : ''}` : ' · 腾挪书架，实际走通通道'}</div>
       <div className="chips">
@@ -222,6 +228,15 @@ function MapInspector({ world, map, editable }: { world: World; map: GameMap; ed
           {map.notes && <div className="hint">{map.notes}</div>}
         </>
       )}
+      {editable && !ui.trial && map.objects.some(o => !objectEnabled(map, o)) && <div className="sub">
+        <div className="sub-title">停用物件</div>
+        <div className="hint">选择后可编辑或恢复启用；父墙停用的门也列在这里。</div>
+        {map.objects.filter(o => !objectEnabled(map, o)).map(o => <div key={o.id} className="list-row">
+          <button onClick={() => setUI({ selection: { type: 'object', mapId: map.id, id: o.id }, tab: 'inspect' })}>
+            {o.name}{o.enabled !== false ? '（父墙停用）' : ''}
+          </button>
+        </div>)}
+      </div>}
       {map.variantOf && <div className="hint">复制自：{mapName(map.variantOf)}</div>}
       <div className="sub">
         <div className="sub-title">视野与试玩</div>
@@ -286,7 +301,6 @@ function distanceNote(s: Secret, near: Nearest | null) {
 const clampInt = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, Math.round(Number.isFinite(v) ? v : lo)));
 
 function ObjectInspector({ world, mapId, o, ui }: { world: World; mapId: string; o: MapObject; ui: UIState }) {
-  const run = ui.mode === 'run';
   const edit = canEditMap(ui);
   const up = (fn: (x: Draft<MapObject>) => void, key?: string) =>
     update((d) => { const x = findObj(d, mapId, o.id); if (x) fn(x); }, { coalesce: key && key + o.id });
@@ -294,6 +308,8 @@ function ObjectInspector({ world, mapId, o, ui }: { world: World; mapId: string;
   const architecture = isArchitectureObject(o);
   const isZone = o.kind === 'zone';
   const map = findMap(world, mapId)!;
+  const enabled = objectEnabled(map, o);
+  const run = ui.mode === 'run' && enabled;
   const puzzle = slidingPuzzleForObject(map, o.id);
   const mapW = map.width, mapH = map.height;
   const near = run ? nearestPc(world, map, o) : null;
@@ -305,6 +321,16 @@ function ObjectInspector({ world, mapId, o, ui }: { world: World; mapId: string;
       <Section title={isZone ? '触发区' : '物件'} extra={edit && (
         <button className="danger small" onClick={() => deleteMapObject(mapId, o.id)}>删除</button>
       )}>
+        {edit && !ui.trial && <Check label="启用物件" value={o.enabled !== false} onChange={(v) => {
+          const error = setObjectEnabled(mapId, o.id, v);
+          if (error) toast(error);
+        }} />}
+        {!enabled && <div className="hint">已停用，不参与地图和带团互动。
+          {o.opening && map.objects.find(w => w.id === o.opening!.wallId)?.enabled === false && <>
+            父墙已停用，需先恢复父墙。
+            <button className="small" onClick={() => setUI({ selection: { type: 'object', mapId, id: o.opening!.wallId } })}>选择父墙</button>
+          </>}
+        </div>}
         {edit ? (
           <>
             <Row label="名字"><Txt value={o.name} onChange={(v) => up((x) => { x.name = v; }, 'name')} /></Row>
@@ -385,7 +411,7 @@ function ObjectInspector({ world, mapId, o, ui }: { world: World; mapId: string;
         <Section title="状态">
           <div className="chips">
             {o.states.map((s, i) => (
-              <button key={i} className={i === o.state ? 'chip on' : 'chip'} disabled={!run && !edit}
+              <button key={i} className={i === o.state ? 'chip on' : 'chip'} disabled={!enabled || !run && !edit}
                 onClick={() => { setObjectState(mapId, o.id, i); }}>{s || '（空）'}</button>
             ))}
           </div>

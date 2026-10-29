@@ -1,4 +1,5 @@
 import { effectiveLayer } from './vision';
+import { objectEnabled } from './objectData.js';
 import { beginSandbox, endSandbox, getUI, getWorld, setUI, toast, update, type UIState } from './store';
 import { addMark, autoReveal, cancelPendingPlay, checkEnterTriggers, findMap, ioBusy } from './actions';
 import type { GameMap, MapObject, World } from './types';
@@ -20,6 +21,7 @@ const insideRect = (o: { x: number; y: number; w: number; h: number }, x: number
 
 /** 可推物件往这个方向挪一格行不行：每一格都要是能站的地形，没有别的挡路物件，也没有人。 */
 function canPush(w: World, m: GameMap, shelf: MapObject, dx: number, dy: number) {
+  if (!objectEnabled(m, shelf)) return false;
   const sx = shelf.x + dx, sy = shelf.y + dy;
   if (furnitureSweepBlocked(m, shelf, sx, sy)) return false;
   if (sx < 0 || sy < 0 || sx + shelf.w > m.width || sy + shelf.h > m.height) return false;
@@ -27,7 +29,7 @@ function canPush(w: World, m: GameMap, shelf: MapObject, dx: number, dy: number)
     for (let x = sx; x < sx + shelf.w; x++) {
       const t = w.terrains.find((t) => t.id === m.cells[y * m.width + x]);
       if (!t || t.blocksMove) return false;
-      if (m.objects.some((o) => o !== shelf && o.kind === 'object' && blocksMovement(o) && insideRect(o, x, y))) return false;
+      if (m.objects.some((o) => o !== shelf && o.kind === 'object' && objectEnabled(m, o) && blocksMovement(o) && insideRect(o, x, y))) return false;
       if (m.tokens.some((k) => k.x === x && k.y === y)) return false;
     }
   return true;
@@ -44,7 +46,7 @@ function walkable(w: World, m: GameMap, x: number, y: number) {
   const t = w.terrains.find((t) => t.id === m.cells[y * m.width + x]);
   if (!t || t.blocksMove) return false; // 空白格（地图外）也不能走
   if (!characterPathClear(w, { ...m, tokens: [] }, { x: x + 0.5, y: y + 0.5 }, { x: x + 0.5, y: y + 0.5 })) return false;
-  return !m.objects.some((o) => o.kind === 'object' && blocksMovement(o) && x >= o.x && x < o.x + o.w && y >= o.y && y < o.y + o.h);
+  return !m.objects.some((o) => o.kind === 'object' && objectEnabled(m, o) && blocksMovement(o) && x >= o.x && x < o.x + o.w && y >= o.y && y < o.y + o.h);
 }
 
 /** 出生点：作者设的；没设就是最靠北、最居中的那扇门外面（大家从北边进来）。 */
@@ -157,10 +159,10 @@ export function trialMove(dx: number, dy: number) {
   if (t.combat && used + step.cost > MOVE_PER_TURN * 3) return setTr({ msg: '这回合的移动力用完了，按空格结束回合' });
   const nx = Math.floor(step.b.x), ny = Math.floor(step.b.y);
   // 棋盘块由检查器抽象操控，不能用普通推箱绕过边界、碰撞和门状态规则。
-  const puzzleBlock = m.objects.find((o) => slidingPuzzleForObject(m, o.id) && insideRect(o, nx, ny));
+  const puzzleBlock = m.objects.find((o) => objectEnabled(m, o) && slidingPuzzleForObject(m, o.id) && insideRect(o, nx, ny));
   if (puzzleBlock) return setTr({ msg: `${puzzleBlock.name}是滑块，请拖动当前看得见的家具，或使用检查器的方向按钮` });
   // 前面是可推的书架／推车：先把它推一格，再走进去。推不动就停下，不悄悄挪半格。
-  const shelf = m.objects.find((o) => o.kind === 'object' && blocksMovement(o) && insideRect(o, nx, ny));
+  const shelf = m.objects.find((o) => o.kind === 'object' && objectEnabled(m, o) && blocksMovement(o) && insideRect(o, nx, ny));
   if (shelf) {
     if (step.cost !== 3) return setTr({ msg: '推家具需要回到主格中心，整格推动' });
     if (!shelf.pushable) return setTr({ msg: '走不过去' });

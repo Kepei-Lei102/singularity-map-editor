@@ -1,3 +1,4 @@
+import { objectEnabled } from './objectData.js';
 // Pure component helpers shared by the browser, schema and module scripts.
 export const isArchitectureObject = o => !!(o.geometry || o.opening);
 export const openingIsOpen = o => !!o.opening?.openStates.includes(o.state);
@@ -58,6 +59,7 @@ export function architectureGeometry(m, includeOpen = false) {
   const out = [], doors = architectureDoors(m);
   for (const w of architectureWalls(m)) {
     const owner = m.objects?.find(o => o.id === w.id), length = Math.abs(w.b.x - w.a.x) + Math.abs(w.b.y - w.a.y), dx = Math.sign(w.b.x - w.a.x), dy = Math.sign(w.b.y - w.a.y), half = w.thickness / 1500;
+    if (owner && !objectEnabled(m, owner)) continue;
     const add = (start, end, material, entity = owner) => {
       if (end <= start) return;
       const capA = start === 0 ? half : 0, capB = end === length ? half : 0;
@@ -69,7 +71,7 @@ export function architectureGeometry(m, includeOpen = false) {
     let from = 0;
     for (const d of doors.filter(d => d.wallId === w.id).sort((a, b) => a.offset - b.offset)) {
       add(from, d.offset, w.material);
-      if (!d.open || includeOpen) add(d.offset, d.offset + d.width, d.open ? 'opening' : 'door', m.objects?.find(o => o.id === d.id));
+      if ((!d.open || includeOpen) && objectEnabled(m, m.objects?.find(o => o.id === d.id) ?? { enabled: true })) add(d.offset, d.offset + d.width, d.open ? 'opening' : 'door', m.objects?.find(o => o.id === d.id));
       from = d.offset + d.width;
     }
     add(from, length, w.material);

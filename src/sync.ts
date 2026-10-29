@@ -1,3 +1,4 @@
+import { objectEnabled } from './objectData.js';
 import { isArchitectureObject, clipArchitecture, fogAt, tokenPosition } from './architecture';
 import { anyVisible } from './memory';
 import type { Endpoint, GameMap, PlayerClue, VisionLayer, World } from './types';
@@ -123,7 +124,7 @@ export function playerMap(m: GameMap, L: VisionLayer, pcId?: string): GameMap {
     cells: m.cells.map((c, i) => L.fog[i] === 1 ? c : ''),
     d100: m.d100.map(() => 0), rooms: [], roomCells: m.roomCells.map(() => ''), notes: '', spawn: null,
     tokens: m.tokens.filter(t => { const p = tokenPosition(t); return t.pcId === pcId || fogAt(m, L, p.x, p.y) === 1; }),
-    objects: m.objects.filter(o => o.kind === 'object' && !isArchitectureObject(o) && !o.hidden && anyVisible({ ...m, ...L }, o)).map(o => ({
+    objects: m.objects.filter(o => objectEnabled(m, o) && o.kind === 'object' && !isArchitectureObject(o) && !o.hidden && anyVisible({ ...m, ...L }, o)).map(o => ({
       id: o.id, kind: o.kind, name: o.name, x: o.x, y: o.y, w: o.w, h: o.h, height: o.height, color: o.color, icon: o.icon,
       state: o.state, states: o.states.map((s, k) => k === o.state ? s : ''), notes: '', hidden: false, media: [], secrets: [],
     })),

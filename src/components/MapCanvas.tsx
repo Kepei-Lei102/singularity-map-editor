@@ -1,4 +1,5 @@
 import { effectiveLayer } from '../vision';
+import { objectEnabled } from '../objectData.js';
 import { architectureWalls, architectureDoors, isArchitectureObject, characterPathClear, furnitureSweepBlocked, isSubdivided, tokenPosition } from '../architecture';
 import { addArchitectureDoor, addArchitectureWall, eraseArchitecture, moveMapToken, paintFog, subdivideRegion, toggleArchitectureDoor } from '../actions';
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
@@ -178,7 +179,7 @@ export function MapCanvas({ world, map, mode, playerNumbers = false, follow, vie
     if (mode === 'player') {
       const trial = s.trial;
       const obj = trial?.mapId === m.id && !trial.markMode
-        ? m.objects.find(o => !o.hidden && slidingPuzzleForObject(m, o.id) &&
+        ? m.objects.find(o => objectEnabled(m, o) && !o.hidden && slidingPuzzleForObject(m, o.id) &&
           (viewer ? effectiveLayer(w, m, viewer).fog : m.fog)?.[cy * m.width + cx] === 1 &&
           cx >= o.x && cx < o.x + o.w && cy >= o.y && cy < o.y + o.h)
         : undefined;
@@ -197,10 +198,10 @@ export function MapCanvas({ world, map, mode, playerNumbers = false, follow, vie
     }
     if (tool === 'archDoor' || tool === 'archErase') {
       const { gx, gy } = toCell(e);
-      const wall = architectureWalls(m).find(w => Math.min(w.a.x, w.b.x) / 3 - .12 <= gx && gx <= Math.max(w.a.x, w.b.x) / 3 + .12 && Math.min(w.a.y, w.b.y) / 3 - .12 <= gy && gy <= Math.max(w.a.y, w.b.y) / 3 + .12);
+      const wall = architectureWalls(m).find(w => objectEnabled(m, m.objects.find(o => o.id === w.id)) && Math.min(w.a.x, w.b.x) / 3 - .12 <= gx && gx <= Math.max(w.a.x, w.b.x) / 3 + .12 && Math.min(w.a.y, w.b.y) / 3 - .12 <= gy && gy <= Math.max(w.a.y, w.b.y) / 3 + .12);
       if (!wall) return;
       const along = Math.round(wall.a.x === wall.b.x ? (gy * 3 - wall.a.y) * Math.sign(wall.b.y - wall.a.y) : (gx * 3 - wall.a.x) * Math.sign(wall.b.x - wall.a.x));
-      const door = architectureDoors(m).find(d => d.wallId === wall.id && along >= d.offset && along <= d.offset + d.width);
+      const door = architectureDoors(m).find(d => objectEnabled(m, m.objects.find(o => o.id === d.id)) && d.wallId === wall.id && along >= d.offset && along <= d.offset + d.width);
       if (tool === 'archErase') eraseArchitecture(m.id, door?.id ?? wall.id, !!door);
       else { const error = door ? toggleArchitectureDoor(m.id, door.id) : addArchitectureDoor(m.id, wall.id, Math.max(0, along - Math.floor(s.doorWidth / 2)), s.doorWidth); if (error) toast(error); }
       return;
@@ -321,7 +322,7 @@ export function MapCanvas({ world, map, mode, playerNumbers = false, follow, vie
       setPreview({ x: Math.min(dr.x0, dr.x1), y: Math.min(dr.y0, dr.y1), w: Math.abs(dr.x1 - dr.x0) + 1, h: Math.abs(dr.y1 - dr.y0) + 1 });
     } else if (dr.k === 'obj') {
       const o = m.objects.find((x) => x.id === dr.id);
-      if (!o) return gone();
+      if (!o || !objectEnabled(m, o)) return gone();
       if (slidingPuzzleForObject(m, o.id)) {
         const nx = cx - dr.ox, ny = cy - dr.oy;
         if (nx !== o.x || ny !== o.y) {
@@ -359,12 +360,13 @@ export function MapCanvas({ world, map, mode, playerNumbers = false, follow, vie
     }
     if (dr.k === 'obj' && dr.moved) {
       const m = findMap(getWorld(), map.id);
-      if (m && slidingPuzzleForObject(m, dr.id)) {
+      const o = m?.objects.find(o => o.id === dr.id);
+      if (m && o && objectEnabled(m, o) && slidingPuzzleForObject(m, dr.id)) {
         const { cx, cy } = toCell(e);
         const error = moveSlidingObject(map.id, dr.id, cx - dr.ox, cy - dr.oy);
         if (error) toast(error);
-        setPreview(null);
       }
+      setPreview(null);
     }
     if (dr.k === 'wall') { const error = addArchitectureWall(map.id, { x: dr.ax, y: dr.ay }, { x: dr.bx, y: dr.by }, getUI().tool === 'glass' ? 'glass' : 'wall', getUI().wallThickness); if (error) toast(error); setPreview(null); }
     if (dr.k === 'paint' || dr.k === 'obj') endBatch();

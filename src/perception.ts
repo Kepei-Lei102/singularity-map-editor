@@ -1,3 +1,4 @@
+import { objectEnabled } from './objectData.js';
 import { architectureBlocksSight, architectureGeometry, isArchitectureObject, segmentHitsRect, tokenPosition, isSubdivided, subKey } from './architecture';
 import { produce } from 'immer';
 import type { GameMap, MapObject, VisionLayer, World } from './types';
@@ -26,7 +27,7 @@ export const BLOCK_HEIGHT = 0.5;
  * 列出的状态挡，其余状态可以穿过，和高度无关；没写的旧物件仍按高度算。
  */
 export function blocksMovement(o: MapObject) {
-  return !isArchitectureObject(o) && (o.physical?.blocksMove ?? (o.blocksWhen ? o.blocksWhen.includes(o.state) : o.height >= BLOCK_HEIGHT));
+  return o.enabled !== false && !isArchitectureObject(o) && (o.physical?.blocksMove ?? (o.blocksWhen ? o.blocksWhen.includes(o.state) : o.height >= BLOCK_HEIGHT));
 }
 
 export const CLEAR_BANDS = [
@@ -44,7 +45,7 @@ export function sightCosts(world: World, map: GameMap) {
     cost[i] = c > 0.1 ? c : 0;
   }
   for (const o of map.objects) {
-    if (o.kind !== 'object' || isArchitectureObject(o)) continue;
+    if (!objectEnabled(map, o) || o.kind !== 'object' || isArchitectureObject(o)) continue;
     const blocksSight = o.physical?.blocksSight ?? (o.blocksWhen ? o.blocksWhen.includes(o.state) : o.height >= EYE);
     if (!blocksSight) continue;
     for (let y = o.y; y < o.y + o.h; y++) for (let x = o.x; x < o.x + o.w; x++)
@@ -76,6 +77,7 @@ export function seesPoint(cost: Float32Array, map: GameMap, eye: { x: number; y:
   return canSee(cost, map.width, Math.floor(p.x), Math.floor(p.y), Math.floor(target.x), Math.floor(target.y)) && !(geometry ? geometry.some(r => r.blocksSight && segmentHitsRect(p, target, r)) : architectureBlocksSight(map, p, target));
 }
 function sightToObject(cost: Float32Array, map: GameMap, t: { x: number; y: number; subcell?: { x: number; y: number } }, o: MapObject) {
+  if (!objectEnabled(map, o)) return { d: Infinity, los: false };
   const p = tokenPosition(t);
   let best = { d: Infinity, los: false };
   if (isArchitectureObject(o)) {

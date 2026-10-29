@@ -1,3 +1,4 @@
+import { objectEnabled } from './objectData.js';
 import { effectiveLayer, visionMembers } from './vision';
 import { visibleArchitectureGeometry } from './architectureData.js';
 import { isArchitectureObject, clipArchitecture, fogAt, isSubdivided, tokenPosition } from './architecture';
@@ -35,7 +36,7 @@ export function numbering(world: World, map: GameMap, player = false): Numbered[
   const out: Numbered[] = [];
   const L = (id: string, fallback: string) => world.labels?.[id] ?? fallback;
   map.objects.forEach((o, i) => {
-    if (player && (o.kind === 'zone' || o.hidden)) return;
+    if (!objectEnabled(map, o) || player && (o.kind === 'zone' || o.hidden)) return;
     out.push({ label: L(o.id, `${o.kind === 'zone' ? 'Z' : 'O'}${i + 1}`), kind: o.kind, id: o.id, x: o.x, y: o.y, w: o.w, h: o.h, name: o.name });
   });
   map.tokens.forEach((t, i) => out.push({ label: L(t.id, `T${i + 1}`), kind: 'token', id: t.id, x: tokenPosition(t).x - .5, y: tokenPosition(t).y - .5, w: 1, h: 1, name: t.name }));
@@ -65,7 +66,7 @@ export function playerNumbering(world: World, map: GameMap): PlayerNumbered[] {
   const out: PlayerNumbered[] = [];
   const shown = new Set<string>();
   for (const o of map.objects) {
-    if (o.kind !== 'object' || o.hidden || !liveRect(o)) continue;
+    if (!objectEnabled(map, o) || o.kind !== 'object' || o.hidden || !liveRect(o)) continue;
     shown.add(o.id);
     out.push({ label: label.get(o.id)!, kind: 'object', id: o.id, x: o.x, y: o.y, w: o.w, h: o.h, name: o.name, icon: o.icon, height: o.height,
       state: o.states.length > 1 ? o.states[o.state] : null, memory: false });
@@ -441,7 +442,7 @@ export function render(
 
   // 选中物件的"看清"范围：青色 = 自动浮现，黄色 = 要过骰
   const so = o.selection?.type === 'object' && o.selection.mapId === map.id ? map.objects.find((x) => x.id === (o.selection as { id: string }).id) : null;
-  if (so && !player && so.secrets.length) {
+  if (so && objectEnabled(map, so) && !player && so.secrets.length) {
     const ranges = so.secrets.map((s) => ({ r: s.range, c: s.kind === 'auto' ? 'rgba(94,200,200,0.16)' : 'rgba(255,209,102,0.14)' }));
     const maxR = Math.max(...ranges.map((x) => x.r));
     for (let y = Math.max(y0, so.y - maxR); y <= Math.min(y1, so.y + so.h - 1 + maxR); y++)
@@ -460,16 +461,16 @@ export function render(
     if (fog) ctx.restore();
     labelSets.push({ objects, fog });
   };
-  if (!player) drawObjects(map.objects.filter(ob => ob.kind === 'object' && !isArchitectureObject(ob)));
+  if (!player) drawObjects(map.objects.filter(ob => objectEnabled(map, ob) && ob.kind === 'object' && !isArchitectureObject(ob)));
   else {
-    drawObjects(map.objects.filter(ob => ob.kind === 'object' && !isArchitectureObject(ob) && !ob.hidden && anyVisible(map, ob)), 1);
+    drawObjects(map.objects.filter(ob => objectEnabled(map, ob) && ob.kind === 'object' && !isArchitectureObject(ob) && !ob.hidden && anyVisible(map, ob)), 1);
     drawObjects(map.seen.objects.map(fromMemory).filter(ob => {
       for (let y = ob.y; y < ob.y + ob.h; y++) for (let x = ob.x; x < ob.x + ob.w; x++)
         if (fogAt(map, map, x + .5, y + .5) === 2) return true;
       return false;
     }), 2);
   }
-  if (!player) map.objects.filter(ob => ob.kind === 'zone').forEach(ob => drawZone(ctx, ob,
+  if (!player) map.objects.filter(ob => objectEnabled(map, ob) && ob.kind === 'zone').forEach(ob => drawZone(ctx, ob,
     o.selection?.type === 'object' && o.selection.id === ob.id || o.tool === 'zone', view.zoom));
 
   // 建筑层：使用碰撞的实际矩形尺寸；玩家只画可见裁片与历史。
@@ -615,7 +616,7 @@ export function render(
   const sel = o.selection;
   if (sel?.type === 'object' && sel.mapId === map.id) {
     const ob = map.objects.find((x) => x.id === sel.id);
-    if (ob) ctx.strokeRect(ob.x * CS, ob.y * CS, ob.w * CS, ob.h * CS);
+    if (ob && objectEnabled(map, ob)) ctx.strokeRect(ob.x * CS, ob.y * CS, ob.w * CS, ob.h * CS);
   } else if (sel?.type === 'token' && sel.mapId === map.id) {
     const t = map.tokens.find((x) => x.id === sel.id);
     if (t) { ctx.beginPath(); ctx.arc(tokenPosition(t).x * CS, tokenPosition(t).y * CS, CS * 0.48, 0, Math.PI * 2); ctx.stroke(); }
@@ -641,11 +642,11 @@ export function render(
   }
   const tagged = new Set<MapObject>();
   if (!player) {
-    if (so) tagged.add(so);
-    if (o.tool === 'zone') map.objects.filter(ob => ob.kind === 'zone').forEach(ob => tagged.add(ob));
+    if (so && objectEnabled(map, so)) tagged.add(so);
+    if (o.tool === 'zone') map.objects.filter(ob => objectEnabled(map, ob) && ob.kind === 'zone').forEach(ob => tagged.add(ob));
     if (o.hover && o.tool === 'select') {
       const h = o.hover;
-      const ho = map.objects.filter((x) => h.x >= x.x && h.x < x.x + x.w && h.y >= x.y && h.y < x.y + x.h)
+      const ho = map.objects.filter((x) => objectEnabled(map, x) && h.x >= x.x && h.x < x.x + x.w && h.y >= x.y && h.y < x.y + x.h)
         .sort((a, b) => Number(a.kind === 'zone') - Number(b.kind === 'zone') || b.height - a.height)[0];
       if (ho) tagged.add(ho);
     }
@@ -703,7 +704,7 @@ function drawRoomLabels(ctx: CanvasRenderingContext2D, map: GameMap, view: View)
       const right = left + width / cell, bottom = top + height / cell;
       for (let cy = Math.floor(top); cy < Math.ceil(bottom); cy++) for (let cx = Math.floor(left); cx < Math.ceil(right); cx++)
         if (cx < 0 || cy < 0 || cx >= map.width || cy >= map.height || map.roomCells[cy * map.width + cx] !== r.id) return false;
-      return !map.objects.some(ob => ob.kind === 'object' && left < ob.x + ob.w && right > ob.x && top < ob.y + ob.h && bottom > ob.y) &&
+      return !map.objects.some(ob => objectEnabled(map, ob) && ob.kind === 'object' && left < ob.x + ob.w && right > ob.x && top < ob.y + ob.h && bottom > ob.y) &&
         !map.tokens.some(t => left < t.x + 1 && right > t.x && top < t.y + 1 && bottom > t.y);
     });
     if (!anchor) continue;

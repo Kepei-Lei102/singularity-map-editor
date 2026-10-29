@@ -1,3 +1,4 @@
+import { objectEnabled } from './objectData.js';
 import { architectureGeometry, architectureWalls, architectureObjectBounds, isArchitectureObject, openingIsOpen, objectStateError, architectureTransitionError, normalizeArchitectureBounds, clipArchitecture, characterPathClear, setTokenPosition, tokenPosition, wallCovered } from './architecture';
 import { checkArchitecture } from './schema.js';
 import type { Draft } from 'immer';
@@ -39,13 +40,13 @@ export function partyTags(w: World) {
 /** 当前仍在房间的物件，加上已选排布和复位点跟踪的物件（推出房间也不丢）。 */
 export function collectRoomObjects(map: GameMap, room: Room): RoomObjectSnapshot[] {
   const tracked = new Set([...room.reset?.objects ?? [], ...room.layouts?.find((l) => l.id === room.activeLayoutId)?.objects ?? []].map((s) => s.id));
-  return map.objects.filter((o) => o.kind === 'object' && (!o.geometry || o.states.length > 1) && (tracked.has(o.id) || (() => {
+  return map.objects.filter((o) => (tracked.has(o.id) || (() => {
     const bounds = isArchitectureObject(o) ? architectureObjectBounds(map, o) : o;
     for (let y = Math.max(0, bounds.y - (isArchitectureObject(o) ? 1 : 0)); y < Math.min(map.height, bounds.y + bounds.h); y++)
       for (let x = Math.max(0, bounds.x - (isArchitectureObject(o) ? 1 : 0)); x < Math.min(map.width, bounds.x + bounds.w); x++)
         if (map.roomCells[y * map.width + x] === room.id) return true;
     return false;
-  })())).map((o) => ({ id: o.id, x: o.x, y: o.y, state: o.state }));
+  })())).map((o) => ({ id: o.id, x: o.x, y: o.y, state: o.state, enabled: o.enabled !== false }));
 }
 
 function roomSnapshotError(map: GameMap, room: Room, objects: RoomObjectSnapshot[]): string | null {
@@ -53,7 +54,7 @@ function roomSnapshotError(map: GameMap, room: Room, objects: RoomObjectSnapshot
   const conflict = map.rooms.find(r => r.id !== room.id && [...r.reset?.objects ?? [], ...r.layouts?.flatMap(l => l.objects) ?? []].some(s => ids.has(s.id)));
   if (conflict) return `物件已属于「${conflict.name}」的排布或复位点，不能跨房间共用`;
   try { checkRoomObjects(map, objects); } catch (e) { return (e as Error).message; }
-  return architectureTransitionError(map, { ...map, objects: map.objects.map(o => ({ ...o, ...objects.find(s => s.id === o.id) })) });
+  return architectureTransitionError(map, { ...map, objects: projectRoomObjects(map, objects) });
 }
 
 /** 编辑房间：命名保存当前位置、状态。返回错误；成功返回 null。 */
@@ -82,14 +83,22 @@ export function deleteRoomLayout(mapId: string, roomId: string, layoutId: string
   return null;
 }
 
-/** Interactive arrangements validate final destinations, not an imagined carrying path. */
-function interactiveLayoutError(world: World, map: GameMap, objects: RoomObjectSnapshot[]): string | null {
+function projectRoomObjects(map: GameMap, objects: RoomObjectSnapshot[]): MapObject[] {
   const snapshots = new Map(objects.map(s => [s.id, s]));
-  const projected = map.objects.map(o => ({ ...o, ...snapshots.get(o.id) }));
+  return map.objects.map(o => {
+    const snap = snapshots.get(o.id);
+    return snap ? { ...o, ...snap, enabled: snap.enabled !== false } : o;
+  });
+}
+
+/** Interactive arrangements validate final destinations, not an imagined carrying path. */
+function interactiveLayoutError(world: World, map: GameMap, objects: RoomObjectSnapshot[], activationOnly = false): string | null {
+  const snapshots = new Map(objects.map(s => [s.id, s]));
+  const projected = projectRoomObjects(map, objects);
   const overlap = (a: { x: number; y: number; w: number; h: number }, b: { x: number; y: number; w: number; h: number }) =>
     a.x < b.x + b.w - 1e-8 && a.x + a.w > b.x + 1e-8 && a.y < b.y + b.h - 1e-8 && a.y + a.h > b.y + 1e-8;
   const walls = new Set(world.terrains.filter(t => t.blocksMove).map(t => t.id));
-  for (const o of projected.filter(o => snapshots.has(o.id) && !isArchitectureObject(o) && blocksMovement(o))) {
+  for (const o of projected.filter(o => snapshots.has(o.id) && o.kind === 'object' && !isArchitectureObject(o) && blocksMovement(o) && (!activationOnly || map.objects.find(old => old.id === o.id)?.enabled === false))) {
     for (let y = o.y; y < o.y + o.h; y++) for (let x = o.x; x < o.x + o.w; x++)
       if (walls.has(map.cells[y * map.width + x])) return `「${o.name}」的目标排布被地形挡住了`;
     if (projected.some(other => other.id !== o.id && other.kind === 'object' && !isArchitectureObject(other) && blocksMovement(other) && overlap(o, other)))
@@ -110,11 +119,11 @@ export function applyRoomLayout(mapId: string, roomId: string, layoutId: string)
   const running = ui.mode === 'run' || !!ui.trial;
   if (!preparation && !(layout.interactive && running)) return '普通排布只能在备团、非试玩时选择；带团或试玩仅可切换互动排布';
   if (ui.trial && ui.trial.mapId !== mapId) return '只能操作当前试玩地图的互动排布';
-  const error = roomSnapshotError(m, r, layout.objects) ?? (layout.interactive ? interactiveLayoutError(world, m, layout.objects) : null);
+  const error = roomSnapshotError(m, r, layout.objects) ?? interactiveLayoutError(world, m, layout.objects, !layout.interactive);
   if (error) return error;
   update(d => {
     const map = findMap(d, mapId)!, room = map.rooms.find(r => r.id === roomId)!;
-    for (const snap of layout.objects) Object.assign(map.objects.find(o => o.id === snap.id)!, { x: snap.x, y: snap.y, state: snap.state });
+    for (const snap of layout.objects) Object.assign(map.objects.find(o => o.id === snap.id)!, { x: snap.x, y: snap.y, state: snap.state, enabled: snap.enabled !== false });
     room.activeLayoutId = layoutId;
     if (preparation) room.reset = { at: Date.now(), objects: layout.objects.map(s => ({ ...s })) };
     log(d, 'note', `「${room.name}」${layout.interactive ? '切换互动排布' : '应用排布'}「${layout.name}」`, mapId);
@@ -138,7 +147,7 @@ export function captureRoomReset(mapId: string, roomId: string) {
 export function resetRoom(mapId: string, roomId: string) {
   const map = findMap(getWorld(), mapId), room = map?.rooms.find((r) => r.id === roomId);
   if (!map || !room?.reset) return;
-  const error = roomSnapshotError(map, room, room.reset.objects);
+  const error = roomSnapshotError(map, room, room.reset.objects) ?? interactiveLayoutError(getWorld(), map, room.reset.objects, true);
   if (error) return toast(error);
   update((d) => {
     const m = findMap(d, mapId);
@@ -150,14 +159,16 @@ export function resetRoom(mapId: string, roomId: string) {
       if (!o) continue;
       const moved = o.x !== s.x || o.y !== s.y;
       const restated = o.state !== s.state;
-      if (!moved && !restated) continue;
+      const toggled = (o.enabled !== false) !== (s.enabled !== false);
+      if (!moved && !restated && !toggled) continue;
+      o.enabled = s.enabled !== false;
       o.x = s.x; o.y = s.y;
       if (restated) { o.state = s.state; o.stateRev = (o.stateRev ?? 0) + 1; }
       n++;
     }
     const matching = (r.layouts ?? []).filter(layout => layout.objects.length > 0 && layout.objects.every(s => {
       const o = m.objects.find(o => o.id === s.id);
-      return o && o.x === s.x && o.y === s.y && o.state === s.state;
+      return o && o.x === s.x && o.y === s.y && o.state === s.state && (o.enabled !== false) === (s.enabled !== false);
     }));
     // Prefer the current name when equivalent layouts share an exact arrangement.
     r.activeLayoutId = matching.find(layout => layout.id === r.activeLayoutId)?.id ?? matching[0]?.id;
@@ -199,9 +210,22 @@ export function moveSlidingObject(mapId: string, objectId: string, x: number, y:
   return error;
 }
 
+export function setObjectEnabled(mapId: string, objId: string, enabled: boolean): string | null {
+  if (getUI().mode !== 'edit' || getUI().trial) return '请在地图编辑中启用或停用物件';
+  const world = getWorld(), m = findMap(world, mapId), o = m?.objects.find(o => o.id === objId);
+  if (!m || !o) return '找不到物件';
+  const projected = { ...m, objects: m.objects.map(o => o.id === objId ? { ...o, enabled } : o) };
+  const snapshots = projected.objects.filter(o => o.id === objId || o.opening?.wallId === objId).map(o => ({ id: o.id, x: o.x, y: o.y, state: o.state, enabled: o.enabled !== false }));
+  try { checkRoomObjects(projected, snapshots); } catch (e) { return (e as Error).message; }
+  const error = architectureTransitionError(m, projected) ?? (enabled ? interactiveLayoutError(world, projected, snapshots) : null);
+  if (error) return error;
+  update(d => { findObj(d, mapId, objId)!.enabled = enabled; });
+  return null;
+}
+
 export function setObjectState(mapId: string, objId: string, idx: number): string | null {
   const m = findMap(getWorld(), mapId);
-  const error = m ? doorInteractionError(m, objId) ?? objectStateError(m, objId, idx) : '找不到地图';
+  const error = m ? (!objectEnabled(m, m.objects.find(o => o.id === objId)) ? '物件已停用' : null) ?? doorInteractionError(m, objId) ?? objectStateError(m, objId, idx) : '找不到地图';
   if (error) { toast(error); return error; }
   update((d) => {
     const o = findObj(d, mapId, objId);
@@ -235,7 +259,7 @@ export function revealBlocked(w: World, mapId: string, o: MapObject, range: numb
 export function revealSecret(mapId: string, objId: string, secretId: string, tier: Tier, scope: 'party' | 'private', to?: string) {
   const o = findObj(getWorld(), mapId, objId);
   const s = o?.secrets.find((x) => x.id === secretId);
-  if (!o || !s) return;
+  if (!o || !s || !objectEnabled(findMap(getWorld(), mapId)!, o)) return;
   const why = revealBlocked(getWorld(), mapId, o, s.range, scope, to);
   if (why && (scope === 'private' && !to)) return toast(why);
   if (why && !confirm(`${why}。\n\n主持人仍然要揭示「${s.label}」吗？（会在记录里注明是主持人决定的）`)) return;
@@ -283,6 +307,7 @@ export function stopMedia() {
 }
 
 export function fireAttach(mapId: string, objId: string, a: MediaAttach) {
+  const m = findMap(getWorld(), mapId); if (!m || !objectEnabled(m, m.objects.find(o => o.id === objId))) return;
   playMedia(a.mediaId, a.label, a.broadcast);
   if (a.once) update((d) => {
     const da = findObj(d, mapId, objId)?.media.find((x) => x.id === a.id);
@@ -299,7 +324,7 @@ export function checkEnterTriggers(mapId: string, tokenId: string, fromX: number
   const inside = (o: { x: number; y: number; w: number; h: number }, x: number, y: number) =>
     x >= o.x && x < o.x + o.w && y >= o.y && y < o.y + o.h;
   for (const o of m.objects) {
-    if (!inside(o, tokenPosition(t).x, tokenPosition(t).y) || inside(o, fromX, fromY)) continue;
+    if (!objectEnabled(m, o) || !inside(o, tokenPosition(t).x, tokenPosition(t).y) || inside(o, fromX, fromY)) continue;
     const triggers = o.media.filter((a) => a.trigger === 'enter' && !(a.once && a.fired));
     if (o.kind === 'zone' || triggers.length) update((d) => log(d, 'enter', `${t.name} 进入「${o.name}」`, mapId), { history: false });
     triggers.forEach((a) => fireAttach(mapId, o.id, a));
@@ -339,7 +364,7 @@ export function itemsAt(w: World, m: GameMap, x: number, y: number): StackItem[]
     .forEach((t) => out.push({ sel: { type: 'token', mapId: m.id, id: t.id }, label: t.name, kind: '棋子' }));
   w.connections.filter((c) => [c.a, c.b].some((p) => p.mapId === m.id && p.x === x && p.y === y))
     .forEach((c) => out.push({ sel: { type: 'conn', id: c.id }, label: c.label || CONN_LABEL[c.kind], kind: '连接点' }));
-  const hits = m.objects.filter((o) => x >= o.x && x < o.x + o.w && y >= o.y && y < o.y + o.h);
+  const hits = m.objects.filter((o) => objectEnabled(m, o) && x >= o.x && x < o.x + o.w && y >= o.y && y < o.y + o.h);
   hits.filter((o) => o.kind === 'object').sort((a, b) => b.height - a.height)
     .forEach((o) => out.push({ sel: { type: 'object', mapId: m.id, id: o.id }, label: (o.icon ? o.icon + ' ' : '') + o.name, kind: `物件 ${o.height}m` }));
   hits.filter((o) => o.kind === 'zone')

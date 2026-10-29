@@ -152,18 +152,19 @@ export function checkRoomObjects(map, snapshots) {
   const changes = new Map();
   for (const s of list) {
     c.obj(s, '物件快照'); c.id(s.id, '物件快照.id');
-    const o = map.objects.find((o) => o.id === s.id && o.kind === 'object');
+    const o = map.objects.find((o) => o.id === s.id);
     if (!o) c.fail('objects', `找不到本图物件：${s.id}`);
     c.int(s.x, `${o.name}.x`, 0); c.int(s.y, `${o.name}.y`, 0);
     c.int(s.state, `${o.name}.state`, 0, o.states.length - 1);
+    if (s.enabled !== undefined) c.bool(s.enabled, `${o.name}.enabled`);
     if (s.x + o.w > map.width || s.y + o.h > map.height) c.fail(o.name, '完整尺寸超出地图边界');
     if (isArchitectureObject(o) && (s.x !== o.x || s.y !== o.y)) c.fail(o.name, '静态建筑不能按家具移动');
     changes.set(s.id, s);
   }
-  const objects = map.objects.map((o) => ({ ...o, ...changes.get(o.id) }));
+  const objects = map.objects.map((o) => ({ ...o, ...changes.get(o.id), ...(changes.has(o.id) ? { enabled: changes.get(o.id).enabled !== false } : {}) }));
   for (const snap of list) {
     const o = objects.find(o => o.id === snap.id);
-    if (!(o.physical?.blocksMove ?? (o.blocksWhen ? o.blocksWhen.includes(o.state) : o.height >= .5))) continue;
+    if (o.kind !== 'object' || o.enabled === false || !(o.physical?.blocksMove ?? (o.blocksWhen ? o.blocksWhen.includes(o.state) : o.height >= .5))) continue;
     if (isArchitectureObject(o)) continue;
     for (const r of architectureGeometry({ ...map, objects }).filter(r => r.blocksMove)) {
       if (o.x < r.x + r.w && o.x + o.w > r.x && o.y < r.y + r.h && o.y + o.h > r.y) c.fail(o.name, '排布与建筑墙/关闭的门相交');
@@ -175,7 +176,8 @@ export function checkRoomObjects(map, snapshots) {
     const o = objects.find((o) => o.id === id);
     if (!o || o.x < p.x || o.y < p.y || o.x + o.w > p.x + p.w || o.y + o.h > p.y + p.h ||
       o.x < 0 || o.y < 0 || o.x + o.w > map.width || o.y + o.h > map.height) c.fail(p.name, '滑块超出棋盘边界');
-    if (objects.some((b) => b.id !== o.id && b.kind === 'object' && !isArchitectureObject(b) &&
+    if (o.enabled === false) continue;
+    if (objects.some((b) => b.enabled !== false && b.id !== o.id && b.kind === 'object' && !isArchitectureObject(b) &&
       (members.has(b.id) || (b.physical?.blocksMove ?? (b.blocksWhen ? b.blocksWhen.includes(b.state) : b.height >= 0.5))) && overlap(o, b))) c.fail(p.name, '滑块与其它滑块或挡路物件相交');
   }
 }
@@ -270,6 +272,7 @@ export function checkWorld(w, migrated = false) {
       strings(o.states, `${oa}.states`);
       if (!o.states.length) fail(`${oa}.states`, '是空的（至少要有一个状态）');
       int(o.state, `${oa}.state`, 0, o.states.length - 1);
+      if (o.enabled !== undefined) bool(o.enabled, `${oa}.enabled`);
       if (o.blocksWhen !== undefined) arr(o.blocksWhen, `${oa}.blocksWhen`).forEach((v, k) => int(v, `${oa}.blocksWhen[${k}]`, 0, o.states.length - 1));
       if (o.geometry !== undefined) {
         obj(o.geometry, `${oa}.geometry`); oneOf(o.geometry.kind, ['wall'], `${oa}.geometry.kind`);
@@ -343,9 +346,9 @@ export function checkWorld(w, migrated = false) {
           if (overlaps(p, isArchitectureObject(gate) ? architectureObjectBounds(m, gate) : gate)) fail(`${pa}.gateId`, '门必须放在棋盘外');
         }
         blocks.forEach((block, j) => {
-          if (blocks.slice(j + 1).some((o) => overlaps(block, o))) fail(pa, '滑块不能相交');
+          if (block.enabled !== false && blocks.slice(j + 1).some((o) => o.enabled !== false && overlaps(block, o))) fail(pa, '滑块不能相交');
         });
-        if (m.objects.some((o) => o.kind === 'object' && !isArchitectureObject(o) && !p.objectIds.includes(o.id) &&
+        if (m.objects.some((o) => o.enabled !== false && o.kind === 'object' && !isArchitectureObject(o) && !p.objectIds.includes(o.id) &&
           (o.physical?.blocksMove ?? (o.blocksWhen ? o.blocksWhen.includes(o.state) : o.height >= 0.5)) && overlaps(p, o))) fail(pa, '棋盘范围内不能有其它挡路物件');
       });
       unique(puzzles, `${at}.slidingPuzzles`);

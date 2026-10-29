@@ -1,3 +1,4 @@
+import { objectEnabled } from './objectData.js';
 import { clipArchitecture, isArchitectureObject, migrateArchitecture } from './architecture';
 import { repairWorld } from './schema.js';
 import type { Draft } from 'immer';
@@ -47,7 +48,7 @@ function syncLayer(m: Draft<GameMap>, L: Draft<VisionLayer>, rev: number) {
   const historical = clipArchitecture(m, L, 2, L.seen.architecture ?? []);
   L.seen.architecture = [...historical, ...clipArchitecture(m, L)];
   const box = { ...m, fog: L.fog, subFog: L.subFog };
-  const live = m.objects.filter((o) => o.kind === 'object' && !isArchitectureObject(o) && !o.hidden && anyVisible(box, o));
+  const live = m.objects.filter((o) => objectEnabled(m, o) && o.kind === 'object' && !isArchitectureObject(o) && !o.hidden && anyVisible(box, o));
   const liveIds = new Set(live.map((o) => o.id));
   // 记忆里的东西，原地方现在看得见了、但它已经不在那（被搬走/删掉/藏起来）→ 忘掉
   const kept = L.seen.objects.filter((r) => liveIds.has(r.id) || !anyVisible(box, r));
@@ -128,6 +129,6 @@ export function staleMemories(m: GameMap) {
   return m.seen.objects.filter((r) => {
     if (anyVisible(m, r)) return false;
     const o = m.objects.find((x) => x.id === r.id);
-    return !o || o.hidden || !sameSeen(r, snapshot(o));
+    return !o || !objectEnabled(m, o) || o.hidden || !sameSeen(r, snapshot(o));
   });
 }

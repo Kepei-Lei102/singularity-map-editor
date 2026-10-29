@@ -1,3 +1,4 @@
+import { objectEnabled } from './objectData.js';
 import { architectureGeometry, isArchitectureObject } from './architectureData.js';
 export { architectureGeometry, architectureWalls, architectureDoors, architectureObjectBounds, isArchitectureObject, openingIsOpen, migrateArchitecture, normalizeArchitectureBounds } from './architectureData.js';
 import type { ArchitectureFragment, GameMap, Point, Token, Wall, World } from './types';
@@ -52,7 +53,7 @@ export function characterPathClear(w: World, m: GameMap, a: Point, b: Point, id?
       const t = w.terrains.find(t => t.id === m.cells[y * m.width + x]);
       if ((!t || t.blocksMove) && circleSweep(a, b, { x, y, w: 1, h: 1 }, radius)) return false;
     }
-  if (m.objects.some(o => o.kind === 'object' && !isArchitectureObject(o) && (o.physical?.blocksMove ?? (o.blocksWhen ? o.blocksWhen.includes(o.state) : o.height >= 0.5)) && circleSweep(a, b, o, radius))) return false;
+  if (m.objects.some(o => o.enabled !== false && o.kind === 'object' && !isArchitectureObject(o) && (o.physical?.blocksMove ?? (o.blocksWhen ? o.blocksWhen.includes(o.state) : o.height >= 0.5)) && circleSweep(a, b, o, radius))) return false;
   return !m.tokens.some(t => t.id !== id && circleSweep(a, b, { ...tokenPosition(t), w: 0, h: 0 }, radius * 2));
 }
 export function nextTokenStep(m: GameMap, t: Token, dx: number, dy: number) {
@@ -84,12 +85,13 @@ export function clipArchitecture(m: GameMap, L: { fog: number[]; subFog?: Record
 export function architectureTransitionError(before: GameMap, after: GameMap): string | null {
   const old = architectureGeometry(before).filter(r => r.blocksMove), next = architectureGeometry(after).filter(r => r.blocksMove);
   const added = next.filter(r => !old.some(b => b.x === r.x && b.y === r.y && b.w === r.w && b.h === r.h));
-  if (added.some(r => after.tokens.some(t => circleSweep(tokenPosition(t), tokenPosition(t), r, 1 / 3)) || after.objects.some(o => !isArchitectureObject(o) && o.kind === 'object' && (o.physical?.blocksMove ?? (o.blocksWhen ? o.blocksWhen.includes(o.state) : o.height >= .5)) && o.x < r.x + r.w - 1e-8 && o.x + o.w > r.x + 1e-8 && o.y < r.y + r.h - 1e-8 && o.y + o.h > r.y + 1e-8))) return '门洞中有人或家具，不能关门';
+  if (added.some(r => after.tokens.some(t => circleSweep(tokenPosition(t), tokenPosition(t), r, 1 / 3)) || after.objects.some(o => o.enabled !== false && !isArchitectureObject(o) && o.kind === 'object' && (o.physical?.blocksMove ?? (o.blocksWhen ? o.blocksWhen.includes(o.state) : o.height >= .5)) && o.x < r.x + r.w - 1e-8 && o.x + o.w > r.x + 1e-8 && o.y < r.y + r.h - 1e-8 && o.y + o.h > r.y + 1e-8))) return '门洞中有人或家具，不能关门';
   return null;
 }
 export function objectStateError(map: GameMap, id: string, state: number): string | null {
   const o = map.objects.find(o => o.id === id);
   if (!o || !Number.isInteger(state) || state < 0 || state >= o.states.length) return '无效物件状态';
+  if (!objectEnabled(map, o)) return '物件已停用';
   if (!isArchitectureObject(o)) return null;
   return architectureTransitionError(map, { ...map, objects: map.objects.map(o => o.id === id ? { ...o, state } : o) });
 }

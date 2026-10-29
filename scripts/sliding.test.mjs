@@ -196,6 +196,99 @@ test('player payload omits puzzle metadata and hidden solution coordinates', () 
   assert.equal(api.playerWorld(world).maps[0].slidingPuzzles, undefined);
 });
 
+test('disabled furniture and triggers stay stored but cannot collide, click, reveal, play or enter player payloads', () => {
+  const { world, map, block } = fixture();
+  block.enabled = false;
+  block.secrets = [{ id: 'secret', label: 'secret', kind: 'auto', range: 10, check: '', tiers: { crit: '', success: 'private-content', fail: '', fumble: '' } }];
+  block.media = [{ id: 'attach', mediaId: 'media', label: 'sound', trigger: 'enter', broadcast: true, once: true }];
+  const zone = { ...structuredClone(block), id: 'zone', kind: 'zone' };
+  map.objects.push(zone); map.fog.fill(1);
+  map.tokens = [{ id: 'eye', pcId: 'pc', name: 'PC', color: '#fff', x: 2, y: 2 }];
+  install(world); api.setUI({ mode: 'run' });
+  const before = JSON.stringify(api.getWorld());
+  api.autoReveal(map.id); api.checkEnterTriggers(map.id, 'eye', 0, 0);
+  api.fireAttach(map.id, block.id, block.media[0]);
+  api.revealSecret(map.id, block.id, 'secret', 'success', 'party');
+  assert.equal(JSON.stringify(api.getWorld()), before);
+  assert.equal(api.blocksMovement(block), false);
+  assert.equal(api.characterPathClear(world, { ...map, tokens: [] }, { x: 1.5, y: 2.5 }, { x: 3.5, y: 2.5 }), true);
+  assert.ok(!api.itemsAt(world, map, 2, 2).some(item => ['target', 'zone'].includes(item.sel.id)));
+  assert.match(api.setObjectState(map.id, block.id, 0), /停用/);
+  assert.match(api.checkSlidingMove(world, map, block.id, 3, 2), /停用/);
+  const payload = api.playerWorld(api.getWorld(), map.id);
+  assert.ok(!payload.maps[0].objects.some(o => ['target', 'zone'].includes(o.id)));
+  assert.ok(!JSON.stringify(payload).includes('private-content'));
+});
+
+test('enabled snapshots include triggers, round trip, reset, undo, copy and resize; old snapshots default to enabled', () => {
+  const data = roomFixture(); delete data.map.slidingPuzzles;
+  data.block.enabled = false;
+  data.map.objects.push({ ...api.newObject('zone', 1, 1, 1, 1), id: 'zone', enabled: false });
+  install(data.world); const id = saveLayout(data);
+  assert.equal(api.getWorld().maps[0].rooms[0].layouts[0].objects.find(o => o.id === 'zone').enabled, false);
+  api.update(d => { d.maps[0].objects[0].enabled = true; });
+  api.setUI({ mode: 'prep' }); assert.equal(api.applyRoomLayout(data.map.id, 'room', id), null);
+  assert.equal(api.getWorld().maps[0].objects[0].enabled, false);
+  api.undo(); assert.equal(api.getWorld().maps[0].objects[0].enabled, true);
+  api.redo(); assert.equal(api.getWorld().maps[0].objects[0].enabled, false);
+  api.update(d => { d.maps[0].objects[0].enabled = true; }); api.resetRoom(data.map.id, 'room');
+  assert.equal(api.getWorld().maps[0].objects[0].enabled, false);
+  api.duplicateMap(data.map.id); const copyId = api.getWorld().maps[1].id;
+  api.reshapeMaps([copyId], 1, 1, 0, 0);
+  const copy = api.getWorld().maps[1];
+  assert.equal(copy.objects[0].enabled, false);
+  assert.equal(copy.rooms[0].layouts[0].objects[0].enabled, false);
+  assert.equal(copy.rooms[0].layouts[0].objects[0].x, data.block.x + 1);
+  api.checkWorld(JSON.parse(JSON.stringify(api.getWorld())), true);
+  api.update(d => { for (const s of d.maps[0].rooms[0].layouts[0].objects) delete s.enabled; });
+  assert.equal(api.applyRoomLayout(data.map.id, 'room', id), null);
+  assert.equal(api.getWorld().maps[0].objects[0].enabled, true);
+  const invalid = structuredClone(api.getWorld()); invalid.maps[0].rooms[0].reset.objects[0].enabled = 'false';
+  assert.throws(() => api.checkWorld(invalid, true), /enabled/);
+});
+
+test('reactivation refuses occupied destinations and walls; disabling a parent wall also removes its door', () => {
+  const data = roomFixture(); delete data.map.slidingPuzzles; data.block.enabled = false;
+  data.map.tokens.push({ id: 't', pcId: null, name: 't', color: '#fff', x: 2, y: 2 });
+  install(data.world); assert.match(api.setObjectEnabled(data.map.id, 'target', true), /有人/);
+  assert.equal(api.getWorld().maps[0].objects[0].enabled, false);
+  api.update(d => { d.maps[0].rooms[0].layouts = [{ id: 'on', name: 'on', objects: [{ id: 'target', x: 2, y: 2, state: 0, enabled: true }] }]; });
+  api.setUI({ mode: 'prep' }); const before = JSON.stringify(api.getWorld());
+  assert.match(api.applyRoomLayout(data.map.id, 'room', 'on'), /有人/); assert.equal(JSON.stringify(api.getWorld()), before);
+  const { world, map } = nativeFineFixture(); install(world);
+  assert.equal(api.setObjectEnabled(map.id, 'wall', false), null);
+  let current = api.getWorld().maps[0];
+  assert.deepEqual(api.architectureGeometry(current, true), []);
+  assert.match(api.setObjectState(map.id, 'door', 1), /停用/);
+  assert.equal(current.objects.find(o => o.id === 'door').state, 0);
+  assert.equal(api.setObjectEnabled(map.id, 'wall', true), null);
+  current = api.getWorld().maps[0]; assert.ok(api.architectureGeometry(current).length);
+});
+
+test('disabling preserves unseen history and learned clues until the old place is observed again', () => {
+  const { world, map, block } = fixture(); delete map.slidingPuzzles; map.fog.fill(1);
+  block.secrets = [{ id: 'known', label: 'known', kind: 'roll', range: 1, check: '', tiers: { crit: '', success: 'learned', fail: '', fumble: '' }, revealed: { tier: 'success', scope: 'party', at: 1 } }];
+  install(world);
+  assert.ok(api.getWorld().maps[0].seen.objects.some(o => o.id === 'target'));
+  api.update(d => { d.maps[0].fog.fill(2); });
+  assert.equal(api.setObjectEnabled(map.id, 'target', false), null);
+  let payload = api.playerWorld(api.getWorld(), map.id);
+  assert.ok(payload.maps[0].seen.objects.some(o => o.id === 'target'));
+  assert.ok(payload.clues.some(c => c.text === 'learned'));
+  api.update(d => { d.maps[0].fog.fill(1); });
+  payload = api.playerWorld(api.getWorld(), map.id);
+  assert.ok(!payload.maps[0].seen.objects.some(o => o.id === 'target'));
+  assert.ok(payload.clues.some(c => c.text === 'learned'));
+});
+
+test('disabled sliding obstacles and gates do not participate but retain their states', () => {
+  const { world, map, other, gate } = fixture(); other.x = 3; other.y = 2; other.enabled = false; gate.enabled = false;
+  api.checkWorld(world, true);
+  assert.equal(api.applySlidingMove(world, map, 'target', 3, 2), null);
+  assert.equal(gate.state, 0);
+  api.checkWorld(world, true);
+});
+
 function roomFixture() {
   const data = fixture();
   const room = { id: 'room', name: '房间', color: '#fff', note: '', tags: [], layouts: [] };
@@ -634,7 +727,7 @@ test('native room layouts restore door state atomically and preserve all door co
   const door = map.objects.find(o => o.id === 'door'); door.notes = '主持人备注';
   const room = { id: 'room', name: 'room', color: '#fff', note: '', tags: [] }; map.rooms = [room]; map.roomCells[28] = 'room'; install(world);
   assert.equal(api.saveRoomLayout(map.id, room.id, 'closed'), null);
-  const layout = api.getWorld().maps[0].rooms[0].layouts[0]; assert.deepEqual(layout.objects.map(o => o.id), ['door']);
+  const layout = api.getWorld().maps[0].rooms[0].layouts[0]; assert.deepEqual(layout.objects.map(o => o.id), ['wall', 'door']);
   api.setObjectState(map.id, 'door', 1);
   api.update(d => { d.maps[0].tokens.push({ id: 't', pcId: null, name: 't', color: '#fff', x: 4, y: 3, subcell: { x: 12, y: 10 } }); });
   api.setUI({ mode: 'prep' }); const before = JSON.stringify(api.getWorld());

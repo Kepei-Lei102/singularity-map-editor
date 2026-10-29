@@ -62,6 +62,8 @@ export interface MapObject {
   state: number;
   /** 只有这些状态挡路、挡视线（空列表＝永远不挡）。不写就按 height 算，兼容旧物件。 */
   blocksWhen?: number[];
+  /** False removes the object from the scene without deleting its data. Omitted means enabled. */
+  enabled?: boolean;
   /** Optional fine geometry. x/y/w/h are metadata bounds, never furniture collision. */
   geometry?: { kind: 'wall'; a: Point; b: Point; thickness: number; material: 'wall' | 'glass' };
   opening?: { wallId: Id; offset: number; width: number; openStates: number[] };
@@ -77,7 +79,7 @@ export interface MapObject {
   media: MediaAttach[];
 }
 
-export interface RoomObjectSnapshot { id: Id; x: number; y: number; state: number }
+export interface RoomObjectSnapshot { id: Id; x: number; y: number; state: number; enabled?: boolean }
 export interface RoomLayout { id: Id; name: string; description?: string; interactive?: boolean; objects: RoomObjectSnapshot[]; doors?: { id: Id; open: boolean }[] }
 
 /** 房间：按格子刷出来的命名区域。tags 预留给十二宫、八门等对应关系。 */

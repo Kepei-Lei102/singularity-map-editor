@@ -17,6 +17,15 @@ test('only selected walls render; active open doorway remains visible',()=>{
  assert.deepEqual(new Set(switched.map(r=>r.objectId)),new Set(['b','b-door']));
  assert(switched.some(r=>r.objectId==='b-door'&&r.material==='door'));
 });
+test('disabled walls and doors disappear regardless of state and physical overrides',()=>{
+ const m=fixture();m.objects[0].enabled=false;m.objects[0].physical={blocksMove:true,blocksSight:true};
+ assert(!visibleArchitectureGeometry(m).some(r=>r.objectId==='a'||r.objectId==='a-door'));
+ assert(!architectureGeometry(m).some(r=>r.objectId==='a'||r.objectId==='a-door'));
+ m.objects[0].enabled=true;m.objects[1].enabled=false;m.objects[1].state=0;
+ assert(visibleArchitectureGeometry(m).some(r=>r.objectId==='a'));
+ assert(!architectureGeometry(m,true).some(r=>r.objectId==='a-door'));
+ assert.equal(m.objects[1].state,0);
+});
 test('glass and physical overrides remain visible, fully retracted partitions disappear',()=>{
  const m=fixture();m.objects[0].geometry.material='glass';delete m.objects[0].blocksWhen;
  assert(visibleArchitectureGeometry(m).some(r=>r.objectId==='a'));
