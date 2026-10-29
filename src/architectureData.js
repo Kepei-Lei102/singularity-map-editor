@@ -43,6 +43,16 @@ export function migrateArchitecture(m) {
   }
   return m;
 }
+/** Preparation view omits retired wall layouts, including their open doorway outlines. */
+export function visibleArchitectureGeometry(m) {
+  const active = (o, fallback) => o?.physical?.blocksMove ?? (o?.blocksWhen ? o.blocksWhen.includes(o.state) : fallback);
+  const shownWalls = new Set(architectureWalls(m).filter(w => {
+    const o = m.objects?.find(o => o.id === w.id);
+    return active(o, true) || (o?.physical?.blocksSight ?? (o?.blocksWhen ? o.blocksWhen.includes(o.state) : w.material !== 'glass'));
+  }).map(w => w.id));
+  const shownDoors = new Set(architectureDoors(m).filter(d => shownWalls.has(d.wallId)).map(d => d.id));
+  return architectureGeometry(m, true).filter(r => shownWalls.has(r.objectId) || shownDoors.has(r.objectId));
+}
 /** Geometry in main-cell units. Physics flags are transient, never object metadata. */
 export function architectureGeometry(m, includeOpen = false) {
   const out = [], doors = architectureDoors(m);

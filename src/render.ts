@@ -1,5 +1,6 @@
 import { effectiveLayer, visionMembers } from './vision';
-import { isArchitectureObject, architectureGeometry, clipArchitecture, fogAt, isSubdivided, tokenPosition } from './architecture';
+import { visibleArchitectureGeometry } from './architectureData.js';
+import { isArchitectureObject, clipArchitecture, fogAt, isSubdivided, tokenPosition } from './architecture';
 import { anyVisible } from './memory';
 import type { Selection, Tool, View } from './store';
 import type { GameMap, MapObject, SeenObject, World } from './types';
@@ -480,7 +481,7 @@ export function render(
       else { ctx.fillRect(r.x * CS, r.y * CS, r.w * CS, r.h * CS); ctx.strokeRect(r.x * CS, r.y * CS, r.w * CS, r.h * CS); }
     }
   };
-  if (!player) drawArchitecture(architectureGeometry(map, true));
+  if (!player) drawArchitecture(visibleArchitectureGeometry(map));
   else { drawArchitecture(clipArchitecture(map, map, 2, map.seen.architecture ?? [])); drawArchitecture((map.architecture || map.objects.some(isArchitectureObject)) ? clipArchitecture(map, map) : clipArchitecture(map, map, 1, map.architectureFragments ?? [])); }
 
   // 连接点

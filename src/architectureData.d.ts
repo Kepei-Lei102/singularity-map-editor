@@ -7,4 +7,5 @@ export function architectureObjectBounds(m: GameMap, o: MapObject): { x: number;
 export function normalizeArchitectureBounds(m: GameMap): void;
 export function migrateArchitecture(m: GameMap): GameMap;
 export interface PhysicalFragment extends ArchitectureFragment { objectId: string; hidden: boolean; blocksMove: boolean; blocksSight: boolean }
+export function visibleArchitectureGeometry(m: Pick<GameMap, 'objects' | 'architecture'>): PhysicalFragment[];
 export function architectureGeometry(m: Pick<GameMap, 'objects' | 'architecture'>, includeOpen?: boolean): PhysicalFragment[];
