@@ -8,6 +8,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import JSZip from 'jszip';
 import crypto from 'node:crypto';
+import { mountAIGateway } from './ai-gateway.mjs';
 import { checkWorld, readProject, writeFileAtomic, writeFolder, zipProject } from './tsmap.mjs';
 import { missingMedia } from '../src/schema.js';
 
@@ -36,6 +37,7 @@ const server = await createServer({
   plugins: [{
     name: 'ts-load-file',
     configureServer(s) {
+      mountAIGateway(s.middlewares, { token: TOKEN });
       // 存回硬盘：打开的是 .tsmap.zip 就覆盖它（先留一份 .bak）；否则在旁边新建 <名字>.tsmap.zip，原文件不动
       const target = !file ? null : isFolder || file.endsWith('.tsmap.zip') ? file
         : path.join(path.dirname(file), path.basename(file).replace(/\.(zip|json)$/i, '') + '.tsmap.zip');

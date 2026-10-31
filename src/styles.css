@@ -1,3 +1,10 @@
+.session-desk, .player-judgment { position: fixed; right: 18px; top: 80px; bottom: 18px; width: min(620px, calc(100vw - 36px)); overflow: auto; z-index: 60; background: #1b1c22; color: #e8e4da; border: 1px solid #555166; border-radius: 12px; padding: 18px; box-shadow: 0 12px 50px #0008; }
+.session-desk[hidden], .session-desk [hidden] { display: none; }
+.desk-close { float: right; }
+.judgment-panel label { display: grid; gap: 6px; margin: 10px 0; }
+.judgment-panel article { border-top: 1px solid #444; padding: 10px 0; }
+.player-judgment-toggle { position: fixed; bottom: 16px; left: 16px; z-index: 20; }
+.player-judgment { z-index: 30; }
 :root {
   --bg: #121318;
   --panel: #1b1c22;

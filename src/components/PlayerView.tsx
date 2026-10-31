@@ -4,6 +4,7 @@ import type { World } from '../types';
 import { TIER_LABEL } from '../types';
 import { MapCanvas } from './MapCanvas';
 import { MediaView } from './MediaPanel';
+import { DiceTray } from './DiceTray';
 
 /** 玩家窗口：主持人共享这个窗口的屏幕给玩家。只显示玩家该看到的东西。 */
 export function PlayerView() {
@@ -11,6 +12,7 @@ export function PlayerView() {
   const [media, setMedia] = useState<{ mediaId: string; label: string; mime: string; blob?: Blob } | null>(null);
   const [armed, setArmed] = useState(false);
   const [nums, setNums] = useState(false);
+  const [dismissed, setDismissed] = useState<string | null>(null);
 
   useEffect(() => {
     const off = listenAsPlayer((m) => {
@@ -24,6 +26,7 @@ export function PlayerView() {
   }, []);
 
   const map = world?.maps.find((m) => m.id === world.playerMapId);
+  const judgment = world?.judgments?.slice(-1)[0];
   const clues = [...(world?.clues ?? [])].sort((a, b) => b.at - a.at); // 公开过的线索单独带来，物件看不见了也还在
 
   return (
@@ -43,6 +46,12 @@ export function PlayerView() {
           ))}
         </div>
       )}
+      {judgment && <button className="player-judgment-toggle" onClick={() => setDismissed(dismissed === judgment.id ? null : judgment.id)}>正式判定 · {judgment.title}</button>}
+      {judgment && dismissed !== judgment.id && <aside className="player-judgment">
+        <button onClick={() => setDismissed(judgment.id)}>收起</button><h3>{judgment.title}</h3>
+        <strong>D{judgment.roll.sides} = {judgment.roll.value === 100 ? '000' : judgment.roll.value}</strong><p>{judgment.ruling || '等待见证者解释判定'}</p>
+        <DiceTray persona="player" sides={judgment.roll.sides} disabled displayResult={judgment.roll} onResult={() => {}} />
+      </aside>}
       {media && armed && (
         <div className={media.mime.startsWith('audio') ? 'player-audio' : 'player-media'}>
           {media.mime.startsWith('audio') && <span>♪ {media.label}</span>}

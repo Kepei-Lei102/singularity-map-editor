@@ -1,3 +1,4 @@
+import { clearTrialWindows, openPlayerWindow, selectTrialViewer } from './sync';
 import { playerObject } from './identity';
 import { effectiveLayer } from './vision';
 import { objectEnabled } from './objectData.js';
@@ -120,22 +121,26 @@ export function startTrial() {
   const p = placePlayer(mapId);
   if (!p) return endTrial();
   setTr({ players: [p] });
+  openPlayerWindow(p.pcId, true);
 }
 
 export function addTrialPlayer() {
   const t = tr();
   if (!t) return;
   const p = placePlayer(t.mapId);
-  if (p) setTr({ players: [...t.players, p], current: t.players.length, msg: '' });
+  if (p) { setTr({ players: [...t.players, p], current: t.players.length, msg: '' }); selectTrialViewer(p.pcId); }
 }
 
 export function switchTrialPlayer(i?: number) {
   const t = tr();
   if (!t || !t.players.length) return;
-  setTr({ current: i ?? (t.current + 1) % t.players.length, msg: '' });
+  const current = i ?? (t.current + 1) % t.players.length;
+  setTr({ current, msg: '' });
+  selectTrialViewer(t.players[current].pcId);
 }
 
 export function endTrial() {
+  clearTrialWindows();
   cancelPendingPlay();
   endSandbox();
   // 试玩里触发的播放只在主持人这边（没发给玩家），结束时换回试玩前在放的那个

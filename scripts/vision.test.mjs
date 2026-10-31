@@ -9,7 +9,7 @@ import { build } from 'esbuild';
 const root = fileURLToPath(new URL('..', import.meta.url));
 const temp = await mkdtemp(join(tmpdir(), 'ts-vision-test-'));
 const bundle = join(temp, 'editor.cjs');
-await build({ stdin: { contents: `export * from './src/defaults'; export * from './src/store'; export * from './src/actions'; export * from './src/vision'; export * from './src/memory'; export * from './src/sync'; export * from './src/schema.js'; export { produce } from 'immer';`, resolveDir: root }, outfile: bundle, bundle: true, platform: 'node', format: 'cjs', logLevel: 'silent' });
+await build({ stdin: { contents: `export * from './src/trial'; export * from './src/judgments'; export * from './src/defaults'; export * from './src/store'; export * from './src/actions'; export * from './src/vision'; export * from './src/memory'; export * from './src/sync'; export * from './src/schema.js'; export { produce } from 'immer';`, resolveDir: root }, outfile: bundle, bundle: true, platform: 'node', format: 'cjs', logLevel: 'silent' });
 const storage = () => { const m = new Map(); return { getItem: k => m.get(k) ?? null, setItem: (k,v) => m.set(k,v), removeItem: k => m.delete(k) }; };
 globalThis.localStorage = storage(); globalThis.sessionStorage = storage();
 globalThis.location = { search: '', origin: 'http://localhost', href: 'http://localhost/' };
@@ -30,6 +30,22 @@ const map = () => api.getWorld().maps[0];
 const layer = id => map().views[id];
 const fog = (id, x, kind = 'fogReveal', y = 1) => api.paintFog(map().id, [[x,y]], kind, [id]);
 function freeze(id, x, y = 1) { fog(id,x,'fogHide',y); }
+const judgment = (recipients, id = 'physical-roll') => ({ title: '观察检定', ruling: '发现刻痕', recipients, roll: { id, sides: 100, value: 100, tens: 0, units: 0, material: 'metal', persona: 'witness', seed: 42 } });
+
+test('formal judgments preserve one physical result, recipient privacy and save validation', () => {
+  const {w,m}=fixture(); install(w);
+  const input=judgment(['a','a']), context=api.worldContext();
+  assert.equal(api.publishJudgment(input,context),null);
+  assert.deepEqual(api.getWorld().judgments[0].recipients,['a']);
+  assert.equal(api.playerWorld(api.getWorld(),m.id,'a').judgments[0].roll.value,100);
+  assert.equal(api.playerWorld(api.getWorld(),m.id,'b').judgments.length,0);
+  assert.ok(api.publishJudgment(input,context));
+  assert.ok(api.publishJudgment({...judgment(['a'],'bad'),roll:{...input.roll,id:'bad',units:1}},context));
+  assert.ok(api.publishJudgment(judgment(['missing'],'absent'),context));
+  assert.ok(api.publishJudgment(judgment(['a'],'stale'),'old-context'));
+  assert.equal(api.getWorld().judgments.length,1);
+  api.checkWorld(JSON.parse(JSON.stringify(api.getWorld())),true);
+});
 function object(m, x, id = 'box') { const o = { ...api.newObject('object',x,1,1,1), id, name: `秘密-${id}`, height: 0 }; m.objects.push(o); return o; }
 
 test('object identity stays out of live and remembered payloads until a successful observation or Witness reveal', () => {
@@ -226,6 +242,28 @@ test('marks cross groups by hearing, and are sent only to actual recipients', ()
   w.marks=[{id:'heard',mapId:m.id,x:3,y:1,author:'c',symbol:'!',text:'听得到',createdAt:Date.now(),life:20}];install(w);
   assert.deepEqual(api.playerWorld(api.getWorld(),m.id,'a').marks[0].audience,['a']);assert.equal(api.playerWorld(api.getWorld(),m.id,'b').marks.length,0);
   api.update(d=>{d.maps[0].cells[14]='wall';});assert.equal(api.playerWorld(api.getWorld(),m.id,'a').marks.length,0);
+});
+
+test('trial opens its own player, isolates formal results and clears only that window on exit', () => {
+  const {w,m}=fixture(); install(w); api.openPlayerWindow('a'); const real=windows.at(-1);
+  const before=api.getWorld(), realContext=api.worldContext();
+  api.startTrial(); const trial=windows.at(-1), first=api.getUI().trial.players[0].pcId;
+  assert.notEqual(real,trial);
+  assert.ok(api.publishJudgment(judgment([first]),realContext));
+  assert.equal(api.publishJudgment(judgment([first]),api.worldContext()),null);
+  api.send({type:'world',world:api.getWorld()});
+  assert.equal(real.messages.at(-1).world.judgments.length,0);
+  assert.equal(trial.messages.at(-1).world.judgments[0].roll.value,100);
+  assert.equal(trial.messages.at(-1).world.viewerId,first);
+  assert.equal(trial.messages.at(-1).world.playerMapId,m.id);
+  api.addTrialPlayer(); const second=api.getUI().trial.players[1].pcId;
+  assert.equal(trial.messages.at(-1).world.viewerId,second);
+  assert.equal(trial.messages.at(-1).world.judgments.length,0);
+  api.switchTrialPlayer(0); assert.equal(trial.messages.at(-1).world.viewerId,first);
+  api.endTrial(); api.send({type:'world',world:api.getWorld()});
+  assert.equal(trial.messages.at(-1).type,'clear');
+  assert.equal(real.messages.at(-1).type,'world');
+  assert.deepEqual(api.getWorld(),before);
 });
 
 test('host and player refresh reconnect through saved binding and opener; player rejects broadcast worlds', async () => {

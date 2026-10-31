@@ -12,14 +12,14 @@ export default defineConfig(({ mode }) => {
       name: 'player-no-project-api',
       configureServer(server: import('vite').ViteDevServer) {
         server.middlewares.use((req, res, next) => {
-          if (/^\/__(load|save|save-target)(?:[/?]|$)/i.test(req.url ?? '')) { res.statusCode = 404; res.end('玩家端没有工程读写接口'); return; }
+          if (/^\/__(load|save|save-target|ai|ai-session)(?:[/?]|$)/i.test(req.url ?? '')) { res.statusCode = 404; res.end('玩家端没有工程读写接口'); return; }
           next();
         });
       },
     }] : []), ...(process.env.SINGLE ? [viteSingleFile()] : [])],
     base: './',
     cacheDir: role ? `node_modules/.vite-${role}` : 'node_modules/.vite',
-    publicDir: role === 'player' ? false : 'public',
+    publicDir: 'public',
     server: { port: Number(role === 'player' ? process.env.PLAYER_PORT || 5179 : process.env.HOST_PORT || 5178), strictPort: true },
     preview: { port: Number(role === 'player' ? process.env.PLAYER_PORT || 5179 : process.env.HOST_PORT || 5178), strictPort: true },
     build: role ? { outDir: `dist-${role}` } : undefined,

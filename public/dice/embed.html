@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>骰盘</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="embed.css">
+  <script src="vendor/three.global.js" defer></script>
+  <script src="vendor/cannon.global.js" defer></script>
+  <script src="weather.js" defer></script>
+  <script src="materials.js" defer></script>
+  <script src="random.js" defer></script>
+  <script src="core.js" defer></script>
+  <script src="geometry.js" defer></script>
+  <script src="tray-shape.js" defer></script>
+  <script src="physics.js" defer></script>
+  <script src="room.js" defer></script>
+  <script src="vendor/suncalc.js" defer></script>
+  <script src="celestial.js" defer></script>
+  <script src="renderer.js" defer></script>
+  <script src="gesture.js" defer></script>
+  <script src="embed.js" defer></script>
+</head>
+<body>
+  <main>
+    <header><strong id="persona">骰盘</strong><span id="die-name">D6</span></header>
+    <label class="material">骰子材质
+      <select id="material" disabled>
+        <option value="wood">胡桃木</option><option value="plastic">青绿树脂</option>
+        <option value="metal">拉丝黄铜</option><option value="stone">白松石</option><option value="rubber">珊瑚橡胶</option>
+      </select>
+    </label>
+    <button id="tray" type="button" aria-label="按住调整高度，松手掷骰" disabled>
+      <canvas id="scene" aria-hidden="true"></canvas>
+    </button>
+    <p id="hint">正在准备骰盘…</p>
+    <div class="height"><label for="height">出手高度</label><input id="height" type="range" min="5" max="28" step="1" value="18" disabled><output id="height-value" for="height">18 cm</output></div>
+    <footer><div class="result" role="status" aria-live="polite" aria-atomic="true"><output id="result">—</output><span id="pair"></span></div><button id="roll" type="button" disabled>掷 D6</button></footer>
+    <p id="error" role="alert" hidden></p>
+  </main>
+</body>
+</html>

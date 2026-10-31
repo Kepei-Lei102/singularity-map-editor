@@ -1,6 +1,4 @@
 import { identityKnowledge, playerObject } from '../identity';
-import { playerMap } from '../sync';
-import { effectiveLayer } from '../vision';
 import { isArchitectureObject, openingIsOpen, architectureObjectBounds, furnitureSweepBlocked, tokenPosition } from '../architecture';
 import { objectEnabled } from '../objectData.js';
 import { subdivideRegion, toggleArchitectureDoor } from '../actions';
@@ -25,7 +23,6 @@ export function Inspector() {
   const sel = ui.selection;
   const map = findMap(w, ui.mapId);
   if (!map) return null;
-  if (ui.trial) return <TrialInspector world={w} map={map} ui={ui} />;
   let body: JSX.Element | null = null;
   if (sel?.type === 'object') {
     const o = findObj(w, sel.mapId, sel.id);
@@ -286,21 +283,6 @@ function MapInspector({ world, map, editable }: { world: World; map: GameMap; ed
       )}
     </Section>
   );
-}
-
-function TrialInspector({ world, map, ui }: { world: World; map: GameMap; ui: UIState }) {
-  const pcId = ui.trial!.players[ui.trial!.current]?.pcId;
-  const visible = playerMap(map, effectiveLayer(world, map, pcId ?? ''), pcId);
-  const selected = ui.selection;
-  const o = selected?.type === 'object' ? visible.objects.find(o => o.id === selected.id) : undefined;
-  const original = o && map.objects.find(x => x.id === o.id);
-  return <>
-    <Section title="眼前物件"><div className="hint">先选择物件，再模拟观察成功或见证者揭幕。试玩结果退出后恢复。</div>
-      <div className="chips">{visible.objects.map(x => <button key={x.id} onClick={() => setUI({ selection: { type: 'object', mapId: map.id, id: x.id } })}>{x.icon} {x.name} · {cellName(x.x, x.y)}</button>)}</div>
-    </Section>
-    {o && original && <><Section title={o.name}><div>{o.icon} {o.states[o.state]}</div></Section><IdentityControls world={world} mapId={map.id} o={original} enabled /></>}
-    <SlidingPuzzles world={world} map={map} ui={ui} />
-  </>;
 }
 
 const rangeBadge = (s: Secret) => `${s.kind === 'auto' ? '自动浮现' : `${s.check || '检定'}骰`} · ≤${s.range}格`;

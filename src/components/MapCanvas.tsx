@@ -171,6 +171,7 @@ export function MapCanvas({ world, map, mode, playerNumbers = false, follow, vie
     if (e.button !== 0 || space.current) return startPan();
 
     const s = getUI();
+    if (s.trial?.markMode && onCellClick) { onCellClick(cx, cy); return; }
     // 平移工具先于任何命中/选择/编辑逻辑；从家具、触发区边框或棋子起拖都一样。
     if (mode !== 'player' && s.tool === 'pan') return startPan();
     const w = mode === 'player' && !s.trial ? world : getWorld();

@@ -379,7 +379,18 @@ export interface Npc {
   progress: NpcProgress;
 }
 
+export interface DiceJudgment {
+  id: Id;
+  title: string;
+  ruling: string;
+  recipients: Id[]; // Explicit IDs; never follows later group changes.
+  at: number;
+  session: number;
+  roll: { id: string; sides: 4 | 6 | 8 | 10 | 12 | 20 | 100; value: number; tens?: number | null; units?: number | null; material: 'wood' | 'plastic' | 'metal' | 'stone' | 'rubber'; persona: 'witness' | 'player'; algorithm?: string; seed: number; launch?: unknown };
+}
+
 export interface World {
+  judgments?: DiceJudgment[];
   version: 1;
   name: string;
   terrains: Terrain[];

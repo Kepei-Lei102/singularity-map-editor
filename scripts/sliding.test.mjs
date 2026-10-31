@@ -19,7 +19,7 @@ const storage = () => { const data = new Map(); return { getItem: (k) => data.ge
 globalThis.localStorage = storage();
 globalThis.sessionStorage = storage();
 globalThis.location = { search: '', origin: 'http://localhost' };
-globalThis.window = { setTimeout: () => 0 };
+globalThis.window = { setTimeout: () => 0, open: () => ({ closed: false, postMessage() {} }) };
 globalThis.BroadcastChannel = class { postMessage() {} };
 const api = createRequire(import.meta.url)(bundle);
 after(() => rm(temp, { recursive: true, force: true }));

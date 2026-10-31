@@ -6,7 +6,7 @@ import { anyVisible } from './memory';
 import type { Endpoint, GameMap, PlayerClue, VisionLayer, World } from './types';
 import { visibleMarks } from './perception';
 import { numbering } from './render';
-import { getRealWorld, getUI, saveNow } from './store';
+import { getRealWorld, getWorld, getUI, saveNow, worldContext, toast } from './store';
 import { SESSION, rand, renewSession } from './session';
 import { effectiveLayer, emptyVision } from './vision';
 import { onProjectReplaced, projectContext } from './store';
@@ -35,22 +35,33 @@ let channel: BroadcastChannel | null = null;
 try { channel = new BroadcastChannel('ts-map-sync'); } catch { /* 不支持就只走 postMessage */ }
 
 // Binding is held only by the host; the URL carries an opaque reconnect capability, never a selectable pcId.
-const players = new Map<string, { win: Window | null; pcId: string; context: number }>();
+const players = new Map<string, { win: Window | null; pcId: string; context: number; trialContext?: string }>();
 const bindingsKey = () => `ts-player-bindings-${SESSION}`;
 try {
   const saved = JSON.parse(sessionStorage.getItem(bindingsKey()) ?? '{}') as Record<string, string>;
   for (const [binding, pcId] of Object.entries(saved)) if (typeof pcId === 'string') players.set(binding, { win: null, pcId, context: projectContext() });
 } catch { /* no reconnect state */ }
 function saveBindings() {
-  try { sessionStorage.setItem(bindingsKey(), JSON.stringify(Object.fromEntries([...players].map(([key, p]) => [key, p.pcId])))); } catch { /* unavailable */ }
+  try { sessionStorage.setItem(bindingsKey(), JSON.stringify(Object.fromEntries([...players].filter(([, p]) => !p.trialContext).map(([key, p]) => [key, p.pcId])))); } catch { /* unavailable */ }
 }
-export function openPlayerWindow(pcId?: string) {
-  const w = getRealWorld(), id = pcId ?? w.party[0]?.id;
+export function openPlayerWindow(pcId?: string, trial = false) {
+  const w = trial ? getWorld() : getRealWorld(), id = pcId ?? w.party[0]?.id;
   if (!id || !w.party.some(p => p.id === id)) return;
   const binding = rand();
   const base = playerOrigin() === location.origin ? '' : `${playerOrigin()}/`;
   const win = window.open(`${base}?view=player&session=${SESSION}&binding=${binding}`, `ts-player-${binding}`, 'width=1280,height=800');
-  if (win) { players.set(binding, { win, pcId: id, context: projectContext() }); saveBindings(); }
+  if (win) { players.set(binding, { win, pcId: id, context: projectContext(), ...(trial ? { trialContext: worldContext() } : {}) }); saveBindings(); }
+  else toast(`玩家窗口被浏览器拦截，请允许此站点弹出窗口，再点「${trial ? '打开试玩玩家端' : '打开玩家窗口…'}」`);
+}
+export function clearTrialWindows() {
+  for (const [id, p] of players) if (p.trialContext) {
+    try { p.win?.postMessage({ type: 'clear', __ts: 'ts-map', seq: rand(), from: SESSION, inst: INST, born: BORN }, target()); } catch { /* closed */ }
+    players.delete(id);
+  }
+}
+export function selectTrialViewer(pcId: string) {
+  for (const p of players.values()) if (p.trialContext === worldContext()) p.pcId = pcId;
+  send({ type: 'world', world: getWorld() });
 }
 
 const isMsg = (d: unknown): d is SyncMsg => !!d && typeof d === 'object' && (d as SyncMsg).__ts === 'ts-map' && typeof (d as SyncMsg).from === 'string' && typeof (d as SyncMsg).inst === 'string' && typeof (d as SyncMsg).born === 'number';
@@ -103,7 +114,9 @@ export function playerWorld(w: World, mapId: string | null = w.playerMapId, pcId
     party: pcId ? w.party.filter(p => p.id === pcId).map(p => ({ id: p.id, name: p.name, tags: [], color: p.color })) : [],
     terrains: w.terrains.filter((t) => usedTerrains.has(t.id)),
     flows: [], log: [], npcs: [], media: [],
+    judgments: valid && pcId ? (w.judgments ?? []).filter(j => j.recipients.includes(pcId)).map(j => ({ ...j, recipients: [pcId] })) : [],
     labels, clues, marks, connections,
+    playerMapId: pm?.id ?? null,
     maps: pm ? [pm] : [],
   };
 }
@@ -151,18 +164,19 @@ export function send(body: SyncBody, to?: string) {
     window.setTimeout(() => send(body, to), quietUntil - Date.now() + 5);
     return;
   }
-  // 试玩是主持人自己的测试：试玩期间不往玩家窗口推播放；世界一律推真正的那份（试玩前的）
+  // 试玩期间不推播放；下面按绑定分别发送沙盒或真正的世界。
   if ((body.type === 'play' || body.type === 'stop') && getUI().trial) return;
   const msg = (out: SyncBody): SyncMsg => ({ ...out, __ts: 'ts-map', seq: rand(), from: SESSION, inst: INST, born: BORN, ...(to ? { to } : {}) });
   if (body.type === 'world' || body.type === 'play' || body.type === 'stop' || body.type === 'clear') {
-    const w = getRealWorld();
     for (const [binding, p] of players) {
+      const w = p.trialContext ? getWorld() : getRealWorld();
       if (!p.win) { if (p.context !== projectContext() || !w.party.some(pc => pc.id === p.pcId)) { players.delete(binding); saveBindings(); } continue; }
       if (p.win.closed) { players.delete(binding); saveBindings(); continue; }
       // A new project requires a fresh host binding. Trial leaves the real project untouched.
       const context = projectContext();
-      const valid = p.context === context && w.party.some(pc => pc.id === p.pcId);
-      const out: SyncBody = !valid ? { type: 'clear' } : body.type === 'world' ? { type: 'world', world: playerWorld(w, w.playerMapId, p.pcId) } : body;
+      const valid = p.context === context && (!p.trialContext || !!getUI().trial && p.trialContext === worldContext()) && w.party.some(pc => pc.id === p.pcId);
+      const mapId = p.trialContext ? getUI().trial?.mapId ?? null : w.playerMapId;
+      const out: SyncBody = !valid ? { type: 'clear' } : body.type === 'world' ? { type: 'world', world: playerWorld(w, mapId, p.pcId) } : body;
       try { p.win.postMessage(msg(out), target()); } catch { /* closed */ }
       if (!valid) { players.delete(binding); saveBindings(); }
     }

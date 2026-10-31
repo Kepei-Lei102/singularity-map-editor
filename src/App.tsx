@@ -1,6 +1,8 @@
 import { isPlayerEntry } from './deployment';
-import { useEffect, useRef } from 'react';
-import { canEditMap, getUI, getWorld, redo, setUI, undo, update, useUI, useWorld, type Mode, type Tab } from './store';
+import { useEffect, useRef, useState } from 'react';
+import { JudgmentPanel } from './components/JudgmentPanel';
+import { SessionAI } from './components/SessionAI';
+import { canEditMap, getRealWorld, getUI, getWorld, redo, setUI, undo, update, useUI, useWorld, type Mode, type Tab } from './store';
 import { autoLoadFromLauncher, checkDiskTarget, deleteMapObject, exportProject, findMap, hasBackup, importAnyFile, restoreBackup, saveToDisk, startFreshWorld } from './actions';
 import { demoWorld, emptyWorld } from './defaults';
 import { broadcastWorld, listenAsEditor, openPlayerWindow, send } from './sync';
@@ -49,6 +51,7 @@ function deleteSelection() {
 function Editor() {
   const world = useWorld();
   const ui = useUI();
+  const [desk, setDesk] = useState<'dice' | 'ai' | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const rhRef = useRef<HTMLInputElement>(null);
   const left = usePanel('left', 220);
@@ -120,6 +123,9 @@ function Editor() {
               onClick={() => ui.mode !== m.mode && setUI({ mode: m.mode, tool: 'select', tab: m.tab, pendingConn: null, unlock: false })}>{m.label}</button>
           ))}
         </div>
+        <button onClick={() => setDesk(desk === 'dice' ? null : 'dice')}>骰子判定</button>
+        <button onClick={() => setDesk(desk === 'ai' ? null : 'ai')}>本场 AI</button>
+        {ui.trial && <button onClick={() => openPlayerWindow(ui.trial!.players[ui.trial!.current]?.pcId, true)}>打开试玩玩家端</button>}
         {run && <span className="session">第 {world.session} 场</span>}
         {ui.mode !== 'edit' && (
           <button className={ui.unlock ? 'unlock on' : 'unlock'} title="兜底：临时允许修改上一级的内容"
@@ -132,7 +138,7 @@ function Editor() {
         {map.id !== world.playerMapId && <button onClick={() => update((d) => { d.playerMapId = map.id; })}>推送当前地图</button>}
         <button className={ui.trial ? 'trial-btn on' : 'trial-btn'} onClick={() => (ui.trial ? endTrial() : startTrial())}>{ui.trial ? '■ 结束试玩' : '▶ 试玩'}</button>
         <select aria-label="打开绑定角色的玩家窗口" value="" onChange={e => { if (e.target.value) openPlayerWindow(e.target.value); }}>
-          <option value="">打开玩家窗口…</option>{world.party.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+          <option value="">打开玩家窗口…</option>{getRealWorld().party.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
         </select>
         <button title="撤销 ⌘Z" onClick={undo}>↶</button>
         <button title="重做 ⇧⌘Z" onClick={redo}>↷</button>
@@ -162,7 +168,7 @@ function Editor() {
             {(() => {
               const tr = ui.trial && ui.trial.mapId === map.id ? ui.trial : null;
               const cur = tr?.players[tr.current];
-              return <MapCanvas world={world} map={map} mode={tr ? 'player' : ui.mode} follow={cur?.tokenId} viewer={cur?.pcId} onCellClick={tr ? trialClick : undefined} cursor={tr?.markMode ? 'crosshair' : undefined} />;
+              return <MapCanvas world={world} map={map} mode={ui.mode} follow={cur?.tokenId} onCellClick={tr?.markMode ? trialClick : undefined} cursor={tr?.markMode ? 'crosshair' : undefined} />;
             })()}
             <TrialHud />
             <div className="map-badge">{map.layer} · F{map.floor} · {map.name}　<span className="muted">{map.width}×{map.height}</span></div>
@@ -191,6 +197,11 @@ function Editor() {
         </aside>}
       </div>
 
+      <aside className="session-desk" hidden={!desk}>
+        <button className="desk-close" onClick={() => setDesk(null)}>关闭面板</button>
+        <div hidden={desk !== 'dice'}><JudgmentPanel /></div>
+        <div hidden={desk !== 'ai'}><SessionAI active={desk === 'ai'} /></div>
+      </aside>
       {ui.privateNote && (
         <div className="modal-bg" onClick={() => setUI({ privateNote: null })}>
           <div className="modal" onClick={(e) => e.stopPropagation()}>

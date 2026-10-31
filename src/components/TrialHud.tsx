@@ -86,7 +86,7 @@ export function TrialHud() {
           ))}
         </div>
       )}
-      <div className="muted small-text">WASD 移动 · 点自己队里的人切换 · Tab 换人 · G 放标记 · Esc 退出（退出后一切恢复原样）</div>
+      <div className="muted small-text">在主持人窗口用 WASD 移动 · Tab 或角色按钮换人 · G 放标记 · Esc 退出；独立玩家窗口同步视角（退出后恢复原样）</div>
       {t.msg && <div className="trial-msg">{t.msg}</div>}
     </div>
   );

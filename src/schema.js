@@ -408,6 +408,14 @@ export function checkWorld(w, migrated = false) {
   unique(w.connections, 'connections');
   arr(w.party, 'party').forEach((p, i) => { obj(p, `party[${i}]`); id(p.id, `party[${i}].id`); str(p.name, `party[${i}].name`); str(p.color, `party[${i}].color`); strings(p.tags, `party[${i}].tags`); });
   unique(w.party, 'party');
+  if (w.judgments !== undefined) {
+    arr(w.judgments, 'judgments').forEach((j, i) => {
+      const at = `judgments[${i}]`; obj(j, at); id(j.id, at); str(j.title, at); str(j.ruling, at); strings(j.recipients, at); num(j.at, at); int(j.session, at, 0);
+      const r = obj(j.roll, `${at}.roll`); id(r.id, at); oneOf(r.sides, [4,6,8,10,12,20,100], at); int(r.value, at, 1, r.sides); oneOf(r.material, ['wood','plastic','metal','stone','rubber'], at); oneOf(r.persona, ['witness','player'], at); int(r.seed, `${at}.roll.seed`, 0, Number.MAX_SAFE_INTEGER); optStr(r.algorithm, at);
+      if (r.sides === 100) { int(r.tens, at, 0, 90); int(r.units, at, 0, 9); if (r.tens % 10 || (r.tens + r.units || 100) !== r.value) fail(at, '百分骰结果不一致'); }
+    });
+    unique(w.judgments, 'judgments');
+  }
   if (w.visionGroups !== undefined) {
     arr(w.visionGroups, 'visionGroups').forEach(g => { obj(g, 'visionGroups'); id(g.id, 'visionGroups.id'); str(g.name, 'visionGroups.name'); });
     unique(w.visionGroups, 'visionGroups');
