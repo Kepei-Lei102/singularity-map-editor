@@ -126,10 +126,12 @@ export function migrateWorld(w: World): World {
       for (const value of Object.values(field ?? {})) maxRev = Math.max(maxRev, value);
   }
   w.observationSeq = maxRev;
-  // Legacy private reveals used names; bind them once to stable IDs on load.
+  // Legacy names can bind only when unambiguous; otherwise the host must reveal again.
   for (const m of w.maps) for (const o of m.objects) for (const s of o.secrets)
-    if (s.revealed?.scope === 'private' && !s.revealed.recipients)
-      s.revealed.recipients = w.party.filter(p => p.name === s.revealed!.to).map(p => p.id);
+    if (s.revealed?.scope === 'private' && !s.revealed.recipients) {
+      const matches = w.party.filter(p => p.name === s.revealed!.to);
+      s.revealed.recipients = matches.length === 1 ? [matches[0].id] : [];
+    }
   repairWorld(w); // 旧版输入框允许过的超范围数值夹回来
   delete (w as { clock?: number }).clock; // 旧版的世界时钟，已改成直接读真实时间
   if (!w.flows) w.flows = [linesToFlow(w.lines ?? [])];

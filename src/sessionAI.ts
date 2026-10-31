@@ -1,7 +1,7 @@
 import type { TokenStatus, World } from './types';
 import { log, setObjectState } from './actions';
 import { isPlayerEntry } from './deployment';
-import { getWorld, projectContext, update, worldContext } from './store';
+import { getWorld, projectContext, targetRevision, update, worldContext } from './store';
 
 export type AIProtocol = 'responses' | 'chat-completions';
 export interface AdvisorSettings { protocol: AIProtocol; baseURL: string; model: string }
@@ -81,8 +81,12 @@ function same(a: unknown, b: unknown) { return JSON.stringify(a) === JSON.string
 const sameStatus = (a: TokenStatus | null | undefined, b: TokenStatus | null | undefined) =>
   (a?.label ?? null) === (b?.label ?? null) && a?.endsAt === b?.endsAt && a?.roundsLeft === b?.roundsLeft;
 
-export interface AdvisorSnapshot { world: World; project: number; context: string }
-export function captureAdvisorSnapshot(): AdvisorSnapshot { return { world: getWorld(), project: projectContext(), context: worldContext() }; }
+export interface AdvisorSnapshot { world: World; project: number; context: string; revisions: WeakMap<object, number> }
+export function captureAdvisorSnapshot(): AdvisorSnapshot {
+  const world = getWorld(), revisions = new WeakMap<object, number>();
+  for (const map of world.maps) for (const target of [...map.objects, ...map.tokens]) revisions.set(target, targetRevision(target));
+  return { world, project: projectContext(), context: worldContext(), revisions };
+}
 
 export function advisorChangeError(c: AdvisorChange, snapshot: AdvisorSnapshot): string | null {
   if (isPlayerEntry()) return '玩家端不能应用主持人建议';
@@ -91,12 +95,12 @@ export function advisorChangeError(c: AdvisorChange, snapshot: AdvisorSnapshot):
   if (!oldMap || !map) return '地图已不存在';
   if (c.kind === 'object-state') {
     const old = oldMap.objects.find(o => o.id === c.objectId), current = map.objects.find(o => o.id === c.objectId);
-    if (!old || !current || old !== current) return '物件已改动，请重新提问';
+    if (!old || !current || old !== current || snapshot.revisions.get(old) !== targetRevision(old)) return '物件已改动，请重新提问';
     if (old.state !== c.fromState || old.states[c.toState] === undefined) return '建议与请求时的物件状态不符';
     if (old.enabled === false) return '物件已停用';
   } else {
     const old = oldMap.tokens.find(t => t.id === c.tokenId), current = map.tokens.find(t => t.id === c.tokenId);
-    if (!old || !current || old !== current) return '人物已改动，请重新提问';
+    if (!old || !current || old !== current || snapshot.revisions.get(old) !== targetRevision(old)) return '人物已改动，请重新提问';
     if (!sameStatus(old.status, c.fromStatus)) return '建议与请求时的人物状态不符';
   }
   return null;

@@ -63,6 +63,23 @@ test('only host review applies a single change, records revision/history, and re
   api.undo(); assert.equal(api.getWorld().maps[0].objects[0].state, 0);
 });
 
+test('undo and redo cannot revive old AI suggestions for objects or tokens; untouched targets remain valid', () => {
+  const { mapId } = fixture(), snapshot = api.captureAdvisorSnapshot();
+  const tokenChange = { kind: 'token-status', mapId, tokenId: 'token', fromStatus: null, status: { label: '晕厥' }, reason: '确认' };
+  api.setObjectState(mapId, 'door', 0); api.undo();
+  assert.equal(api.getWorld().maps[0].objects[0], snapshot.world.maps[0].objects[0]);
+  assert.match(api.applyAdvisorChange(change(mapId), snapshot), /改动/);
+  assert.equal(api.advisorChangeError(tokenChange, snapshot), null);
+  api.update(d => { d.maps[0].tokens[0].status = { label: '等待' }; }); api.undo();
+  assert.equal(api.getWorld().maps[0].tokens[0], snapshot.world.maps[0].tokens[0]);
+  assert.match(api.applyAdvisorChange(tokenChange, snapshot), /改动/);
+  api.redo(); const afterEdit = api.captureAdvisorSnapshot();
+  api.undo(); api.redo();
+  assert.match(api.applyAdvisorChange({ ...tokenChange, fromStatus: { label: '等待' } }, afterEdit), /改动/);
+  const fresh = api.captureAdvisorSnapshot();
+  assert.equal(api.applyAdvisorChange({ ...tokenChange, fromStatus: { label: '等待' } }, fresh), null);
+});
+
 test('stale token, target re-created with identical fields, project replacement, trial and invalid target are blocked', () => {
   const { mapId } = fixture(), snapshot = api.captureAdvisorSnapshot();
   const c = { kind: 'token-status', mapId, tokenId: 'token', fromStatus: null, status: { label: '晕厥', roundsLeft: 2 }, reason: '主持人确认' };

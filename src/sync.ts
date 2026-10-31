@@ -103,7 +103,7 @@ export function playerWorld(w: World, mapId: string | null = w.playerMapId, pcId
   const usedTerrains = new Set(pm ? [...pm.cells, ...pm.seen.cells, ...Object.values(pm.views).flatMap((L) => L.seen.cells)] : []);
   const clues: PlayerClue[] = valid ? w.maps.flatMap(m => m.objects.flatMap(o => o.secrets.flatMap(s => {
     const r = s.revealed;
-    const manual = r && (r.scope === 'party' || pcId && (r.recipients ? r.recipients.includes(pcId) : r.to === w.party.find(p => p.id === pcId)?.name)) ? r : undefined;
+    const manual = r && (r.scope === 'party' || pcId && r.recipients?.includes(pcId)) ? r : undefined;
     const known = manual ?? (pcId ? s.discoveries?.[pcId] : undefined);
     return known ? [{ id: s.id, object: identityKnown(o, pcId) ? o.name : UNKNOWN_OBJECT, label: s.label, kind: s.kind, check: s.check, tier: known.tier, text: s.tiers[known.tier], at: known.at }] : [];
   }))) : [];

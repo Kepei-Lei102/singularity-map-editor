@@ -41,7 +41,26 @@ let saveTimer: number | undefined;
 let sandbox: { world: World; past: World[]; future: World[] } | null = null;
 let batchStart: World | null = null; // 拖动开始时的世界：拖动中第一次真的改了东西才把它记进撤销
 
+// Outside undoable World snapshots: leaving an entity version permanently invalidates old advice.
+const targetRevisions = new WeakMap<object, number>();
+export const targetRevision = (target: object) => targetRevisions.get(target) ?? 0;
+let revisionWorld = world;
+function trackTargetChanges() {
+  const nextMaps = new Map(world.maps.map(m => [m.id, m]));
+  for (const before of revisionWorld.maps) {
+    const next = nextMaps.get(before.id);
+    for (const field of ['objects', 'tokens'] as const) {
+      if (before[field] === next?.[field]) continue;
+      const current = new Map<string, object>((next?.[field] ?? []).map(item => [item.id, item]));
+      for (const item of before[field]) if (current.get(item.id) !== item)
+        targetRevisions.set(item, targetRevision(item) + 1);
+    }
+  }
+  revisionWorld = world;
+}
+
 function emit() {
+  trackTargetChanges();
   setMediaIndex(world.media); // 媒体 ID → 存储名，跟着当前世界走
   listeners.forEach((l) => l());
   clearTimeout(saveTimer);

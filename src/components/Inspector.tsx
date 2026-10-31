@@ -455,7 +455,7 @@ function ObjectInspector({ world, mapId, o, ui }: { world: World; mapId: string;
           <Row label="私密给">
             <select value={privTo} onChange={(e) => setPrivTo(e.target.value)}>
               <option value="">（选择角色）</option>
-              {world.party.map((p) => <option key={p.id} value={p.name}>{p.name}</option>)}
+              {world.party.map((p, i) => <option key={p.id} value={p.id}>{p.name}{world.party.some(other => other.id !== p.id && other.name === p.name) ? `（队伍第 ${i + 1} 位）` : ''}</option>)}
             </select>
           </Row>
         )}

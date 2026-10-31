@@ -56,7 +56,7 @@ test('object identity stays out of live and remembered payloads until a successf
   const hidden=p=>{const text=JSON.stringify(p);for(const secret of ['秘密-box','钟','报时','静音'])assert.ok(!text.includes(secret),secret);};
   hidden(payload('a'));
   api.revealSecret(m.id,'box','check','fail','party');hidden(payload('a'));
-  api.revealSecret(m.id,'box','check','success','private','A');
+  api.revealSecret(m.id,'box','check','success','private','a');
   assert.equal(payload('a').maps[0].objects[0].icon,'钟');hidden(payload('b'));
   api.setVisionMode('shared');hidden(payload('b'));
   freeze('a',1);assert.equal(payload('a').maps[0].seen.objects[0].name,'秘密-box');hidden(payload('b'));
@@ -68,6 +68,26 @@ test('object identity stays out of live and remembered payloads until a successf
   assert.equal(payload('a').maps[0].seen.objects[0].identity,undefined);
   assert.equal(map().seen.objects[0].identity?.party,true);
   api.update(d=>{d.maps[0].objects=[];});assert.equal(map().seen.objects[0].identity?.party,true);assert.equal(payload('a').maps[0].seen.objects[0].icon,'钟');
+});
+
+test('private checks use the chosen ID even when names duplicate; ambiguous legacy names fail closed', () => {
+  const {w,m}=fixture();w.party[0].name=w.party[1].name='同名';const o=object(m,1);
+  o.secrets=[{id:'check',label:'秘密',kind:'roll',check:'观察',range:1,tiers:{success:'仅本人',crit:'',fail:'',fumble:''}}];
+  m.tokens=[{id:'far',pcId:'a',name:'同名',color:'#fff',x:10,y:1},{id:'near',pcId:'b',name:'同名',color:'#fff',x:1,y:1}];
+  install(w);fog('a',1);fog('b',1);
+  assert.equal(api.revealBlocked(api.getWorld(),m.id,map().objects[0],1,'private','b'),null);
+  assert.ok(api.revealBlocked(api.getWorld(),m.id,map().objects[0],1,'private','a'));
+  api.revealSecret(m.id,o.id,'check','success','private','b');
+  assert.deepEqual(map().objects[0].secrets[0].revealed.recipients,['b']);
+  assert.equal(api.playerWorld(api.getWorld(),m.id,'a').clues.length,0);
+  assert.equal(api.playerWorld(api.getWorld(),m.id,'a').maps[0].objects[0].name,'未辨识物件');
+  assert.equal(api.playerWorld(api.getWorld(),m.id,'b').clues[0].text,'仅本人');
+  const saved=JSON.parse(JSON.stringify(api.getWorld()));delete saved.maps[0].objects[0].secrets[0].revealed.recipients;
+  install(saved);assert.deepEqual(map().objects[0].secrets[0].revealed.recipients,[]);
+  assert.equal(api.playerWorld(api.getWorld(),m.id,'b').clues.length,0);
+  const unambiguous=JSON.parse(JSON.stringify(saved));unambiguous.party[0].name='其他';delete unambiguous.maps[0].objects[0].secrets[0].revealed.recipients;
+  install(unambiguous);assert.deepEqual(map().objects[0].secrets[0].revealed.recipients,['b']);
+  const before=api.getWorld();api.revealSecret(m.id,o.id,'check','success','private','不存在');assert.equal(api.getWorld(),before);
 });
 
 test('automatic clues never identify an object and legacy memory names stay masked', () => {

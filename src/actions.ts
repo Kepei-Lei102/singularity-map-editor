@@ -246,11 +246,11 @@ export function revealBlocked(w: World, mapId: string, o: MapObject, range: numb
   if (!m) return '找不到地图';
   if (scope === 'private') {
     if (!to) return '还没选私密给谁';
-    const pc = w.party.find((p) => p.name === to);
-    if (!pc) return `队伍里没有「${to}」`;
+    const pc = w.party.find((p) => p.id === to);
+    if (!pc) return '所选角色已不存在，请重新选择';
     const mine = { ...m, tokens: m.tokens.filter((t) => t.pcId === pc.id) };
-    if (!mine.tokens.length) return `${to}不在这张图上`;
-    return pcWithin(w, mine, o, range) ? null : `${to}不在 ${range} 格以内，或者隔着墙看不见`;
+    if (!mine.tokens.length) return `${pc.name}不在这张图上`;
+    return pcWithin(w, mine, o, range) ? null : `${pc.name}不在 ${range} 格以内，或者隔着墙看不见`;
   }
   if (!m.tokens.some((t) => t.pcId)) return '这张图上没有玩家角色';
   return pcWithin(w, m, o, range) ? null : `没有玩家角色在 ${range} 格以内、而且看得见`;
@@ -261,16 +261,18 @@ export function revealSecret(mapId: string, objId: string, secretId: string, tie
   const o = findObj(getWorld(), mapId, objId);
   const s = o?.secrets.find((x) => x.id === secretId);
   if (!o || !s || !objectEnabled(findMap(getWorld(), mapId)!, o)) return;
+  const recipient = scope === 'private' ? getWorld().party.find(p => p.id === to) : undefined;
   const why = revealBlocked(getWorld(), mapId, o, s.range, scope, to);
-  if (why && (scope === 'private' && !to)) return toast(why);
+  if (scope === 'private' && !recipient) return toast(why ?? '请重新选择接收角色');
+  const recipientName = recipient?.name;
   if (why && !confirm(`${why}。\n\n主持人仍然要揭示「${s.label}」吗？（会在记录里注明是主持人决定的）`)) return;
   update((d) => {
     const ds = findObj(d, mapId, objId)!.secrets.find((x) => x.id === secretId)!;
-    ds.revealed = { tier, scope, to, ...(scope === 'private' ? { recipients: d.party.filter(p => p.name === to).map(p => p.id) } : {}), at: Date.now() };
+    ds.revealed = { tier, scope, to: recipientName, ...(recipient ? { recipients: [recipient.id] } : {}), at: Date.now() };
     const how = s.kind === 'auto' ? '浮现' : `${s.check}${TIER_LABEL[tier]}`;
-    log(d, 'reveal', `${o.name}·${s.label}（${how}${scope === 'private' ? `，私密给 ${to || '?'}` : '，全队'}${why ? `，主持人决定：${why}` : ''}）：${s.tiers[tier]}`, mapId);
+    log(d, 'reveal', `${o.name}·${s.label}（${how}${scope === 'private' ? `，私密给 ${recipientName || '?'}` : '，全队'}${why ? `，主持人决定：${why}` : ''}）：${s.tiers[tier]}`, mapId);
   });
-  if (scope === 'private') setUI({ privateNote: { to: to || '', title: `${o.name}·${s.label}　${s.check}${TIER_LABEL[tier]}`, text: s.tiers[tier] } });
+  if (scope === 'private') setUI({ privateNote: { to: recipientName || '', title: `${o.name}·${s.label}　${s.check}${TIER_LABEL[tier]}`, text: s.tiers[tier] } });
 }
 
 export function hideSecret(mapId: string, objId: string, secretId: string) {
@@ -286,7 +288,7 @@ export function revealObjectIdentity(mapId: string, objId: string, method: '观�
   if (!m || !o || !objectEnabled(m, o)) return;
   if (pcId && !w.party.some(p => p.id === pcId)) return;
   const to = w.party.find(p => p.id === pcId)?.name;
-  const why = revealBlocked(w, mapId, o, 1, pcId ? 'private' : 'party', to);
+  const why = revealBlocked(w, mapId, o, 1, pcId ? 'private' : 'party', pcId);
   if (why && !confirm(`${why}。\n\n主持人仍确认「${method}」已生效吗？`)) return;
   update(d => {
     const target = findObj(d, mapId, objId)!;
