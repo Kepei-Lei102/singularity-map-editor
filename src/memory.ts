@@ -1,7 +1,7 @@
 import { objectEnabled } from './objectData.js';
 import { clipArchitecture, isArchitectureObject, migrateArchitecture } from './architecture';
 import { repairWorld } from './schema.js';
-import type { Draft } from 'immer';
+import { current, isDraft, type Draft } from 'immer';
 import type { GameMap, MapObject, SeenObject, VisionLayer, World } from './types';
 import { linesToFlow } from './flow';
 import { cloneLayer, emptyVision, mergeLayers, pruneMemory, spatialFog, visionKey } from './vision';
@@ -36,8 +36,12 @@ export function sameSeen(a: SeenObject, b: SeenObject) {
 
 /** 把一份迷雾里"看得见"的部分同步进它的记忆。 */
 function syncLayer(m: Draft<GameMap>, L: Draft<VisionLayer>, rev: number) {
+  // Read geometry/fog from one plain snapshot; scanning subcells through Immer proxies
+  // repeats thousands of trapped subdivision lookups on every movement.
+  const source = isDraft(m) ? current(m) : m;
+  const layer = isDraft(L) ? current(L) : L;
   L.seen.cellRevs ??= Array(m.width * m.height).fill(0); L.seen.observed ??= {}; L.seen.objectRevs ??= {}; L.seen.subRevs ??= {}; L.seen.architectureRevs ??= {};
-  for (let key = 0; key < m.width * m.height * 9; key++) if (spatialFog(m, L, key) === 1) { L.seen.observed[key] = rev; L.seen.subRevs[key] = rev; L.seen.architectureRevs[key] = rev; }
+  for (let key = 0; key < source.width * source.height * 9; key++) if (spatialFog(source, layer, key) === 1) { L.seen.observed[key] = rev; L.seen.subRevs[key] = rev; L.seen.architectureRevs[key] = rev; }
   const n = m.width * m.height;
   for (let i = 0; i < n; i++) if (L.fog[i] === 1) { L.seen.cells[i] = m.cells[i]; L.seen.cellRevs[i] = rev; }
   L.seen.subCells ??= {};
@@ -45,10 +49,10 @@ function syncLayer(m: Draft<GameMap>, L: Draft<VisionLayer>, rev: number) {
     const sx = +key % (m.width * 3), sy = Math.floor(+key / (m.width * 3));
     L.seen.subCells[+key] = m.cells[Math.floor(sy / 3) * m.width + Math.floor(sx / 3)];
   }
-  const historical = clipArchitecture(m, L, 2, L.seen.architecture ?? []);
-  L.seen.architecture = [...historical, ...clipArchitecture(m, L)];
-  const box = { ...m, fog: L.fog, subFog: L.subFog };
-  const live = m.objects.filter((o) => objectEnabled(m, o) && o.kind === 'object' && !isArchitectureObject(o) && !o.hidden && anyVisible(box, o));
+  const historical = clipArchitecture(source, layer, 2, layer.seen.architecture ?? []);
+  L.seen.architecture = [...historical, ...clipArchitecture(source, layer)];
+  const box = { ...source, fog: layer.fog, subFog: layer.subFog };
+  const live = source.objects.filter((o) => objectEnabled(source, o) && o.kind === 'object' && !isArchitectureObject(o) && !o.hidden && anyVisible(box, o));
   const liveIds = new Set(live.map((o) => o.id));
   // 记忆里的东西，原地方现在看得见了、但它已经不在那（被搬走/删掉/藏起来）→ 忘掉
   const kept = L.seen.objects.filter((r) => liveIds.has(r.id) || !anyVisible(box, r));

@@ -1,4 +1,5 @@
 import type { GameMap, VisionLayer, World } from './types';
+import { current, isDraft } from 'immer';
 import { clipArchitecture, isSubdivided } from './architecture';
 
 export const emptyVision = (n: number): VisionLayer => ({ fog: Array(n).fill(0), seen: { cells: Array(n).fill(''), objects: [] } });
@@ -88,7 +89,9 @@ export function mergeLayers(m: GameMap, layers: VisionLayer[]): VisionLayer {
 }
 
 export function pruneMemory(m: GameMap, L: VisionLayer) {
-  L.seen.objects = L.seen.objects.filter(o => spatialKeys(m, o).some(key => spatialFog(m, L, key)));
-  L.seen.architecture = [...clipArchitecture(m, L, 1, L.seen.architecture ?? []), ...clipArchitecture(m, L, 2, L.seen.architecture ?? [])];
-  for (const key of Object.keys(L.seen.observed ?? {})) if (!spatialFog(m, L, +key)) delete L.seen.observed![+key];
+  const source = isDraft(m) ? current(m) : m;
+  const layer = isDraft(L) ? current(L) : L;
+  L.seen.objects = layer.seen.objects.filter(o => spatialKeys(source, o).some(key => spatialFog(source, layer, key)));
+  L.seen.architecture = [...clipArchitecture(source, layer, 1, layer.seen.architecture ?? []), ...clipArchitecture(source, layer, 2, layer.seen.architecture ?? [])];
+  for (const key of Object.keys(layer.seen.observed ?? {})) if (!spatialFog(source, layer, +key)) delete L.seen.observed![+key];
 }

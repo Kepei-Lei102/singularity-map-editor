@@ -9,7 +9,7 @@ import { build } from 'esbuild';
 const root = fileURLToPath(new URL('..', import.meta.url));
 const temp = await mkdtemp(join(tmpdir(), 'ts-vision-test-'));
 const bundle = join(temp, 'editor.cjs');
-await build({ stdin: { contents: `export * from './src/defaults'; export * from './src/store'; export * from './src/actions'; export * from './src/vision'; export * from './src/memory'; export * from './src/sync'; export * from './src/schema.js';`, resolveDir: root }, outfile: bundle, bundle: true, platform: 'node', format: 'cjs', logLevel: 'silent' });
+await build({ stdin: { contents: `export * from './src/defaults'; export * from './src/store'; export * from './src/actions'; export * from './src/vision'; export * from './src/memory'; export * from './src/sync'; export * from './src/schema.js'; export { produce } from 'immer';`, resolveDir: root }, outfile: bundle, bundle: true, platform: 'node', format: 'cjs', logLevel: 'silent' });
 const storage = () => { const m = new Map(); return { getItem: k => m.get(k) ?? null, setItem: (k,v) => m.set(k,v), removeItem: k => m.delete(k) }; };
 globalThis.localStorage = storage(); globalThis.sessionStorage = storage();
 globalThis.location = { search: '', origin: 'http://localhost', href: 'http://localhost/' };
@@ -31,6 +31,20 @@ const layer = id => map().views[id];
 const fog = (id, x, kind = 'fogReveal', y = 1) => api.paintFog(map().id, [[x,y]], kind, [id]);
 function freeze(id, x, y = 1) { fog(id,x,'fogHide',y); }
 function object(m, x, id = 'box') { const o = { ...api.newObject('object',x,1,1,1), id, name: `秘密-${id}`, height: 0 }; m.objects.push(o); return o; }
+
+test('memory sync on drafts matches mutable snapshots after fog and geometry edits in the same transaction', () => {
+  const {w,m}=fixture(); w.visionMode='shared';
+  m.subdivisions=[14,15]; m.fog[13]=1; m.fog[14]=1; m.subFog={};
+  for(let y=3;y<6;y++)for(let x=6;x<12;x++)m.subFog[y*m.width*3+x]=1;
+  object(m,1);
+  m.objects.push({...api.newObject('object',2,1,1,1),id:'thin-wall',height:2.4,geometry:{kind:'wall',a:{x:9,y:3},b:{x:9,y:6},thickness:100,material:'wall'}});
+  api.syncMemory(w);
+  const edit=d=>{const map=d.maps[0];map.fog[13]=2;map.objects.find(o=>o.id==='box').x=2;map.objects.find(o=>o.id==='thin-wall').geometry.material='glass';map.subFog[3*map.width*3+6]=0;};
+  const expected=structuredClone(w);edit(expected);api.syncMemory(expected);
+  const actual=api.produce(w,d=>{edit(d);api.syncMemory(d);});
+  assert.deepEqual(actual,expected);
+  assert.equal(w.maps[0].objects.find(o=>o.id==='box').x,1,'original snapshot remains unchanged');
+});
 
 test('three modes share current and historical knowledge only with effective members, including members on another map', () => {
   const { w,m } = fixture(true); w.visionMode = 'grouped'; w.party[2].visionGroupId = null;
