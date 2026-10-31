@@ -1,3 +1,4 @@
+import { identityKnowledge } from './identity';
 import { objectEnabled } from './objectData.js';
 import { clipArchitecture, isArchitectureObject, migrateArchitecture } from './architecture';
 import { repairWorld } from './schema.js';
@@ -25,13 +26,14 @@ export const emptyLayer = emptyVision;
 export function snapshot(o: MapObject | Draft<MapObject>): SeenObject {
   return {
     id: o.id, name: o.name, icon: o.icon, color: o.color, x: o.x, y: o.y, w: o.w, h: o.h, height: o.height,
+    identity: identityKnowledge(o),
     stateLabel: o.states.length > 1 ? o.states[o.state] ?? '' : null,
   };
 }
 
 export function sameSeen(a: SeenObject, b: SeenObject) {
   return a.name === b.name && a.icon === b.icon && a.color === b.color && a.x === b.x && a.y === b.y &&
-    a.w === b.w && a.h === b.h && a.height === b.height && a.stateLabel === b.stateLabel;
+    a.w === b.w && a.h === b.h && a.height === b.height && a.stateLabel === b.stateLabel && JSON.stringify(a.identity) === JSON.stringify(b.identity);
 }
 
 /** 把一份迷雾里"看得见"的部分同步进它的记忆。 */
@@ -83,6 +85,13 @@ export function syncMemory(d: Draft<World>) {
       }
       Object.assign(m, mergeLayers(m, d.party.map(p => m.views[p.id])));
     }
+    // 辨识改变知识归属，不刷新灰区中物件的位置或状态。
+    const source = isDraft(m) ? current(m) : m;
+    const identities = new Map(source.objects.map(o => [o.id, identityKnowledge(o)]));
+    for (const L of [m, ...Object.values(m.views)]) L.seen.objects = L.seen.objects.map(r => {
+      const identity = identities.get(r.id);
+      return identity && JSON.stringify(r.identity) !== JSON.stringify(identity) ? { ...r, identity } : r;
+    });
   }
 }
 

@@ -1,3 +1,6 @@
+import { identityKnowledge, playerObject } from '../identity';
+import { playerMap } from '../sync';
+import { effectiveLayer } from '../vision';
 import { isArchitectureObject, openingIsOpen, architectureObjectBounds, furnitureSweepBlocked, tokenPosition } from '../architecture';
 import { objectEnabled } from '../objectData.js';
 import { subdivideRegion, toggleArchitectureDoor } from '../actions';
@@ -8,7 +11,7 @@ import type { Connection, GameMap, MapObject, Secret, Token, World } from '../ty
 import { CONN_LABEL, TIERS, TIER_LABEL } from '../types';
 import {
   deleteMap, duplicateMap, fillEmptyCells, findMap, giveMapKnowledge, reshapeMaps, setVisionMode, findObj, fireAttach, hideSecret, itemsAt, jumpTo, resizeMap, revealSecret,
-  sameSel, setObjectEnabled, setObjectState, setObjectStates, resetRoom, applyRoomLayout, moveSlidingObject, deleteMapObject,
+  revealObjectIdentity, hideObjectIdentity, sameSel, setObjectEnabled, setObjectState, setObjectStates, resetRoom, applyRoomLayout, moveSlidingObject, deleteMapObject,
 } from '../actions';
 import { checkSlidingMove, seesSlidingObject, slidingPuzzleForObject } from '../sliding';
 import { CELL_METERS, nearestPc, type Nearest } from '../perception';
@@ -22,12 +25,12 @@ export function Inspector() {
   const sel = ui.selection;
   const map = findMap(w, ui.mapId);
   if (!map) return null;
+  if (ui.trial) return <TrialInspector world={w} map={map} ui={ui} />;
   let body: JSX.Element | null = null;
   if (sel?.type === 'object') {
     const o = findObj(w, sel.mapId, sel.id);
     const selectedMap = findMap(w, sel.mapId);
-    if (o && selectedMap && (objectEnabled(selectedMap, o) || canEditMap(ui) && !ui.trial) &&
-      (!ui.trial || !slidingPuzzleForObject(selectedMap, o.id) || seesSlidingObject(w, selectedMap, o.id, ui.trial.players[ui.trial.current]?.tokenId ?? '')))
+    if (o && selectedMap && (objectEnabled(selectedMap, o) || canEditMap(ui)))
       body = <ObjectInspector key={o.id} world={w} mapId={sel.mapId} o={o} ui={ui} />;
   } else if (sel?.type === 'token') {
     const t = findMap(w, sel.mapId)?.tokens.find((x) => x.id === sel.id);
@@ -127,7 +130,7 @@ function SlidingPuzzles({ world, map, ui }: { world: World; map: GameMap; ui: UI
           const o = map.objects.find((x) => x.id === id);
           return o && <button key={id} className={block?.id === id ? 'chip on' : 'chip'} disabled={!allowed}
             onClick={() => { setMessage(null); setUI({ selection: { type: 'object', mapId: map.id, id } }); }}>
-            {o.name}{id === puzzle.targetId ? '（目标）' : ''} · {cellName(o.x, o.y)} · {o.w}×{o.h}
+            {ui.trial ? playerObject(o, ui.trial.players[ui.trial.current]?.pcId).name : o.name}{id === puzzle.targetId ? '（目标）' : ''} · {cellName(o.x, o.y)} · {o.w}×{o.h}
           </button>;
         })}
       </div>
@@ -138,7 +141,7 @@ function SlidingPuzzles({ world, map, ui }: { world: World; map: GameMap; ui: UI
             onClick={() => {
               if (!block) return;
               const error = moveSlidingObject(map.id, block.id, block.x + dx, block.y + dy);
-              setMessage({ mapId: map.id, text: error ?? `${block.name}向${label}移动一格` });
+              setMessage({ mapId: map.id, text: error ?? `${ui.trial ? playerObject(block, ui.trial.players[ui.trial.current]?.pcId).name : block.name}向${label}移动一格` });
             }}>{label}</button>;
         })}
       </div>
@@ -285,6 +288,21 @@ function MapInspector({ world, map, editable }: { world: World; map: GameMap; ed
   );
 }
 
+function TrialInspector({ world, map, ui }: { world: World; map: GameMap; ui: UIState }) {
+  const pcId = ui.trial!.players[ui.trial!.current]?.pcId;
+  const visible = playerMap(map, effectiveLayer(world, map, pcId ?? ''), pcId);
+  const selected = ui.selection;
+  const o = selected?.type === 'object' ? visible.objects.find(o => o.id === selected.id) : undefined;
+  const original = o && map.objects.find(x => x.id === o.id);
+  return <>
+    <Section title="眼前物件"><div className="hint">先选择物件，再模拟观察成功或见证者揭幕。试玩结果退出后恢复。</div>
+      <div className="chips">{visible.objects.map(x => <button key={x.id} onClick={() => setUI({ selection: { type: 'object', mapId: map.id, id: x.id } })}>{x.icon} {x.name} · {cellName(x.x, x.y)}</button>)}</div>
+    </Section>
+    {o && original && <><Section title={o.name}><div>{o.icon} {o.states[o.state]}</div></Section><IdentityControls world={world} mapId={map.id} o={original} enabled /></>}
+    <SlidingPuzzles world={world} map={map} ui={ui} />
+  </>;
+}
+
 const rangeBadge = (s: Secret) => `${s.kind === 'auto' ? '自动浮现' : `${s.check || '检定'}骰`} · ≤${s.range}格`;
 
 function distanceNote(s: Secret, near: Nearest | null) {
@@ -363,6 +381,8 @@ function ObjectInspector({ world, mapId, o, ui }: { world: World; mapId: string;
           </>
         )}
       </Section>
+
+      {!isZone && !architecture && <IdentityControls world={world} mapId={mapId} o={o} enabled={enabled} />}
 
       <Section title="多媒体" extra={edit && world.media.length > 0 && (
         <button className="small" onClick={() => up((x) => {
@@ -509,6 +529,20 @@ function ObjectInspector({ world, mapId, o, ui }: { world: World; mapId: string;
       </Section>
     </>
   );
+}
+
+function IdentityControls({ world, mapId, o, enabled }: { world: World; mapId: string; o: MapObject; enabled: boolean }) {
+  const [recipient, setRecipient] = useState('');
+  const known = identityKnowledge(o);
+  return <Section title="物件辨识">
+    <div className="hint">玩家先看到轮廓；主持人确认观察成功或见证者揭幕后，显示名称、图标和状态。</div>
+    <Row label="告知谁"><select value={recipient} onChange={e => setRecipient(e.target.value)}>
+      <option value="">全队</option>{world.party.map(p => <option key={p.id} value={p.id}>{p.name}（私密）</option>)}
+    </select></Row>
+    <div className="btns">{(['观察成功', '见证者揭幕'] as const).map(method => <button key={method} disabled={!enabled} onClick={() => revealObjectIdentity(mapId, o.id, method, recipient || undefined)}>{method}</button>)}</div>
+    <div className="hint">{known.party ? '全队已辨识' : known.recipients?.length ? `已辨识：${world.party.filter(p => known.recipients!.includes(p.id)).map(p => p.name).join('、')}` : '尚未辨识'}</div>
+    {(known.party || !!known.recipients?.length) && <button className="small" onClick={() => hideObjectIdentity(mapId, o.id)}>撤回辨识及相关检定</button>}
+  </Section>;
 }
 
 function RevealButtons({ mapId, o, s, t, privTo }: { mapId: string; o: MapObject; s: Secret; t: (typeof TIERS)[number]; privTo: string }) {

@@ -1,3 +1,4 @@
+import { identityCheck } from './identity';
 import { objectEnabled } from './objectData.js';
 import { architectureGeometry, architectureWalls, architectureObjectBounds, isArchitectureObject, openingIsOpen, objectStateError, architectureTransitionError, normalizeArchitectureBounds, clipArchitecture, characterPathClear, setTokenPosition, tokenPosition, wallCovered } from './architecture';
 import { checkArchitecture } from './schema.js';
@@ -276,6 +277,34 @@ export function hideSecret(mapId: string, objId: string, secretId: string) {
   update((d) => {
     const s = findObj(d, mapId, objId)?.secrets.find((x) => x.id === secretId);
     if (s) { delete s.revealed; delete s.discoveries; }
+  });
+}
+
+/** 主持人确认检定成功或能力生效；不代替桌上的掷骰与能力判定。 */
+export function revealObjectIdentity(mapId: string, objId: string, method: '观察成功' | '见证者揭幕', pcId?: string) {
+  const w = getWorld(), m = findMap(w, mapId), o = m?.objects.find(o => o.id === objId);
+  if (!m || !o || !objectEnabled(m, o)) return;
+  if (pcId && !w.party.some(p => p.id === pcId)) return;
+  const to = w.party.find(p => p.id === pcId)?.name;
+  const why = revealBlocked(w, mapId, o, 1, pcId ? 'private' : 'party', to);
+  if (why && !confirm(`${why}。\n\n主持人仍确认「${method}」已生效吗？`)) return;
+  update(d => {
+    const target = findObj(d, mapId, objId)!;
+    target.identity ??= {};
+    if (pcId) target.identity.recipients = [...new Set([...(target.identity.recipients ?? []), pcId])];
+    else target.identity.party = true;
+    log(d, 'reveal', `${method}：辨识「${o.name}」（${pcId ? `私密给 ${to}` : '全队'}）`, mapId);
+  });
+}
+
+export function hideObjectIdentity(mapId: string, objId: string) {
+  update(d => {
+    const o = findObj(d, mapId, objId); if (!o) return;
+    delete o.identity;
+    // 撤回相关成功检定，避免同一条证据继续解锁名称。
+    for (const s of o.secrets) if (s.kind === 'roll' && identityCheck(s.check)) { delete s.revealed; delete s.discoveries; }
+    const m = findMap(d, mapId)!;
+    for (const L of [m, ...Object.values(m.views)]) for (const r of L.seen.objects) if (r.id === objId) delete r.identity;
   });
 }
 

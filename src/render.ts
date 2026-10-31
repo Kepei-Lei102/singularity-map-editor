@@ -1,3 +1,4 @@
+import { playerObject, playerSeen } from './identity';
 import { objectEnabled } from './objectData.js';
 import { effectiveLayer, visionMembers } from './vision';
 import { visibleArchitectureGeometry } from './architectureData.js';
@@ -56,7 +57,8 @@ export interface PlayerNumbered extends Numbered { state: string | null; height:
  *   主持人后来删掉的物件，记忆里还在，但主持人那边已经没有编号，就不标号（编号对不上任何东西）。
  * - 棋子：玩家角色总标；其余的看得见才标。连接点：没隐藏、看得见才标（连接点不进记忆）。
  */
-export function playerNumbering(world: World, map: GameMap): PlayerNumbered[] {
+export function playerNumbering(world: World, map: GameMap, viewer?: string): PlayerNumbered[] {
+  map = playerPresentation(world, map, viewer);
   const W = map.width;
   const liveRect = (n: { x: number; y: number; w: number; h: number }) => {
     return anyVisible(map, n);
@@ -351,14 +353,21 @@ function drawZone(ctx: CanvasRenderingContext2D, o: MapObject, active: boolean, 
   ctx.restore();
 }
 
+function playerPresentation(world: World, map: GameMap, viewer?: string): GameMap {
+  if (world.labels) return map; // playerWorld 已按接收者过滤，不能再把已辨识标签抹掉。
+  return { ...map, objects: map.objects.map(ob => playerObject(ob, viewer)),
+    seen: { ...map.seen, objects: map.seen.objects.map(r => playerSeen(r, viewer, map.objects.find(ob => ob.id === r.id))) } };
+}
+
 export function render(
   ctx: CanvasRenderingContext2D, cw: number, ch: number, dpr: number,
   world: World, map0: GameMap, view: View, o: RenderOpts,
 ) {
   // 视野各自独立时，玩家视角换成这个人自己的那份迷雾和记忆；后面的代码照常读 map.fog / map.seen
   const own = o.mode === 'player' && o.viewer ? effectiveLayer(world, map0, o.viewer) : undefined; // 这个人还没有视野层：什么都没看过
-  const map: GameMap = own ? { ...map0, fog: own.fog, subFog: own.subFog, seen: own.seen } : map0;
+  const visibleMap: GameMap = own ? { ...map0, fog: own.fog, subFog: own.subFog, seen: own.seen } : map0;
   const player = o.mode === 'player';
+  const map = visibleMap;
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.fillStyle = player ? '#08080b' : '#17181d';
   ctx.fillRect(0, 0, cw, ch);
@@ -463,8 +472,9 @@ export function render(
   };
   if (!player) drawObjects(map.objects.filter(ob => objectEnabled(map, ob) && ob.kind === 'object' && !isArchitectureObject(ob)));
   else {
-    drawObjects(map.objects.filter(ob => objectEnabled(map, ob) && ob.kind === 'object' && !isArchitectureObject(ob) && !ob.hidden && anyVisible(map, ob)), 1);
-    drawObjects(map.seen.objects.map(fromMemory).filter(ob => {
+    const presented = playerPresentation(world, map, o.viewer ?? undefined);
+    drawObjects(map.objects.filter(ob => objectEnabled(map, ob) && ob.kind === 'object' && !isArchitectureObject(ob) && !ob.hidden && anyVisible(map, ob)).map(ob => presented.objects.find(x => x.id === ob.id)!), 1);
+    drawObjects(presented.seen.objects.map(fromMemory).filter(ob => {
       for (let y = ob.y; y < ob.y + ob.h; y++) for (let x = ob.x; x < ob.x + ob.w; x++)
         if (fogAt(map, map, x + .5, y + .5) === 2) return true;
       return false;
@@ -658,7 +668,7 @@ export function render(
   }
   // 屏幕坐标里的叠加层：编号、坐标尺
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  if (o.numbers) drawBadges(ctx, player ? playerNumbering(world, map) : numbering(world, map), view, () => true);
+  if (o.numbers) drawBadges(ctx, player ? playerNumbering(world, visibleMap, o.viewer ?? undefined) : numbering(world, map), view, () => true);
   if (!player && map.rooms.length) drawRoomLabels(ctx, map, view);
   drawMarks(ctx, world, map, view, player ? o.viewer ?? null : null);
   if (!player && map.spawn) {

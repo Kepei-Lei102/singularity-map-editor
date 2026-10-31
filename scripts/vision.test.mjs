@@ -32,6 +32,37 @@ const fog = (id, x, kind = 'fogReveal', y = 1) => api.paintFog(map().id, [[x,y]]
 function freeze(id, x, y = 1) { fog(id,x,'fogHide',y); }
 function object(m, x, id = 'box') { const o = { ...api.newObject('object',x,1,1,1), id, name: `秘密-${id}`, height: 0 }; m.objects.push(o); return o; }
 
+test('object identity stays out of live and remembered payloads until a successful observation or Witness reveal', () => {
+  const {w,m}=fixture();const o=object(m,1);o.icon='钟';o.states=['报时','静音'];
+  o.secrets=[{id:'check',label:'检查',kind:'roll',check:'观察',range:1,tiers:{success:'s',crit:'c',fail:'f',fumble:'x'}}];
+  m.tokens=[{id:'eye',pcId:'a',name:'A',color:'#fff',x:1,y:1}];install(w);fog('a',1);fog('b',1);
+  const payload=id=>api.playerWorld(api.getWorld(),m.id,id);
+  const hidden=p=>{const text=JSON.stringify(p);for(const secret of ['秘密-box','钟','报时','静音'])assert.ok(!text.includes(secret),secret);};
+  hidden(payload('a'));
+  api.revealSecret(m.id,'box','check','fail','party');hidden(payload('a'));
+  api.revealSecret(m.id,'box','check','success','private','A');
+  assert.equal(payload('a').maps[0].objects[0].icon,'钟');hidden(payload('b'));
+  api.setVisionMode('shared');hidden(payload('b'));
+  freeze('a',1);assert.equal(payload('a').maps[0].seen.objects[0].name,'秘密-box');hidden(payload('b'));
+  api.hideObjectIdentity(m.id,'box');hidden(payload('a'));
+  api.revealObjectIdentity(m.id,'box','见证者揭幕','a');assert.equal(payload('a').maps[0].seen.objects[0].icon,'钟');hidden(payload('b'));
+  const saved=JSON.parse(JSON.stringify(api.getWorld()));api.checkWorld(saved,true);install(saved);
+  assert.equal(payload('a').maps[0].seen.objects[0].icon,'钟');hidden(payload('b'));
+  api.revealObjectIdentity(m.id,'box','观察成功');assert.equal(payload('b').maps[0].seen.objects[0].icon,'钟');
+  assert.equal(payload('a').maps[0].seen.objects[0].identity,undefined);
+  assert.equal(map().seen.objects[0].identity?.party,true);
+  api.update(d=>{d.maps[0].objects=[];});assert.equal(map().seen.objects[0].identity?.party,true);assert.equal(payload('a').maps[0].seen.objects[0].icon,'钟');
+});
+
+test('automatic clues never identify an object and legacy memory names stay masked', () => {
+  const {w,m}=fixture();const o=object(m,1);o.icon='钟';
+  o.secrets=[{id:'auto',label:'动静',kind:'auto',check:'观察',range:1,tiers:{success:'滴答',crit:'',fail:'',fumble:''}}];
+  m.tokens=[{id:'eye',pcId:'a',name:'A',color:'#fff',x:1,y:1}];install(w);fog('a',1);api.autoReveal(m.id);
+  let p=api.playerWorld(api.getWorld(),m.id,'a');assert.equal(p.clues[0].object,'未辨识物件');assert.ok(!JSON.stringify(p).includes('钟'));
+  freeze('a',1);api.update(d=>{delete d.maps[0].views.a.seen.objects[0].identity;d.maps[0].objects=[];});
+  p=api.playerWorld(api.getWorld(),m.id,'a');assert.equal(p.maps[0].seen.objects[0].name,'未辨识物件');
+});
+
 test('memory sync on drafts matches mutable snapshots after fog and geometry edits in the same transaction', () => {
   const {w,m}=fixture(); w.visionMode='shared';
   m.subdivisions=[14,15]; m.fog[13]=1; m.fog[14]=1; m.subFog={};

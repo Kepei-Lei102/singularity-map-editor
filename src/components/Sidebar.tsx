@@ -1,7 +1,8 @@
 import { useState } from 'react';
 import { canEditMap, setUI, toast, update, useUI, useWorld, type Mode, type Tool, type UIState } from '../store';
 import { CONN_LABEL, type ConnKind, type Room } from '../types';
-import { numbering } from '../render';
+import { numbering, playerNumbering } from '../render';
+import { effectiveLayer } from '../vision';
 import { newMap } from '../defaults';
 import { cellName, uid } from '../util';
 import { Area, Check, Num, Row, Section, Txt } from './fields';
@@ -136,7 +137,7 @@ export function Sidebar() {
 
       {ui.showNumbers && cur && (
         <Section title="图例">
-          {numbering(w, cur).map((n) => (
+          {(ui.trial ? playerNumbering(w, { ...cur, ...effectiveLayer(w, cur, ui.trial.players[ui.trial.current]?.pcId ?? '') }, ui.trial.players[ui.trial.current]?.pcId) : numbering(w, cur)).map((n) => (
             <div key={n.label + n.id} className={`stack-row ${ui.selection && 'id' in ui.selection && ui.selection.id === n.id ? 'on' : ''}`}
               onClick={() => setUI({
                 tab: 'inspect',

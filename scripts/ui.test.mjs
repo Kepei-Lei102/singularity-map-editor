@@ -180,6 +180,20 @@ test('state can span several rows and grapheme sequences are never split at a wr
   }
 });
 
+test('player canvas and numbering hide identity at both zoom levels until identified; host stays readable', () => {
+  const {world,map}=fixture();map.tokens=[];map.objects=[map.objects[0]];map.fog.fill(1);
+  const o=map.objects[0];o.name='布谷鸟钟';o.icon='钟';o.states=['报时','静音'];
+  for(const zoom of [1,4]) {
+    const text=drawing(world,map,'player',zoom).text.map(x=>x.value).join('');
+    assert.ok(!text.includes('钟'));assert.ok(!text.includes('报时'));
+  }
+  assert.ok(drawing(world,map,'edit').text.some(x=>x.value.includes('钟')));
+  assert.equal(api.playerNumbering(world,map)[0].name,'未辨识物件');
+  o.identity={recipients:['a']};assert.equal(api.playerNumbering(world,map,'a')[0].name,'布谷鸟钟');
+  assert.equal(api.playerNumbering(world,map,'b')[0].icon,'');
+  o.identity={party:true};assert.ok(drawing(world,map,'player').text.some(x=>x.value.includes('钟')));
+});
+
 test('wide short object keeps name/state in complete rows above the footer; same-cell labels remain deduplicated', () => {
   const { world,map } = fixture(); map.tokens = []; map.objects = [map.objects[0]];
   const obj = map.objects[0]; obj.w = 4; obj.h = 1; obj.name = '长名称'.repeat(30); obj.icon = ''; obj.height = 1;
@@ -193,7 +207,7 @@ test('wide short object keeps name/state in complete rows above the footer; same
   result = drawing(world,map);
   assert.equal(result.text.filter(l => l.value === obj.name || l.value === '同格第二家具').length,1);
   assert.ok(result.text.some(l => l.value === '+1'));
-  map.fog.fill(2); map.seen.objects = [{ ...obj, name: '记忆家具', stateLabel: '记忆状态' }];
+  map.fog.fill(2); map.seen.objects = [{ ...obj, identity: { party: true }, name: '记忆家具', stateLabel: '记忆状态' }];
   map.objects = [];
   result = drawing(world,map,'player');
   assert.ok(result.text.some(l => l.value === '记忆家具'));

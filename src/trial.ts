@@ -1,3 +1,4 @@
+import { playerObject } from './identity';
 import { effectiveLayer } from './vision';
 import { objectEnabled } from './objectData.js';
 import { beginSandbox, endSandbox, getUI, getWorld, setUI, toast, update, type UIState } from './store';
@@ -160,14 +161,14 @@ export function trialMove(dx: number, dy: number) {
   const nx = Math.floor(step.b.x), ny = Math.floor(step.b.y);
   // 棋盘块由检查器抽象操控，不能用普通推箱绕过边界、碰撞和门状态规则。
   const puzzleBlock = m.objects.find((o) => objectEnabled(m, o) && slidingPuzzleForObject(m, o.id) && insideRect(o, nx, ny));
-  if (puzzleBlock) return setTr({ msg: `${puzzleBlock.name}是滑块，请拖动当前看得见的家具，或使用检查器的方向按钮` });
+  if (puzzleBlock) return setTr({ msg: `${playerObject(puzzleBlock, pl.pcId).name}是滑块，请拖动当前看得见的家具，或使用检查器的方向按钮` });
   // 前面是可推的书架／推车：先把它推一格，再走进去。推不动就停下，不悄悄挪半格。
   const shelf = m.objects.find((o) => o.kind === 'object' && objectEnabled(m, o) && blocksMovement(o) && insideRect(o, nx, ny));
   if (shelf) {
     if (step.cost !== 3) return setTr({ msg: '推家具需要回到主格中心，整格推动' });
     if (!shelf.pushable) return setTr({ msg: '走不过去' });
-    if (shelf.heavy && !hasHelper(m, shelf, pl.tokenId)) return setTr({ msg: `${shelf.name}太沉，要两个人一起推` });
-    if (!canPush(w, m, shelf, dx, dy)) return setTr({ msg: `${shelf.name}推不动` });
+    if (shelf.heavy && !hasHelper(m, shelf, pl.tokenId)) return setTr({ msg: `${playerObject(shelf, pl.pcId).name}太沉，要两个人一起推` });
+    if (!canPush(w, m, shelf, dx, dy)) return setTr({ msg: `${playerObject(shelf, pl.pcId).name}推不动` });
     const projected = { ...m, objects: m.objects.map(o => o.id === shelf.id ? { ...o, x: o.x + dx, y: o.y + dy } : o) };
     if (!characterPathClear(w, projected, step.a, step.b, tok.id)) return setTr({ msg: '人物路径被墙或其它人挡住' });
     update((d) => {

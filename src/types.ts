@@ -58,6 +58,7 @@ export interface MapObject {
   height: number; // 米。2.5D：同层物件的高度
   color: string;
   icon: string;
+  identity?: { party?: boolean; recipients?: Id[] }; // 名称/图标辨识，独立于视野共享
   states: string[];
   state: number;
   /** 只有这些状态挡路、挡视线（空列表＝永远不挡）。不写就按 height 算，兼容旧物件。 */
@@ -173,6 +174,7 @@ export interface SeenObject {
   w: number;
   h: number;
   height: number;
+  identity?: { party?: boolean; recipients?: Id[] };
   stateLabel: string | null; // 只有一个状态的物件不显示状态
 }
 

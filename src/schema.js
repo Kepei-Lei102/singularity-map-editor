@@ -191,11 +191,13 @@ export function checkWorld(w, migrated = false) {
   const { fail, obj, arr, str, optStr, bool, optBool, id, int, num, optNum, oneOf, unique, strings } = c;
   const fogs = (v, where, len) => arr(v, where, len).forEach((f, i) => { if (f !== 0 && f !== 1 && f !== 2) fail(`${where}[${i}]`, `迷雾只能是 0/1/2，现在是 ${JSON.stringify(f)}`); });
   const endpoint = (e, where) => { obj(e, where); str(e.mapId, `${where}.mapId`); int(e.x, `${where}.x`); int(e.y, `${where}.y`); };
+  const identity = (v, where) => { if (v === undefined) return; obj(v, where); optBool(v.party, `${where}.party`); if (v.recipients !== undefined) strings(v.recipients, `${where}.recipients`); };
   const seenObjects = (v, where) => arr(v, where).forEach((o, i) => {
     const at = `${where}[${i}]`;
     obj(o, at); id(o.id, `${at}.id`); str(o.name, `${at}.name`); str(o.icon, `${at}.icon`); str(o.color, `${at}.color`);
     int(o.x, `${at}.x`); int(o.y, `${at}.y`); int(o.w, `${at}.w`, 1, MAX_SIDE); int(o.h, `${at}.h`, 1, MAX_SIDE); num(o.height, `${at}.height`, 0, 1000);
     if (o.stateLabel !== null) str(o.stateLabel, `${at}.stateLabel`);
+    identity(o.identity, `${at}.identity`);
   });
   const fragments = (v, where) => arr(v, where).forEach(r => { obj(r, where); for (const k of ['x', 'y', 'w', 'h']) num(r[k], `${where}.${k}`, k === 'w' || k === 'h' ? .0000001 : -MAX_COORD, MAX_COORD); oneOf(r.material, ['wall', 'glass', 'door', 'opening'], where); });
   const memory = (v, where, n) => {
@@ -273,6 +275,7 @@ export function checkWorld(w, migrated = false) {
       if (!o.states.length) fail(`${oa}.states`, '是空的（至少要有一个状态）');
       int(o.state, `${oa}.state`, 0, o.states.length - 1);
       if (o.enabled !== undefined) bool(o.enabled, `${oa}.enabled`);
+      identity(o.identity, `${oa}.identity`);
       if (o.blocksWhen !== undefined) arr(o.blocksWhen, `${oa}.blocksWhen`).forEach((v, k) => int(v, `${oa}.blocksWhen[${k}]`, 0, o.states.length - 1));
       if (o.geometry !== undefined) {
         obj(o.geometry, `${oa}.geometry`); oneOf(o.geometry.kind, ['wall'], `${oa}.geometry.kind`);

@@ -1,3 +1,4 @@
+import { identityKnown, playerSeen, UNKNOWN_OBJECT } from './identity';
 import { objectEnabled } from './objectData.js';
 import { isArchitectureObject, clipArchitecture, fogAt, tokenPosition } from './architecture';
 import { anyVisible } from './memory';
@@ -91,7 +92,7 @@ export function playerWorld(w: World, mapId: string | null = w.playerMapId, pcId
     const r = s.revealed;
     const manual = r && (r.scope === 'party' || pcId && (r.recipients ? r.recipients.includes(pcId) : r.to === w.party.find(p => p.id === pcId)?.name)) ? r : undefined;
     const known = manual ?? (pcId ? s.discoveries?.[pcId] : undefined);
-    return known ? [{ id: s.id, object: o.name, label: s.label, kind: s.kind, check: s.check, tier: known.tier, text: s.tiers[known.tier], at: known.at }] : [];
+    return known ? [{ id: s.id, object: identityKnown(o, pcId) ? o.name : UNKNOWN_OBJECT, label: s.label, kind: s.kind, check: s.check, tier: known.tier, text: s.tiers[known.tier], at: known.at }] : [];
   }))) : [];
   const marks = valid && pcId ? visibleMarks(w, mapId ?? '', pcId).map(k => ({ ...k, audience: [pcId] })) : valid ? w.marks.filter(k => k.mapId === mapId) : [];
   return {
@@ -112,7 +113,7 @@ export function playerMap(m: GameMap, L: VisionLayer, pcId?: string): GameMap {
     objects: L.seen.objects.filter(r => {
       for (let y = r.y; y < r.y + r.h; y++) for (let x = r.x; x < r.x + r.w; x++) if (L.fog[y * m.width + x]) return true;
       return false;
-    }),
+    }).map(r => playerSeen(r, pcId, m.objects.find(o => o.id === r.id))),
     architecture: [...clipArchitecture(m, L, 1, L.seen.architecture ?? []), ...clipArchitecture(m, L, 2, L.seen.architecture ?? [])],
     subCells: Object.fromEntries(Object.entries(L.seen.subCells ?? {}).filter(([key]) => L.subFog?.[+key])),
   };
@@ -125,8 +126,8 @@ export function playerMap(m: GameMap, L: VisionLayer, pcId?: string): GameMap {
     d100: m.d100.map(() => 0), rooms: [], roomCells: m.roomCells.map(() => ''), notes: '', spawn: null,
     tokens: m.tokens.filter(t => { const p = tokenPosition(t); return t.pcId === pcId || fogAt(m, L, p.x, p.y) === 1; }),
     objects: m.objects.filter(o => objectEnabled(m, o) && o.kind === 'object' && !isArchitectureObject(o) && !o.hidden && anyVisible({ ...m, ...L }, o)).map(o => ({
-      id: o.id, kind: o.kind, name: o.name, x: o.x, y: o.y, w: o.w, h: o.h, height: o.height, color: o.color, icon: o.icon,
-      state: o.state, states: o.states.map((s, k) => k === o.state ? s : ''), notes: '', hidden: false, media: [], secrets: [],
+      id: o.id, kind: o.kind, name: identityKnown(o, pcId) ? o.name : UNKNOWN_OBJECT, x: o.x, y: o.y, w: o.w, h: o.h, height: o.height, color: o.color, icon: identityKnown(o, pcId) ? o.icon : '',
+      state: identityKnown(o, pcId) ? o.state : 0, states: identityKnown(o, pcId) ? o.states.map((s, k) => k === o.state ? s : '') : [''], notes: '', hidden: false, media: [], secrets: [],
     })),
   };
 }

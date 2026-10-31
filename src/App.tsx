@@ -171,21 +171,21 @@ function Editor() {
             <MediaDock />
         
           </div>
-          {ui.mode !== 'edit' && <FlowPanel />}
+          {!ui.trial && ui.mode !== 'edit' && <FlowPanel />}
         </div>
         <Splitter side="right" panel={right} />
         {right.open && <aside className="right" style={{ width: right.width }}>
           <nav className="tabs">
-            {TABS[ui.mode].map(([k, l]) => (
+            {TABS[ui.mode].filter(([k]) => !ui.trial || k === 'inspect').map(([k, l]) => (
               <button key={k} className={ui.tab === k ? 'on' : ''} onClick={() => setUI({ tab: k })}>{l}</button>
             ))}
           </nav>
           <div className="tab-body">
-            {ui.tab === 'inspect' && <Inspector />}
-            {ui.tab === 'log' && ui.mode === 'run' && <RecordPanel />}
-            {ui.tab === 'party' && ui.mode !== 'edit' && <PartyPanel />}
-            {ui.tab === 'npc' && ui.mode !== 'edit' && <NpcPanel />}
-            {ui.tab === 'media' && <MediaPanel />}
+            {(ui.trial || ui.tab === 'inspect') && <Inspector />}
+            {!ui.trial && ui.tab === 'log' && ui.mode === 'run' && <RecordPanel />}
+            {!ui.trial && ui.tab === 'party' && ui.mode !== 'edit' && <PartyPanel />}
+            {!ui.trial && ui.tab === 'npc' && ui.mode !== 'edit' && <NpcPanel />}
+            {!ui.trial && ui.tab === 'media' && <MediaPanel />}
           </div>
         </aside>}
       </div>
