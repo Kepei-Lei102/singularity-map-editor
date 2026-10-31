@@ -11,7 +11,7 @@ import { advisorEndpoint, mountAIGateway } from './ai-gateway.mjs';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
 const temp = await mkdtemp(join(tmpdir(), 'ts-session-ai-'));
-await build({ stdin: { contents: `export * from './src/sessionAI'; export * from './src/defaults'; export * from './src/store'; export * from './src/actions';`, resolveDir: root }, outfile: join(temp, 'advisor.cjs'), bundle: true, platform: 'node', format: 'cjs', logLevel: 'silent' });
+await build({ stdin: { contents: `export * from './src/sessionAI'; export * from './src/trial'; export * from './src/defaults'; export * from './src/store'; export * from './src/actions';`, resolveDir: root }, outfile: join(temp, 'advisor.cjs'), bundle: true, platform: 'node', format: 'cjs', logLevel: 'silent' });
 const storage = () => { const data = new Map(); return { getItem: k => data.get(k) ?? null, setItem: (k, v) => data.set(k, v), removeItem: k => data.delete(k) }; };
 globalThis.localStorage = storage(); globalThis.sessionStorage = storage();
 globalThis.location = { search: '', origin: 'http://localhost' };
@@ -96,6 +96,29 @@ test('manual advisor review inside a trial stays sandboxed and snapshots cannot 
     assert.equal(api.getWorld().maps[0].objects[0].state, 1);
     assert.match(api.applyAdvisorChange(tokenChange, trial), /切换/);
   } finally { api.endSandbox(); api.setUI({ trial: null }); }
+});
+
+test('AI status without a duration stays visibly active until manual removal and blocks trial movement', () => {
+  const { mapId } = fixture(), real = api.getWorld();
+  api.beginSandbox();
+  api.setUI({ trial: { mapId, players: [{ tokenId: 'token', pcId: 'pc', name: 'Alice' }], current: 0, combat: false, moved: {}, turn: 1, msg: '' } });
+  try {
+    const suggestion = { kind: 'token-status', mapId, tokenId: 'token', fromStatus: null, status: { label: '晕厥' }, reason: '未指定恢复时间' };
+    assert.equal(api.applyAdvisorChange(suggestion, api.captureAdvisorSnapshot()), null);
+    const token = () => api.getWorld().maps[0].tokens[0];
+    assert.equal(api.statusLeft(token().status), '持续至手动解除');
+    api.trialMove(1, 0); assert.equal(token().x, 4);
+    assert.match(api.getUI().trial.msg, /晕厥中/);
+    api.toggleCombat(); api.trialEndTurn();
+    assert.equal(api.statusLeft(token().status), '持续至手动解除');
+    api.toggleCombat(); api.clearTrialStatus('token');
+    api.trialMove(1, 0); assert.equal(token().x, 5);
+    assert.equal(token().status, undefined);
+    assert.equal(api.statusLeft({ roundsLeft: 2 }), '还剩 2 回合');
+    assert.equal(api.statusLeft({ endsAt: Date.now() - 1000 }), null);
+    assert.equal(api.statusLeft({ roundsLeft: 0 }), null);
+  } finally { api.endSandbox(); api.setUI({ trial: null }); }
+  assert.equal(api.getWorld(), real);
 });
 
 test('token status additions/removals are undoable and never persist the conversation or API key', () => {

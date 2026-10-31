@@ -243,10 +243,11 @@ export function clearTrialStatus(tokenId: string) {
   if (t) update((d) => { const k = findMap(d, t.mapId)?.tokens.find((x) => x.id === tokenId); if (k) delete k.status; });
 }
 
-/** 这个状态还剩多久：自由行动显示分秒，战斗显示回合；已经结束返回 null。 */
+/** 这个状态还剩多久：分秒、回合或持续至手动解除；已经结束返回 null。 */
 export function statusLeft(st: { endsAt?: number; roundsLeft?: number }) {
   if (st.roundsLeft !== undefined) return st.roundsLeft > 0 ? `还剩 ${st.roundsLeft} 回合` : null;
-  const ms = (st.endsAt ?? 0) - Date.now();
+  if (st.endsAt === undefined) return '持续至手动解除';
+  const ms = st.endsAt - Date.now();
   if (ms <= 0) return null;
   const sec = Math.ceil(ms / 1000);
   return `还剩 ${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, '0')}`;
