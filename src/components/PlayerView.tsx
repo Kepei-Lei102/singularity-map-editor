@@ -28,7 +28,7 @@ export function PlayerView() {
 
   return (
     <div className="player">
-      {map ? <MapCanvas world={world!} map={map} mode="player" playerNumbers={nums} viewer={undefined} /> : <div className="player-wait">等待主持人推送地图……</div>}
+      {map ? <MapCanvas world={world!} map={map} mode="player" playerNumbers={nums} viewer={undefined} /> : <div className="player-wait">{window.opener ? '等待主持人推送地图……' : '玩家端已就绪。请在创作者／见证者端选择「打开玩家窗口…」中的角色，建立专属视角。'}</div>}
       {map && <div className="player-title">{map.layer} · {map.name}</div>}
       {map && <button className="player-nums" onClick={() => setNums(!nums)}>{nums ? '隐藏编号' : '显示编号'}</button>}
       {map && <span className="player-viewer">{world!.party[0]?.name} 的视角</span>}

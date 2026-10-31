@@ -31,6 +31,7 @@ if (isFolder && !fs.existsSync(path.join(file, 'world.json'))) {
 const server = await createServer({
   root,
   configFile: path.join(root, 'vite.config.ts'),
+  mode: 'host',
   server: { open: file ? `/?load=${encodeURIComponent(path.basename(file) + (isFolder ? '.tsmap.zip' : ''))}` : true },
   plugins: [{
     name: 'ts-load-file',
@@ -105,6 +106,16 @@ const server = await createServer({
     },
   }],
 });
-await server.listen();
+const playerServer = await createServer({ root, configFile: path.join(root, 'vite.config.ts'), mode: 'player', server: { open: false } });
+try {
+  await playerServer.listen();
+  await server.listen();
+} catch (error) {
+  await Promise.all([server.close(), playerServer.close()]);
+  throw error;
+}
+console.log('\n  创作者 / 见证者端');
 server.printUrls();
+console.log('\n  玩家端（从主持人顶栏选择角色打开绑定窗口）');
+playerServer.printUrls();
 if (file) console.log(`\n  打开时会自动导入：${file}\n`);

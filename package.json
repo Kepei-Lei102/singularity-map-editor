@@ -4,7 +4,12 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "dev": "vite",
+    "dev": "node scripts/open.mjs",
+    "dev:host": "vite --mode host",
+    "dev:player": "vite --mode player",
+    "build:split": "tsc --noEmit && vite build --mode host && vite build --mode player",
+    "preview:host": "vite preview --mode host",
+    "preview:player": "vite preview --mode player",
     "test": "node --test scripts/*.test.mjs",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",

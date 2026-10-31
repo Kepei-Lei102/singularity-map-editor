@@ -1,3 +1,4 @@
+import { hostOrigin, playerOrigin, messageTarget, isPlayerEntry } from './deployment';
 import { identityKnown, playerSeen, UNKNOWN_OBJECT } from './identity';
 import { objectEnabled } from './objectData.js';
 import { isArchitectureObject, clipArchitecture, fogAt, tokenPosition } from './architecture';
@@ -47,7 +48,8 @@ export function openPlayerWindow(pcId?: string) {
   const w = getRealWorld(), id = pcId ?? w.party[0]?.id;
   if (!id || !w.party.some(p => p.id === id)) return;
   const binding = rand();
-  const win = window.open(`?view=player&session=${SESSION}&binding=${binding}`, `ts-player-${binding}`, 'width=1280,height=800');
+  const base = playerOrigin() === location.origin ? '' : `${playerOrigin()}/`;
+  const win = window.open(`${base}?view=player&session=${SESSION}&binding=${binding}`, `ts-player-${binding}`, 'width=1280,height=800');
   if (win) { players.set(binding, { win, pcId: id, context: projectContext() }); saveBindings(); }
 }
 
@@ -139,8 +141,8 @@ onProjectReplaced(() => {
   players.clear(); saveBindings();
 });
 
-// 只发给自己的同源窗口（双击 html 用 file:// 打开时没有正经的 origin，只能用 '*'）
-const target = () => (location.origin && location.origin !== 'null' ? location.origin : '*');
+// Each deployment pins the other endpoint; file:// standalone keeps its legacy fallback.
+const target = () => messageTarget(playerOrigin());
 
 let quietUntil = 0; // 编辑器刚启动、还在确认会话标识没撞车时，先不往外推
 
@@ -168,18 +170,24 @@ export function send(body: SyncBody, to?: string) {
   }
   const out = msg(body);
   if (body.type === 'hello') {
-    if (window.opener && !window.opener.closed) window.opener.postMessage(out, target());
+    if (window.opener && !window.opener.closed) window.opener.postMessage(out, messageTarget(hostOrigin()));
     return;
+  }
+  if (body.type === 'alive') for (const p of players.values()) {
+    if (p.win && !p.win.closed) try { p.win.postMessage(out, target()); } catch { /* closed */ }
   }
   try { channel?.postMessage(out); } catch { /* unavailable */ }
 }
 
 /** 订阅消息（两条路都听，按编号去重）。 */
-export function listen(fn: (m: SyncMsg, source: MessageEventSource | null) => void) {
+export function listen(fn: (m: SyncMsg, source: MessageEventSource | null) => void, player = isPlayerEntry()) {
   const seen = new Set<string>();
   const handle = (e: MessageEvent) => {
     if (!isMsg(e.data) || seen.has(e.data.seq)) return;
-    if (e.origin && e.origin !== 'null' && location.origin !== 'null' && e.origin !== location.origin) return; // 只听自己这边的窗口
+    const expected = player ? hostOrigin() : e.data.type === 'hello' ? playerOrigin() : location.origin;
+    if (e.origin && e.origin !== expected) return;
+    // Cross-origin windows never participate in host session-collision negotiation.
+    if (!player && e.data.type !== 'hello' && e.source) return;
     seen.add(e.data.seq);
     if (seen.size > 500) seen.clear();
     fn(e.data, e.source);
@@ -245,7 +253,7 @@ export function listenAsPlayer(fn: (m: SyncMsg) => void) {
     inst = m.inst;
     lastHeard = Date.now();
     if (m.type !== 'alive') fn(m);
-  });
+  }, true);
   send({ type: 'hello', binding: binding ?? undefined }, bound ?? undefined);
   const beat = window.setInterval(() => {
     if (lastHeard && Date.now() - lastHeard > 10000) fn({ type: 'clear', __ts: 'ts-map', seq: rand(), from: bound ?? '', inst: INST, born: BORN });

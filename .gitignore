@@ -1,6 +1,8 @@
 node_modules/
 .runtime/
 dist/
+dist-host/
+dist-player/
 release-build/
 release/
 .DS_Store

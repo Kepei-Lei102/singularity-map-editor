@@ -1,3 +1,4 @@
+import { isPlayerEntry } from './deployment';
 import { useEffect, useRef } from 'react';
 import { canEditMap, getUI, getWorld, redo, setUI, undo, update, useUI, useWorld, type Mode, type Tab } from './store';
 import { autoLoadFromLauncher, checkDiskTarget, deleteMapObject, exportProject, findMap, hasBackup, importAnyFile, restoreBackup, saveToDisk, startFreshWorld } from './actions';
@@ -30,7 +31,7 @@ const TABS: Record<Mode, [Tab, string][]> = {
 };
 
 export default function App() {
-  return new URLSearchParams(location.search).get('view') === 'player' ? <PlayerView /> : <Editor />;
+  return isPlayerEntry() ? <PlayerView /> : <Editor />;
 }
 
 function deleteSelection() {

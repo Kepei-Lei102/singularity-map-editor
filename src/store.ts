@@ -2,7 +2,8 @@ import { architectureTransitionError } from './architecture';
 import { produce, type Draft } from 'immer';
 import { useSyncExternalStore } from 'react';
 import type { World } from './types';
-import { demoWorld } from './defaults';
+import { demoWorld, emptyWorld } from './defaults';
+import { isPlayerEntry } from './deployment';
 import { migrateWorld, syncMemory } from './memory';
 import { setMediaIndex } from './media';
 import { withVision } from './perception';
@@ -13,7 +14,7 @@ import { onSessionRenewed } from './session';
 export const storageOK = (() => {
   try { localStorage.setItem('ts-probe', '1'); localStorage.removeItem('ts-probe'); return true; } catch { return false; }
 })();
-const isPlayerWindow = new URLSearchParams(location.search).get('view') === 'player'; // 玩家窗口只显示，不存档
+const isPlayerWindow = isPlayerEntry(); // 玩家窗口只显示，不存档
 
 function load(): World | null {
   if (isPlayerWindow) return null;
@@ -27,7 +28,7 @@ function load(): World | null {
 
 // ---------- 世界（有撤销历史，自动保存） ----------
 
-let world: World = load() ?? demoWorld();
+let world: World = isPlayerWindow ? emptyWorld() : load() ?? demoWorld();
 world = produce(withVision(world, { ...world, maps: [] }), syncMemory);
 setMediaIndex(world.media);
 let past: World[] = [];
