@@ -311,3 +311,10 @@ button.ai { color: #e6c2ff; border-color: #6b4f8c; }
 .npc-sub textarea { width: 100%; box-sizing: border-box; margin-top: 4px; }
 .npc-cast { font-size: 12px; display: inline-flex; align-items: center; gap: 2px; color: var(--muted); }
 .npc-rest summary { cursor: pointer; color: var(--muted); margin: 8px 0; }
+
+/* 角色密档（VaultPanel）：明文只在内存里，面板比普通 modal 宽 */
+.vault-modal { width: min(760px, 92vw); }
+.vault-note { font-size: 11px; line-height: 1.6; color: var(--muted); margin-top: 2px; }
+.vault-text { margin: 8px 0 0; padding: 10px; max-height: 46vh; overflow: auto; white-space: pre-wrap; word-break: break-word;
+  font: 12px/1.7 ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--text);
+  background: var(--bg); border: 1px solid var(--line); border-radius: 8px; }

@@ -7,6 +7,7 @@ import {
   MONTH_NAMES, exportNpcs, importNpcs, inSeason, newNpc, nextStep, npcActive, npcAdvised, npcBeatDone, npcCast, npcMet, npcOrder, npcReset, npcReturned, npcSkipWait,
 } from '../npc';
 import { Area, Num, Row, Section, Txt } from './fields';
+import { VaultPanel } from './VaultPanel';
 
 // 普通人 NPC 面板：备团时写人设和请求；带团时按现实日期提示谁该出现、谁该回访。
 
@@ -17,6 +18,7 @@ export function NpcPanel() {
   const w = useWorld();
   const ui = useUI();
   const [open, setOpen] = useState<string | null>(null);
+  const [vaultOpen, setVaultOpen] = useState(false);
   const [, tick] = useState(0);
   const fileRef = useRef<HTMLInputElement>(null);
   useEffect(() => { const t = window.setInterval(() => tick((x) => x + 1), 60_000); return () => clearInterval(t); }, []);
@@ -34,6 +36,7 @@ export function NpcPanel() {
     <Section title={`NPC（${w.npcs.length}）`} extra={
       <span className="inline">
         {editable && <button className="small" title="新建" onClick={() => { const n = newNpc(); update((d) => { d.npcs.push(n); }); setOpen(n.id); }}>＋</button>}
+        <button className="small" title="解锁角色密档（.enc，明文只在内存里）" onClick={() => setVaultOpen(true)}>密档</button>
         <button className="small" title="导入 NPC 的 JSON（同名的覆盖，进度保留）" onClick={() => fileRef.current?.click()}>导入</button>
         <button className="small" title="导出成 JSON，别的模组也能用" onClick={() => exportNpcs(w)}>导出</button>
         <input ref={fileRef} type="file" accept=".json" hidden onChange={async (e) => {
@@ -48,6 +51,7 @@ export function NpcPanel() {
         }} />
       </span>
     }>
+      {vaultOpen && <VaultPanel onClose={() => setVaultOpen(false)} />}
       <div className="hint">
         今天 {now.getMonth() + 1} 月 {now.getDate()} 日。时间按现实算：没到日子的人，连着开团也不出现。
         {` 本场安排了 ${castCount} 位；${dueCount} 位到日子可以回来；这个月在季节里的有 ${seasonCount} 位。`}
