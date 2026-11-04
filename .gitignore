@@ -8,3 +8,7 @@ release/
 .DS_Store
 *.local
 审查/*运行日志*.txt
+# 真实模组数据不进公开仓库（带团存档、密档、后台明文）
+*.tsmap
+*.enc
+*.明文.md
