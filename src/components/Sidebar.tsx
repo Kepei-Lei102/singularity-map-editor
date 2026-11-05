@@ -6,7 +6,7 @@ import { effectiveLayer } from '../vision';
 import { newMap } from '../defaults';
 import { cellName, uid } from '../util';
 import { Area, Check, Num, Row, Section, Txt } from './fields';
-import { captureRoomReset, resetRoom, saveRoomLayout, deleteRoomLayout, paintFog } from '../actions';
+import { captureRoomReset, resetRoom, saveRoomLayout, deleteRoomLayout, paintFog, setVisionAlgo } from '../actions';
 
 const ALL_TOOLS: [Tool, string, string][] = [
   ['select', '选择/移动', 'V'],
@@ -116,6 +116,7 @@ export function Sidebar() {
         )}
         {ui.tool === 'd100' && <div className="hint">D100 区域：恐怖副本等，用百分值检定。再刷一次可以擦掉。</div>}
         {ui.mode === 'edit' && <Check label="显示迷雾" value={ui.showFogInEdit} onChange={(v) => setUI({ showFogInEdit: v })} />}
+        {ui.mode === 'edit' && <Check label="规则书视野" value={ui.visionAlgo === 'rulebook'} onChange={(v) => setVisionAlgo(v ? 'rulebook' : 'legacy')} />}
         <Check label="显示0.25米子格线" value={ui.showSubgrid} onChange={(v) => setUI({ showSubgrid: v })} />
         <Check label="显示坐标" value={ui.showRulers} onChange={(v) => setUI({ showRulers: v })} />
         <Check label="显示编号（和给 AI 的图一致）" value={ui.showNumbers} onChange={(v) => setUI({ showNumbers: v })} />

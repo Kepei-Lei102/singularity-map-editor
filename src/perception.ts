@@ -1,7 +1,8 @@
 import { objectEnabled } from './objectData.js';
 import { architectureBlocksSight, architectureGeometry, isArchitectureObject, segmentHitsRect, tokenPosition, isSubdivided, subKey } from './architecture';
 import { produce } from 'immer';
-import type { GameMap, MapObject, VisionLayer, World } from './types';
+import type { GameMap, MapObject, Token, VisionLayer, World } from './types';
+import { partyVisionOf, viewerOf } from './sight';
 import { cloneLayer, emptyVision, mergeLayers, visionKey } from './vision';
 import { cellLine, gridDist } from './util';
 
@@ -115,6 +116,28 @@ export function detailedVision(world: World, map: GameMap, eyes: { x: number; y:
 }
 export function visionFrom(world: World, map: GameMap, eyes: { x: number; y: number }[]) { return detailedVision(world, map, eyes).vis; }
 
+/** 视野算法：legacy＝老的口径（累计 ≥1 断），rulebook＝规则书口径（预算 1.56、每格 0.1）。 */
+export type VisionAlgo = 'legacy' | 'rulebook';
+
+/**
+ * 规则书视野。只有棋子才有朝向和姿态，所以这里收棋子列表而不是坐标。
+ * 子格：细分格整格同可见性（粗粒度），暂时不做子格级别的视线。
+ */
+export function detailedVisionRulebook(world: World, map: GameMap, tokens: Token[]): { vis: Uint8Array; sub: Record<number, number> } {
+  const viewers = tokens.map((t) => {
+    const pc = world.party.find((p) => p.id === t.pcId);
+    return viewerOf(t, { sex: pc?.sex, heightCm: pc?.heightCm });
+  });
+  const vis = partyVisionOf(world, map, viewers);
+  const sub: Record<number, number> = {};
+  for (let y = 0; y < map.height; y++) for (let x = 0; x < map.width; x++) {
+    if (!isSubdivided(map, x, y)) continue;
+    const v = vis[y * map.width + x];
+    for (let sy = 0; sy < 3; sy++) for (let sx = 0; sx < 3; sx++) sub[subKey(map, x * 3 + sx, y * 3 + sy)] = v;
+  }
+  return { vis, sub };
+}
+
 /** 全队能看见的格子。 */
 export const partyVision = (world: World, map: GameMap) => visionFrom(world, map, map.tokens.filter((t) => t.pcId));
 
@@ -125,7 +148,7 @@ const step = (f: number, seeing: number) => (seeing ? 1 : f === 1 ? 2 : f);
  * 全队共享：全队一份，看得见 → 1，原来看得见、现在看不见 → 2（记忆）。
  * 各自独立：每个玩家角色一份（map.views），只算他自己的眼睛；地图上那份是所有人的并集，给主持人看。
  */
-export function withVision(next: World, prev: World): World {
+export function withVision(next: World, prev: World, algo: VisionAlgo = 'legacy'): World {
   return produce(next, d => {
     const membershipChanged = next.party !== prev.party || next.visionGroups !== prev.visionGroups || next.visionMode !== prev.visionMode;
     for (const m of d.maps) {
@@ -136,7 +159,8 @@ export function withVision(next: World, prev: World): World {
       for (const id of Object.keys(m.views)) if (!ids.has(id)) delete m.views[id];
       for (const p of d.party) m.views[p.id] ??= emptyVision(m.width * m.height);
       const apply = (L: VisionLayer, members: Set<string>) => {
-        const { vis, sub } = detailedVision(next, src, src.tokens.filter(t => t.pcId && members.has(t.pcId)));
+        const mine = src.tokens.filter(t => t.pcId && members.has(t.pcId));
+        const { vis, sub } = algo === 'rulebook' ? detailedVisionRulebook(next, src, mine) : detailedVision(next, src, mine);
         L.fog = L.fog.map((f, i) => step(f, vis[i]));
         const old = L.subFog ?? {};
         L.subFog = Object.fromEntries(Object.entries(sub).map(([k, v]) => [k, step(old[+k] ?? 0, v)]));

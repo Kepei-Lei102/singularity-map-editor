@@ -7,7 +7,8 @@
 //
 // 视野锥：按格子所在区域取。D20 区 120°，D100 区 60°（恐怖区）。30° 暂不做。
 
-import type { GameMap, MapObject, Token, World } from './types';
+import type { Facing, GameMap, MapObject, Sex, Stance, Token, World } from './types';
+export type { Facing, Sex, Stance } from './types';
 import { objectEnabled } from './objectData.js';
 import { isArchitectureObject } from './architecture';
 import { cellLine, gridDist } from './util';
@@ -26,8 +27,6 @@ export const DEFAULT_HEIGHT_CM = { 男: 173, 女: 164, 其他: 170 } as const;
 /** 蹲下／趴下是锁死高度，不按身高算。 */
 export const STANCE_EYE = { 蹲: 0.9, 趴: 0.3 } as const;
 
-export type Sex = '男' | '女' | '其他';
-export type Stance = '站' | '蹲' | '趴';
 
 export interface Body {
   sex?: Sex;
@@ -106,9 +105,6 @@ export function canSee(cost: Float32Array, width: number, x0: number, y0: number
   }
   return true;
 }
-
-/** 面向：4 向。给方向向量，锥角按半角判。 */
-export type Facing = '北' | '东' | '南' | '西';
 
 const FACING_VEC: Record<Facing, [number, number]> = { 北: [0, -1], 东: [1, 0], 南: [0, 1], 西: [-1, 0] };
 

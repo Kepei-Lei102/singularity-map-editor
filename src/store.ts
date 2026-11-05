@@ -29,7 +29,7 @@ function load(): World | null {
 // ---------- 世界（有撤销历史，自动保存） ----------
 
 let world: World = isPlayerWindow ? emptyWorld() : load() ?? demoWorld();
-world = produce(withVision(world, { ...world, maps: [] }), syncMemory);
+world = produce(withVision(world, { ...world, maps: [] }, 'rulebook'), syncMemory);
 setMediaIndex(world.media);
 let past: World[] = [];
 let future: World[] = [];
@@ -123,7 +123,7 @@ export function update(fn: (d: Draft<World>) => void, opts: { coalesce?: string;
     const error = architectureTransitionError(before, m);
     if (error) { toast(error); return; }
   }
-  next = produce(withVision(next, world), syncMemory);
+  next = produce(withVision(next, world, ui.visionAlgo), syncMemory);
   next = bumpStateRevs(world, next);
   if (batching && batchStart) { pushHistory(batchStart); batchStart = null; } // 拖动里第一次真的改了东西，才记一步撤销
   else if (!batching && opts.history !== false) {
@@ -175,7 +175,7 @@ export function replaceWorld(w: World) {
   batching = false;
   batchStart = null;
   lastCoalesce = null; // 换了世界，上一个世界的"连续打字合并"不能延续
-  world = produce(withVision(migrateWorld(w), { ...w, maps: [] }), syncMemory);
+  world = produce(withVision(migrateWorld(w), { ...w, maps: [] }, ui.visionAlgo), syncMemory);
   emit();
 }
 
@@ -237,6 +237,7 @@ export interface UIState {
   knowledgeTarget: string; // 空字符串=全队，否则为角色有效组
   tab: Tab;
   showFogInEdit: boolean;
+  visionAlgo: 'legacy' | 'rulebook'; // 视野算法：规则书（默认）或老口径，留作对照用
   showNumbers: boolean;
   showRulers: boolean;
   showSubgrid: boolean;
@@ -267,6 +268,7 @@ let ui: UIState = {
   knowledgeTarget: '',
   tab: 'inspect',
   showFogInEdit: false,
+  visionAlgo: 'rulebook',
   showNumbers: false,
   showRulers: true,
   showSubgrid: (() => { try { return localStorage.getItem('ts-map-show-subgrid') === 'true'; } catch { return false; } })(),

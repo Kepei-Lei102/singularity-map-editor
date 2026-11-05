@@ -120,6 +120,8 @@ export interface Token {
   y: number;
   subcell?: Point; // 绝对子格单元索引，其中心是人物位置；x/y 仍为所属主格
   status?: TokenStatus;
+  facing?: Facing; // 不填＝全向
+  stance?: Stance; // 不填＝站
 }
 
 /** 抽象滑块棋盘：位置均为地图绝对格坐标；goal 对应目标块的左上角。只平移，不要求人物站到推动侧。 */
@@ -226,12 +228,21 @@ export interface Connection {
   hidden: boolean;
 }
 
+/** 性别：只影响默认身高（男 173、女 164）。 */
+export type Sex = '男' | '女' | '其他';
+/** 姿态：站、蹲、趴。蹲／趴的眼高锁死。 */
+export type Stance = '站' | '蹲' | '趴';
+/** 面向：4 向，不做斜向。 */
+export type Facing = '北' | '东' | '南' | '西';
+
 export interface PC {
   visionGroupId?: Id | null; // undefined = 公共组，null = 独立
   id: Id;
   name: string;
   tags: string[]; // 途径/职业，例如 工程师、歌唱家
   color: string;
+  sex?: Sex; // 不填按「其他」算，默认身高 170
+  heightCm?: number; // 不填按性别默认
 }
 
 export interface Effect {

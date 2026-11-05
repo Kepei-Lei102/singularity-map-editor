@@ -25,7 +25,7 @@ function fixture(auto = false) {
   w.maps = [m]; w.playerMapId = m.id;
   return { w, m };
 }
-function install(w) { api.replaceWorld(w); api.setUI({ mode: 'run', trial: null, mapId: w.maps[0].id }); }
+function install(w) { api.replaceWorld(w); api.setUI({ mode: 'run', trial: null, mapId: w.maps[0].id, visionAlgo: 'legacy' }); }
 const map = () => api.getWorld().maps[0];
 const layer = id => map().views[id];
 const fog = (id, x, kind = 'fogReveal', y = 1) => api.paintFog(map().id, [[x,y]], kind, [id]);

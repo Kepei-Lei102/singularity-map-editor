@@ -2,10 +2,11 @@ import { identityCheck } from './identity';
 import { objectEnabled } from './objectData.js';
 import { architectureGeometry, architectureWalls, architectureObjectBounds, isArchitectureObject, openingIsOpen, objectStateError, architectureTransitionError, normalizeArchitectureBounds, clipArchitecture, characterPathClear, setTokenPosition, tokenPosition, wallCovered } from './architecture';
 import { checkArchitecture } from './schema.js';
+import { produce } from 'immer';
 import type { Draft } from 'immer';
 import JSZip from 'jszip';
 import { getUI, getWorld, reachableWorlds, replaceWorld, setUI, toast, update, worldContext, type Selection } from './store';
-import { blocksMovement, pcWithin, seesPoint, sightCosts } from './perception';
+import { blocksMovement, pcWithin, seesPoint, sightCosts, withVision } from './perception';
 import type { Flow, GameMap, LogEntry, MapObject, MediaAttach, Memory, Room, RoomObjectSnapshot, Tier, World } from './types';
 import { newObject } from './defaults';
 import { NODE_H, NODE_W } from './flow';
@@ -13,6 +14,7 @@ export { NODE_H, NODE_W, reachable } from './flow';
 import { CONN_LABEL } from './types';
 import { TIER_LABEL } from './types';
 import { download, uid } from './util';
+import { syncMemory } from './memory';
 import { contentKey, getRaw, listStored, mediaChanged, putBlobs, storageKey } from './media';
 import { checkRoomObjects, checkWorld, repairWorld } from './schema.js';
 import { allSlots, dropSlot, loadSlot, saveSlot } from './persist';
@@ -1226,4 +1228,15 @@ export function moveMapToken(mapId: string, id: string, p: { x: number; y: numbe
   p = fine ? { x: (Math.floor(p.x * 3) + .5) / 3, y: (Math.floor(p.y * 3) + .5) / 3 } : { x: Math.floor(p.x) + .5, y: Math.floor(p.y) + .5 };
   if (!characterPathClear(getWorld(), m, tokenPosition(t), p, id)) return '人物或墙体挡住了路径';
   update(d => { const dm = findMap(d, mapId)!; setTokenPosition(dm, dm.tokens.find(t => t.id === id)!, p); }); return null;
+}
+
+/**
+ * 切换视野算法并立刻重算迷雾，方便在同一张图上来回对照：
+ * rulebook＝规则书口径（预算 1.56、每格 0.1），legacy＝老口径（累计 ≥1 断）。
+ * 这是一次性的对照开关，确认观感后可以删掉。
+ */
+export function setVisionAlgo(algo: 'legacy' | 'rulebook') {
+  setUI({ visionAlgo: algo });
+  const w = getWorld();
+  replaceWorld(produce(withVision(w, { ...w, maps: [] }, algo), syncMemory));
 }
