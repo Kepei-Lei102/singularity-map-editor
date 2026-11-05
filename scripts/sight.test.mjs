@@ -1,0 +1,101 @@
+import assert from 'node:assert/strict';
+import { after, test } from 'node:test';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { build } from 'esbuild';
+
+const root = fileURLToPath(new URL('..', import.meta.url));
+const temp = await mkdtemp(join(tmpdir(), 'ts-sight-test-'));
+const bundle = join(temp, 'editor.cjs');
+await build({
+  stdin: { contents: `export * from './src/sight';`, resolveDir: root },
+  outfile: bundle, bundle: true, platform: 'node', format: 'cjs', logLevel: 'silent',
+});
+const { eyeHeight, coneFor, cellSightCost, canSee, inCone, visionOf, VISION_BUDGET, BASE_CELL_COST, objectSightCost } = await import(bundle);
+after(() => rm(temp, { recursive: true, force: true }));
+
+const world = { terrains: [
+  { id: 'floor', name: '地板', visionCoef: 0.1, blocksMove: false, color: '' },
+  { id: 'grass', name: '草丛', visionCoef: 0.8, blocksMove: false, color: '' },
+  { id: 'wall', name: '墙', visionCoef: 99, blocksMove: true, color: '' },
+] };
+const mkMap = (w, h, fill = 'floor') => ({
+  id: 'm', width: w, height: h,
+  cells: new Array(w * h).fill(fill),
+  d100: new Array(w * h).fill(0),
+  objects: [], tokens: [], architecture: { walls: [], doors: [] },
+});
+
+test('眼高：男 173、女 164 按 0.93 折算；蹲趴锁死', () => {
+  assert.equal(eyeHeight({ sex: '男' }), 1.61);
+  assert.equal(eyeHeight({ sex: '女' }), 1.53);
+  assert.equal(eyeHeight({ heightCm: 190 }), 1.77);
+  assert.equal(eyeHeight({ stance: '蹲', sex: '男' }), 0.9);
+  assert.equal(eyeHeight({ stance: '趴' }), 0.3);
+});
+
+test('空地 15 格看得见，第 16 格看不见（预算 1.56，每格 0.1）', () => {
+  const map = mkMap(20, 3);
+  const cost = cellSightCost(world, map, 1.6);
+  assert.equal(canSee(cost, map.width, 0, 1, 15, 1), true);   // 15 步 × 0.1 = 1.5 ≤ 1.56
+  assert.equal(canSee(cost, map.width, 0, 1, 16, 1), false);  // 16 步 = 1.6 > 1.56
+  assert.equal(VISION_BUDGET, 1.56);
+  assert.equal(BASE_CELL_COST, 0.1);
+});
+
+test('草丛一格 0.8：视线在它后面很快就断', () => {
+  const map = mkMap(20, 3);
+  map.cells[1 * 20 + 5] = 'grass';
+  const cost = cellSightCost(world, map, 1.6);
+  assert.ok(Math.abs(cost[1 * 20 + 5] - 0.8) < 1e-6); // Float32
+  // 到 5 格：0.1×4 + 0.8 = 1.2，还够；到 8 格：+0.3 = 1.5，够；到 9 格：1.6 超
+  assert.equal(canSee(cost, 20, 0, 1, 5, 1), true);
+  assert.equal(canSee(cost, 20, 0, 1, 8, 1), true);
+  assert.equal(canSee(cost, 20, 0, 1, 9, 1), false);
+});
+
+test('墙挡死，墙后一格都看不见', () => {
+  const map = mkMap(20, 3);
+  map.cells[1 * 20 + 3] = 'wall';
+  const cost = cellSightCost(world, map, 1.6);
+  assert.equal(canSee(cost, 20, 0, 1, 3, 1), false);
+  assert.equal(canSee(cost, 20, 0, 1, 4, 1), false);
+});
+
+test('物件按身高折算：桌子挡一部分，墙高挡死', () => {
+  const eye = 1.6;
+  const table = { id: 't', kind: 'object', name: '桌', x: 0, y: 0, w: 1, h: 1, height: 0.75, color: '', icon: '', states: ['正常'], state: 0, notes: '', hidden: false, secrets: [], media: [], enabled: true };
+  const tall = { ...table, id: 'w', height: 2.4 };
+  const low = { ...table, id: 'l', height: 0.2 };
+  assert.ok(objectSightCost(table, eye) > 0 && objectSightCost(table, eye) < 99);
+  assert.equal(objectSightCost(tall, eye), 99);
+  assert.ok(objectSightCost(low, eye) < objectSightCost(table, eye));
+  // 显式系数优先
+  assert.equal(objectSightCost({ ...table, sightCost: 0.5 }, eye), 0.5);
+});
+
+test('D100 区收窄到 60°，D20 区 120°', () => {
+  const map = mkMap(10, 10);
+  assert.equal(coneFor(map, 5, 5), 120);
+  map.d100[5 * 10 + 5] = 1;
+  assert.equal(coneFor(map, 5, 5), 60);
+});
+
+test('锥形：朝北看不到身后', () => {
+  assert.equal(inCone('北', 5, 5, 5, 3, 120), true);
+  assert.equal(inCone('北', 5, 5, 5, 7, 120), false);   // 正后方
+  assert.equal(inCone('北', 5, 5, 6, 7, 120), false);   // 南侧
+  assert.equal(inCone('北', 5, 5, 6, 4, 120), true);    // 东北 45°
+  assert.equal(inCone('北', 5, 5, 5, 5, 60), true);     // 同格
+  assert.equal(inCone('北', 5, 5, 6, 4, 60), false);    // 45° 超出 60° 锥的半角 30°
+});
+
+test('visionOf：锥形 + 预算一起生效', () => {
+  const map = mkMap(20, 20);
+  const vis = visionOf(world, map, { x: 10, y: 10, facing: '北', sex: '男' });
+  assert.equal(vis[9 * 20 + 10], 1);   // 北 1 格
+  assert.equal(vis[12 * 20 + 10], 0);  // 南 2 格，在身后
+  assert.equal(vis[10 * 20 + 10], 1);  // 自己那格
+});
