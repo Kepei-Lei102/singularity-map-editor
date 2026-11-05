@@ -4,8 +4,8 @@ import { effectiveLayer } from './vision';
 import { objectEnabled } from './objectData.js';
 import { beginSandbox, endSandbox, getUI, getWorld, setUI, toast, update, type UIState } from './store';
 import { addMark, autoReveal, cancelPendingPlay, checkEnterTriggers, findMap, ioBusy } from './actions';
-import type { GameMap, MapObject, World } from './types';
-import { uid } from './util';
+import type { Facing, GameMap, MapObject, World } from './types';
+import { gridDist, uid } from './util';
 import { blocksMovement, ROUND_MINUTES } from './perception';
 import { characterPathClear, furnitureSweepBlocked, nextTokenStep, setTokenPosition, tokenPosition } from './architecture';
 import { slidingPuzzleForObject } from './sliding';
@@ -14,6 +14,21 @@ import { slidingPuzzleForObject } from './sliding';
 // 默认是非战斗：不限步数；打开"战斗模式"才是每回合 5 格。
 
 export const MOVE_PER_TURN = 5;
+/** 缠斗：身边这一格内有别人，转身就受限（这回合只能转一次）。 */
+export const ENGAGED_RANGE = 1;
+
+/** 方向键对应的 4 向。 */
+export function dirOf(dx: number, dy: number): Facing {
+  if (dy < 0) return '北';
+  if (dy > 0) return '南';
+  if (dx > 0) return '东';
+  return '西';
+}
+
+/** 有没有人被缠住：紧邻一格内有别的棋子。 */
+export function isEngaged(m: GameMap, tok: { id: string; x: number; y: number }): boolean {
+  return m.tokens.some((k) => k.id !== tok.id && gridDist(k.x - tok.x, k.y - tok.y) <= ENGAGED_RANGE);
+}
 const COLORS = ['#f4f1ea', '#ffd166', '#81e2ff', '#ff9fb2'];
 
 export type Trial = NonNullable<UIState['trial']>;
@@ -117,7 +132,7 @@ export function startTrial() {
   beginSandbox();
   cancelPendingPlay();
   playingBefore = getUI().nowPlaying;
-  setUI({ trial: { mapId, players: [], current: 0, combat: false, moved: {}, turn: 1, msg: '', markSymbol: '!', markText: '', markMode: false }, selection: null, pendingConn: null });
+  setUI({ trial: { mapId, players: [], current: 0, combat: false, moved: {}, turned: {}, turn: 1, msg: '', markSymbol: '!', markText: '', markMode: false }, selection: null, pendingConn: null });
   const p = placePlayer(mapId);
   if (!p) return endTrial();
   setTr({ players: [p] });
@@ -160,6 +175,18 @@ export function trialMove(dx: number, dy: number) {
     if (tok.status.endsAt !== undefined && tok.status.endsAt <= Date.now()) clearTrialStatus(tok.id);
     else return setTr({ msg: `${pl.name}${tok.status.label}中，暂时不能行动` });
   }
+  // 朝向：战斗中第一次按方向＝原地转身，再按同方向才走（回合制下等于一次确认）。
+  // 自由行动不确认，朝向跟着走；转身不占行动点；被缠斗时一回合只能转一次。
+  const dir = dirOf(dx, dy);
+  if (t.combat && tok.facing !== dir) {
+    if (t.combat && isEngaged(m, tok) && t.turned?.[pl.tokenId]) return setTr({ msg: '被缠斗住了：这回合只能转一次身' });
+    update((d) => {
+      const dt = findMap(d, t.mapId)!.tokens.find((x) => x.id === pl.tokenId)!;
+      dt.facing = dir;
+    });
+    setTr({ msg: `转向${dir}`, turned: t.combat ? { ...(t.turned ?? {}), [pl.tokenId]: true } : t.turned });
+    return;
+  }
   const used = t.moved[pl.tokenId] ?? 0;
   const step = nextTokenStep(m, tok, dx, dy);
   if (t.combat && used + step.cost > MOVE_PER_TURN * 3) return setTr({ msg: '这回合的移动力用完了，按空格结束回合' });
@@ -187,6 +214,7 @@ export function trialMove(dx: number, dy: number) {
   update((d) => {
     const dt = findMap(d, t.mapId)!.tokens.find((x) => x.id === pl.tokenId)!;
     setTokenPosition(findMap(d, t.mapId)!, dt, step.b);
+    dt.facing = dir; // 自由行动：朝向跟着移动；战斗中这时朝向已经等于 dir
   });
   setTr({ moved: { ...t.moved, [pl.tokenId]: used + step.cost }, msg: '' });
   checkEnterTriggers(t.mapId, pl.tokenId, step.a.x, step.a.y); // 和正式带团一样：走进触发区就播，范围里的线索自动浮现（试玩结束都会复原）
@@ -205,7 +233,7 @@ export function trialEndTurn() {
       if (k.status.roundsLeft <= 0) delete k.status;
     }
   });
-  setTr({ moved: {}, turn: t.turn + 1, msg: '' });
+  setTr({ moved: {}, turned: {}, turn: t.turn + 1, msg: '' });
 }
 
 /** 进出战斗：暂时不能行动的状态在"真实时间"和"回合"之间换算（1 回合 = 5 分钟）。 */

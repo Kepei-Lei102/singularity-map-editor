@@ -9,7 +9,8 @@ import type { GameMap, MapObject, SeenObject, World } from './types';
 import { staleMemories } from './memory';
 import { CONN_ICON, CONN_LABEL } from './types';
 import { CS, colName, distToRect, gridDist } from './util';
-import { CLEAR_BANDS, seesPoint, sightCosts, visibleMarks } from './perception';
+import { CLEAR_BANDS, visibleMarks } from './perception';
+import { viewerOf, visionOf } from './sight';
 
 export type Mode = 'edit' | 'prep' | 'run' | 'player';
 export interface Rect { x: number; y: number; w: number; h: number }
@@ -436,14 +437,16 @@ export function render(
   // 选中玩家棋子：画出"看清"的三档（1 / 5 / 15 格），只画看得见的格子
   const st = o.selection?.type === 'token' && o.selection.mapId === map.id ? map.tokens.find((t) => t.id === (o.selection as { id: string }).id) : null;
   if (st && st.pcId && !player) {
-    const cost = sightCosts(world, map);
+    // 视线判定用规则书口径（跨格累加，预算 1.56），三档只负责染色
+    const pc = world.party.find((p) => p.id === st.pcId);
+    const vis = visionOf(world, map, viewerOf(st, { sex: pc?.sex, heightCm: pc?.heightCm }));
     const R = CLEAR_BANDS[CLEAR_BANDS.length - 1].d;
     const alpha = [0.3, 0.17, 0.07];
     for (let y = Math.max(y0, st.y - R); y <= Math.min(y1, st.y + R); y++)
       for (let x = Math.max(x0, st.x - R); x <= Math.min(x1, st.x + R); x++) {
         const d = gridDist(x + .5 - tokenPosition(st).x, y + .5 - tokenPosition(st).y);
         const band = CLEAR_BANDS.findIndex((b) => d <= b.d);
-        if (band < 0 || !seesPoint(cost, map, st, { x: x + .5, y: y + .5 })) continue;
+        if (band < 0 || !vis[y * W + x]) continue;
         ctx.fillStyle = `rgba(129,226,255,${alpha[band]})`;
         ctx.fillRect(x * CS, y * CS, CS, CS);
       }

@@ -546,6 +546,7 @@ test('shared subcell wall has no corner leak and does not reveal opposite side o
 test('fine trial walk uses integer substeps and rejects full path on return to coarse center', () => {
   const { world, map } = fineFixture(); map.architecture = undefined; map.subdivisions = [27]; map.spawn = { x: 3, y: 3 };
   install(world); api.startTrial(); api.toggleCombat();
+  api.trialMove(1, 0); // 战斗中第一次按方向是原地转身，不移动
   api.trialMove(1, 0);
   let m = api.getWorld().maps[0], token = m.tokens[0];
   assert.deepEqual(token.subcell, { x: 11, y: 10 }); assert.equal(Object.values(api.getUI().trial.moved)[0], 1);
