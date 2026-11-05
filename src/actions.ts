@@ -6,7 +6,7 @@ import type { Draft } from 'immer';
 import JSZip from 'jszip';
 import { getUI, getWorld, reachableWorlds, replaceWorld, setUI, toast, update, worldContext, type Selection } from './store';
 import { blocksMovement, pcWithin, seesPoint, sightCosts } from './perception';
-import type { Flow, GameMap, LogEntry, MapObject, MediaAttach, Room, RoomObjectSnapshot, Tier, World } from './types';
+import type { Flow, GameMap, LogEntry, MapObject, MediaAttach, Memory, Room, RoomObjectSnapshot, Tier, World } from './types';
 import { newObject } from './defaults';
 import { NODE_H, NODE_W } from './flow';
 export { NODE_H, NODE_W, reachable } from './flow';
@@ -1133,6 +1133,30 @@ export function addMark(mapId: string, author: string, x: number, y: number, sym
   });
 }
 
+/** 细分／取消细分时同步子格迷雾。 */
+function applySubdivision(L: { subFog?: Record<number, number>; fog: number[]; seen: Memory }, m: GameMap, cells: Iterable<number>, remove: boolean) {
+  L.subFog ??= {}; L.seen.subCells ??= {};
+  for (const i of cells) for (let sy = 0; sy < 3; sy++) for (let sx = 0; sx < 3; sx++) {
+    const key = (Math.floor(i / m.width) * 3 + sy) * m.width * 3 + i % m.width * 3 + sx;
+    if (remove) { delete L.subFog[key]; delete L.seen.subCells[key]; delete L.seen.subRevs?.[key]; }
+    else if (L.subFog[key] === undefined) { L.subFog[key] = L.fog[i]; L.seen.subCells[key] = L.seen.cells[i]; L.seen.subRevs ??= {}; L.seen.subRevs[key] = L.seen.cellRevs?.[i] ?? 0; }
+  }
+}
+
+/** 薄墙经过哪些主格。落墙时顺手把这些格细分，不用先手动点「细分为3×3」。 */
+function cellsAlongWall(m: GameMap, a: { x: number; y: number }, b: { x: number; y: number }): number[] {
+  const out = new Set<number>();
+  const length = Math.abs(b.x - a.x) + Math.abs(b.y - a.y);
+  for (let i = 0; i < length; i++) {
+    const x = a.x + (i + 0.5) * Math.sign(b.x - a.x), y = a.y + (i + 0.5) * Math.sign(b.y - a.y);
+    const candidates = a.x === b.x ? [[Math.floor(x / 3 - 1e-7), Math.floor(y / 3)], [Math.floor(x / 3), Math.floor(y / 3)]]
+      : [[Math.floor(x / 3), Math.floor(y / 3 - 1e-7)], [Math.floor(x / 3), Math.floor(y / 3)]];
+    const inside = candidates.filter(([cx, cy]) => cx >= 0 && cy >= 0 && cx < m.width && cy < m.height);
+    if (inside.length) out.add(inside[0][1] * m.width + inside[0][0]);
+  }
+  return [...out];
+}
+
 /** 选中矩形显式细分；取消前验证墙/门/棋子，不删任何内容。 */
 export function subdivideRegion(mapId: string, r: { x: number; y: number; w: number; h: number }, remove = false): string | null {
   const m = findMap(getWorld(), mapId); if (!m) return '找不到地图';
@@ -1145,23 +1169,27 @@ export function subdivideRegion(mapId: string, r: { x: number; y: number; w: num
   }
   update(d => {
     const dm = findMap(d, mapId)!; dm.subdivisions = subs;
-    for (const L of [dm, ...Object.values(dm.views)]) {
-      L.subFog ??= {}; L.seen.subCells ??= {};
-      for (const i of cells) for (let sy = 0; sy < 3; sy++) for (let sx = 0; sx < 3; sx++) {
-        const key = (Math.floor(i / m.width) * 3 + sy) * m.width * 3 + i % m.width * 3 + sx;
-        if (remove) { delete L.subFog[key]; delete L.seen.subCells[key]; delete L.seen.subRevs?.[key]; }
-        else if (L.subFog[key] === undefined) { L.subFog[key] = L.fog[i]; L.seen.subCells[key] = L.seen.cells[i]; L.seen.subRevs ??= {}; L.seen.subRevs[key] = L.seen.cellRevs?.[i] ?? 0; }
-      }
-    }
+    for (const L of [dm, ...Object.values(dm.views)]) applySubdivision(L, m, cells, remove);
   });
   return null;
 }
 export function addArchitectureWall(mapId: string, a: { x: number; y: number }, b: { x: number; y: number }, material: 'wall' | 'glass', thickness: number): string | null {
   const m = findMap(getWorld(), mapId); if (!m) return '找不到地图';
+  // 落墙顺手把经过的主格细分：不然 checkArchitecture 会拒绝「墙经过未细分区域」，
+  // 使用者得先切到细分工具再切回来，这一步是反直觉的。
+  const along = cellsAlongWall(m, a, b);
+  const missing = along.filter(i => !(m.subdivisions ?? []).includes(i));
+  const subs = [...new Set([...(m.subdivisions ?? []), ...along])];
+  const draftM = { ...m, subdivisions: subs };
   const o = { ...newObject('object', 0, 0, 1, 1), name: material === 'glass' ? '玻璃墙' : '墙', height: 2.4, icon: '', states: ['固定'], geometry: { kind: 'wall' as const, a, b, material, thickness } };
-  Object.assign(o, architectureObjectBounds({ ...m, objects: [...m.objects, o] }, o));
-  try { checkArchitecture({ ...m, objects: [...m.objects, o] }); } catch (e) { return (e as Error).message; }
-  update(d => { findMap(d, mapId)!.objects.push(o); });
+  Object.assign(o, architectureObjectBounds({ ...draftM, objects: [...m.objects, o] }, o));
+  try { checkArchitecture({ ...draftM, objects: [...m.objects, o] }); } catch (e) { return (e as Error).message; }
+  update(d => {
+    const dm = findMap(d, mapId)!;
+    dm.subdivisions = subs;
+    if (missing.length) for (const L of [dm, ...Object.values(dm.views)]) applySubdivision(L, m, missing, false);
+    dm.objects.push(o);
+  });
   setUI({ selection: { type: 'object', mapId, id: o.id } }); return null;
 }
 export function addArchitectureDoor(mapId: string, wallId: string, offset: number, width = 3): string | null {
