@@ -14,7 +14,8 @@
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
     "build:single": "tsc --noEmit && SINGLE=1 vite build --outDir release-build",
-    "start": "node scripts/open.mjs"
+    "start": "node scripts/open.mjs",
+    "check:secrets": "node scripts/扫涉密.mjs"
   },
   "dependencies": {
     "immer": "10.1.1",

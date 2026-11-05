@@ -48,7 +48,7 @@ export function emptyWorld(): World {
 /** 示例数据：只是占位，展示各功能怎么用，不是模组内容。 */
 export function demoWorld(): World {
   const w = emptyWorld();
-  w.name = '爱丽丝模组（示例数据）';
+  w.name = '示例世界（演示数据）';
 
   const study = newMap('书房', '现实', 1, 20, 14);
   study.notes = '现实层的书房。一切正常。';
