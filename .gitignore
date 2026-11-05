@@ -12,3 +12,4 @@ release/
 *.tsmap
 *.enc
 *.明文.md
+node_modules
