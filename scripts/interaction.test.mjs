@@ -191,12 +191,13 @@ test('多来源不同：按角色已解锁的来源取属性和口径', () => {
     id: '1', name: '双持', category: '战斗·兵器',
     check: { attributes: ['敏捷', '观察'], mode: 'situational' },
     sources: [
-      { skillId: '001-9-103', attributes: ['敏捷'], mode: 'single' },
-      { skillId: '002-5-001', attributes: ['观察', '敏捷'], mode: 'or' },
+      // 占位的假编号：不是技能库里的真实序号
+      { skillId: '999-9-101', attributes: ['敏捷'], mode: 'single' },
+      { skillId: '999-5-202', attributes: ['观察', '敏捷'], mode: 'or' },
     ],
   };
-  assert.deepEqual(checkForSource(def, '001-9-103'), { attributes: ['敏捷'], mode: 'single' });
-  assert.deepEqual(checkForSource(def, '002-5-001'), { attributes: ['观察', '敏捷'], mode: 'or' });
+  assert.deepEqual(checkForSource(def, '999-9-101'), { attributes: ['敏捷'], mode: 'single' });
+  assert.deepEqual(checkForSource(def, '999-5-202'), { attributes: ['观察', '敏捷'], mode: 'or' });
   assert.deepEqual(checkForSource(def), { attributes: ['敏捷', '观察'], mode: 'situational' }); // 没来源就用卡
 });
 
