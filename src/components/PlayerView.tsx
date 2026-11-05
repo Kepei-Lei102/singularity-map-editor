@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
-import { listenAsPlayer } from '../sync';
-import type { World } from '../types';
-import { TIER_LABEL } from '../types';
+import { listenAsPlayer, send } from '../runtime/sync';
+import type { Focus, SkillCast, World } from '../core/types';
+import { TIER_LABEL } from '../core/types';
 import { MapCanvas } from './MapCanvas';
 import { MediaView } from './MediaPanel';
 import { DiceTray } from './DiceTray';
@@ -13,11 +13,18 @@ export function PlayerView() {
   const [armed, setArmed] = useState(false);
   const [nums, setNums] = useState(false);
   const [dismissed, setDismissed] = useState<string | null>(null);
+  const [focus, setFocus] = useState<Focus | null>(null);
+  const [cast, setCast] = useState<SkillCast | null>(null);
+  const [you, setYou] = useState<string | null>(null);
 
   useEffect(() => {
     const off = listenAsPlayer((m) => {
-      if (m.type === 'world') setWorld(m.world);
-      else if (m.type === 'clear') { setWorld(null); setMedia(null); }
+      if (m.type === 'world') {
+        setWorld(m.world);
+        setFocus(m.focus ?? null);
+        setCast(m.cast ?? null);
+        setYou(m.you ?? null);
+      } else if (m.type === 'clear') { setWorld(null); setMedia(null); setFocus(null); setCast(null); }
       else if (m.type === 'play') setMedia({ mediaId: m.mediaId, label: m.label, mime: m.mime, blob: m.blob });
       else if (m.type === 'stop') setMedia(null);
     });
@@ -29,6 +36,8 @@ export function PlayerView() {
   const judgment = world?.judgments?.slice(-1)[0];
   const clues = [...(world?.clues ?? [])].sort((a, b) => b.at - a.at); // 公开过的线索单独带来，物件看不见了也还在
 
+  const held = focus?.kind === 'skill';
+  const iAmCaster = !!cast && !!you && cast.actorPcId === you;
   return (
     <div className="player">
       {map ? <MapCanvas world={world!} map={map} mode="player" playerNumbers={nums} viewer={undefined} /> : <div className="player-wait">{window.opener ? '等待主持人推送地图……' : '玩家端已就绪。请在创作者／见证者端选择「打开玩家窗口…」中的角色，建立专属视角。'}</div>}
@@ -57,6 +66,22 @@ export function PlayerView() {
           {media.mime.startsWith('audio') && <span>♪ {media.label}</span>}
           <MediaView key={media.mediaId} mediaId={media.mediaId} blob={media.blob} mime={media.mime} autoPlay
             onEnded={() => !media.mime.startsWith('image') && setMedia(null)} />
+        </div>
+      )}
+      {held && (
+        <div className="player-hold">
+          <div className="player-hold-title">{focus?.label ?? '有人正在发动技能'}</div>
+          {cast?.step === 'approval' && iAmCaster ? (
+            <>
+              <div className="muted">见证者要替你发动技能，需要你点头（60 秒内？）。</div>
+              <div className="btns">
+                <button onClick={() => send({ type: 'skill-decision', castId: cast.id, ok: true })}>同意</button>
+                <button onClick={() => send({ type: 'skill-decision', castId: cast.id, ok: false })}>不同意</button>
+              </div>
+            </>
+          ) : (
+            <div className="muted">现在请先看着，等这一步结算完再操作。</div>
+          )}
         </div>
       )}
       {!armed && (

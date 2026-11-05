@@ -1,4 +1,4 @@
-import type { GameMap, VisionLayer, World } from './types';
+import type { GameMap, VisionLayer, World } from '../core/types';
 import { current, isDraft } from 'immer';
 import { clipArchitecture, isSubdivided } from './architecture';
 

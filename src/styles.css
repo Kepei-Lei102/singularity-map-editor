@@ -318,3 +318,8 @@ button.ai { color: #e6c2ff; border-color: #6b4f8c; }
 .vault-text { margin: 8px 0 0; padding: 10px; max-height: 46vh; overflow: auto; white-space: pre-wrap; word-break: break-word;
   font: 12px/1.7 ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--text);
   background: var(--bg); border: 1px solid var(--line); border-radius: 8px; }
+
+/* 技能发动时，玩家窗口只能看不能动 */
+.player-hold { position: fixed; inset: 0; z-index: 90; background: rgba(8, 8, 11, .55); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; text-align: center; }
+.player-hold-title { font-size: 20px; color: #ffd166; }
+.player-hold .btns { display: flex; gap: 10px; }

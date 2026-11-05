@@ -1,15 +1,16 @@
-import { isPlayerEntry } from './deployment';
+import { isPlayerEntry } from './core/deployment';
 import { useEffect, useRef, useState } from 'react';
 import { JudgmentPanel } from './components/JudgmentPanel';
 import { SessionAI } from './components/SessionAI';
 import { SkillPanel } from './components/SkillPanel';
-import { canEditMap, getRealWorld, getUI, getWorld, redo, setUI, undo, update, useUI, useWorld, type Mode, type Tab } from './store';
-import { autoLoadFromLauncher, checkDiskTarget, deleteMapObject, exportProject, findMap, hasBackup, importAnyFile, restoreBackup, saveToDisk, startFreshWorld } from './actions';
-import { demoWorld, emptyWorld } from './defaults';
-import { broadcastWorld, listenAsEditor, openPlayerWindow, send } from './sync';
-import { storageOK } from './store';
+import { listenPlayerDecisions } from './rules/consent';
+import { canEditMap, getRealWorld, getUI, getWorld, redo, setUI, undo, update, useUI, useWorld, type Mode, type Tab } from './core/store';
+import { autoLoadFromLauncher, checkDiskTarget, deleteMapObject, exportProject, findMap, hasBackup, importAnyFile, restoreBackup, saveToDisk, startFreshWorld } from './runtime/actions';
+import { demoWorld, emptyWorld } from './core/defaults';
+import { broadcastWorld, listenAsEditor, openPlayerWindow, send } from './runtime/sync';
+import { storageOK } from './core/store';
 import { MapCanvas } from './components/MapCanvas';
-import { cellName } from './util';
+import { cellName } from './core/util';
 import { Sidebar, TOOL_KEYS, toolsFor } from './components/Sidebar';
 import { Inspector } from './components/Inspector';
 import { RecordPanel } from './components/RecordPanel';
@@ -19,7 +20,7 @@ import { NpcPanel } from './components/NpcPanel';
 import { MediaDock, MediaPanel } from './components/MediaPanel';
 import { PlayerView } from './components/PlayerView';
 import { Splitter, usePanel } from './components/Splitter';
-import { endTrial, startTrial, switchTrialPlayer, toggleMarkMode, trialClick, trialEndTurn, trialMove } from './trial';
+import { endTrial, startTrial, switchTrialPlayer, toggleMarkMode, trialClick, trialEndTurn, trialMove } from './runtime/trial';
 import { TrialHud } from './components/TrialHud';
 
 const MODES: { mode: Mode; label: string; tab: Tab }[] = [
@@ -72,6 +73,8 @@ function Editor() {
   useEffect(() => {
     return listenAsEditor(() => send({ type: 'world', world: getWorld() }));
   }, []);
+  // 玩家窗口点「同意/不同意」时回传到这里（技能发动状态机在等它）
+  useEffect(() => listenPlayerDecisions(), []);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {

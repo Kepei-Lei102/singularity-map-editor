@@ -10,7 +10,7 @@ import JSZip from 'jszip';
 import crypto from 'node:crypto';
 import { mountAIGateway } from './ai-gateway.mjs';
 import { checkWorld, readProject, writeFileAtomic, writeFolder, zipProject } from './tsmap.mjs';
-import { missingMedia } from '../src/schema.js';
+import { missingMedia } from '../src/core/schema.js';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const arg = process.argv[2];

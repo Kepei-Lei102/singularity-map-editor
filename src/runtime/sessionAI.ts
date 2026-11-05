@@ -1,7 +1,7 @@
-import type { TokenStatus, World } from './types';
+import type { TokenStatus, World } from '../core/types';
 import { log, setObjectState } from './actions';
-import { isPlayerEntry } from './deployment';
-import { getWorld, projectContext, targetRevision, update, worldContext } from './store';
+import { isPlayerEntry } from '../core/deployment';
+import { getWorld, projectContext, targetRevision, update, worldContext } from '../core/store';
 
 export type AIProtocol = 'responses' | 'chat-completions';
 export interface AdvisorSettings { protocol: AIProtocol; baseURL: string; model: string }

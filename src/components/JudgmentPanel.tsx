@@ -1,6 +1,6 @@
 import { useState } from 'react';
-import { useWorld, worldContext } from '../store';
-import { publishJudgment } from '../judgments';
+import { useWorld, worldContext } from '../core/store';
+import { publishJudgment } from '../rules/judgments';
 import { DiceTray, type DiceSides, type DiceTrayRecord } from './DiceTray';
 
 export function JudgmentPanel() {

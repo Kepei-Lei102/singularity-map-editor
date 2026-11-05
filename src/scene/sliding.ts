@@ -1,5 +1,5 @@
-import type { GameMap, World } from './types';
-import { objectEnabled } from './objectData.js';
+import type { GameMap, World } from '../core/types';
+import { objectEnabled } from '../core/objectData.js';
 import { objectStateError, isArchitectureObject, furnitureSweepBlocked, isSubdivided, tokenPosition } from './architecture';
 import { blocksMovement, seesPoint, sightCosts } from './perception';
 

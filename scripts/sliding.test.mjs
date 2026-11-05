@@ -12,7 +12,7 @@ const root = fileURLToPath(new URL('..', import.meta.url));
 const temp = await mkdtemp(join(tmpdir(), 'ts-sliding-test-'));
 const bundle = join(temp, 'editor.cjs');
 await build({
-  stdin: { contents: `export * from './src/sliding'; export * from './src/architecture'; export * from './src/perception'; export * from './src/defaults'; export * from './src/schema.js'; export * from './src/store'; export * from './src/actions'; export * from './src/trial'; export { playerWorld } from './src/sync';`, resolveDir: root },
+  stdin: { contents: `export * from './src/scene/sliding'; export * from './src/scene/architecture'; export * from './src/scene/perception'; export * from './src/core/defaults'; export * from './src/core/schema'; export * from './src/core/store'; export * from './src/runtime/actions'; export * from './src/runtime/trial'; export { playerWorld } from './src/runtime/sync';`, resolveDir: root },
   outfile: bundle, bundle: true, platform: 'node', format: 'cjs', logLevel: 'silent',
 });
 const storage = () => { const data = new Map(); return { getItem: (k) => data.get(k) ?? null, setItem: (k, v) => data.set(k, v), removeItem: (k) => data.delete(k) }; };

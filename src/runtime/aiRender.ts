@@ -1,8 +1,8 @@
-import type { GameMap, World } from './types';
-import { CONN_LABEL } from './types';
-import { numbering, playerNumbering, render, type Numbered, type PlayerNumbered } from './render';
+import type { GameMap, World } from '../core/types';
+import { CONN_LABEL } from '../core/types';
+import { numbering, playerNumbering, render, type Numbered, type PlayerNumbered } from '../scene/render';
 import { playerWorld } from './sync';
-import { CS, cellName, colName, rangeName } from './util';
+import { CS, cellName, colName, rangeName } from '../core/util';
 
 // 给 AI 看的地图：四周标坐标，每样东西打编号（和主编辑器的"显示编号"一致），旁边附图例（编号 ↔ 名字/状态/坐标/id）。
 // view = 'kp'：主持人视角，什么都画；'player'：玩家视角，带迷雾和记忆，只列玩家看得到的东西。

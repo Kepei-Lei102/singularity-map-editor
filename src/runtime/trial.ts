@@ -1,14 +1,14 @@
 import { clearTrialWindows, openPlayerWindow, selectTrialViewer } from './sync';
-import { playerObject } from './identity';
-import { effectiveLayer } from './vision';
-import { objectEnabled } from './objectData.js';
-import { beginSandbox, endSandbox, getUI, getWorld, setUI, toast, update, type UIState } from './store';
+import { playerObject } from '../scene/identity';
+import { effectiveLayer } from '../scene/vision';
+import { objectEnabled } from '../core/objectData.js';
+import { beginSandbox, endSandbox, getUI, getWorld, setUI, toast, update, type UIState } from '../core/store';
 import { addMark, autoReveal, cancelPendingPlay, checkEnterTriggers, findMap, ioBusy } from './actions';
-import type { Facing, GameMap, MapObject, World } from './types';
-import { gridDist, uid } from './util';
-import { blocksMovement, ROUND_MINUTES } from './perception';
-import { characterPathClear, furnitureSweepBlocked, nextTokenStep, setTokenPosition, tokenPosition } from './architecture';
-import { slidingPuzzleForObject } from './sliding';
+import type { Facing, GameMap, MapObject, World } from '../core/types';
+import { gridDist, uid } from '../core/util';
+import { blocksMovement, ROUND_MINUTES } from '../scene/perception';
+import { characterPathClear, furnitureSweepBlocked, nextTokenStep, setTokenPosition, tokenPosition } from '../scene/architecture';
+import { slidingPuzzleForObject } from '../scene/sliding';
 
 // 试玩：放白板玩家进去，用 WASD 走，体验视野。退出时一切恢复原样（沙盒）。
 // 默认是非战斗：不限步数；打开"战斗模式"才是每回合 5 格。

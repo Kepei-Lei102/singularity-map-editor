@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {visibleArchitectureGeometry,architectureGeometry} from '../src/architectureData.js';
+import {visibleArchitectureGeometry,architectureGeometry} from '../src/core/architectureData.js';
 const fixture=()=>({objects:[
  {id:'a',geometry:{kind:'wall',a:{x:0,y:0},b:{x:0,y:12},thickness:100,material:'wall'},states:['active','off'],state:0,blocksWhen:[0]},
  {id:'a-door',opening:{wallId:'a',offset:3,width:3,openStates:[1,2]},states:['closed','open','off'],state:1},

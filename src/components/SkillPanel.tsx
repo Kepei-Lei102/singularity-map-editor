@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react';
-import { getWorld, useUI, useWorld } from '../store';
-import { SKILL_LIBRARY, canCast, filterSkills, groupSkills, type SkillDef } from '../skills';
-import { approveSkillCast, beginSkillCast, cancelSkillCast, closeSkillCast, resolveSkillCast, timeoutSkillCast } from '../skillCast';
+import { getWorld, useUI, useWorld } from '../core/store';
+import { SKILL_LIBRARY, filterSkills, groupSkills, type SkillDef } from '../rules/skills';
+import { objectEnabled } from '../core/objectData.js';
+import { approveSkillCast, beginSkillCast, cancelSkillCast, closeSkillCast, resolveSkillCast, timeoutSkillCast } from '../rules/skillCast';
 
 const d20 = () => {
   const buf = new Uint32Array(1);
@@ -59,7 +60,7 @@ export function SkillPanel() {
         <div className="muted">{actorName} · 消耗 {skill?.me} ME · 判定：{skill?.check ? skill.check.attributes.join('+') : '智慧'}（D20 / DC 20）</div>
         <label>目标<select value={target} onChange={(e) => setTarget(e.target.value)}>
           <option value="">（无目标）</option>
-          {world.maps.find((m) => m.id === ui.mapId)?.objects.filter((o) => o.enabled).map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
+          {world.maps.find((m) => m.id === ui.mapId)?.objects.filter((o) => objectEnabled(world.maps.find((m) => m.id === ui.mapId)!, o)).map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
         </select></label>
         <div className="btns">
           <button onClick={() => { const e = resolveSkillCast(d20(), target || undefined); setMsg(e ?? ''); }}>掷骰并结算</button>
@@ -99,7 +100,7 @@ export function SkillPanel() {
           {q && hits.length === 0 && <p className="muted">没找到。</p>}
           {q && hits.map((s) => (
             <button key={s.id} className="skill-item" onClick={() => start(s)}>
-              【{s.name}】· {s.group} · {s.me} ME {canCast(s, null).ok ? '' : ''}
+              【{s.name}】· {s.group} · {s.me} ME
             </button>
           ))}
           {!q && (

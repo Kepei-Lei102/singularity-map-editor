@@ -10,7 +10,7 @@ const root = fileURLToPath(new URL('..', import.meta.url));
 const temp = await mkdtemp(join(tmpdir(), 'ts-interaction-test-'));
 const bundle = join(temp, 'editor.cjs');
 await build({
-  stdin: { contents: `export * from './src/interaction'; export { blocksMovement } from './src/perception';`, resolveDir: root },
+  stdin: { contents: `export * from './src/rules/interaction'; export { blocksMovement } from './src/scene/perception';`, resolveDir: root },
   outfile: bundle, bundle: true, platform: 'node', format: 'cjs', logLevel: 'silent',
 });
 const { attrValue, pickRoll, tierOfRoll, resolve, resolveContest, finalDC, sideAdvantage, planEffects, resolveOutcomes, materialize, applyTransitions, parseAdHoc, applyAdHoc, meCost, checkForSource, checkPreconditions, describeUnmet, resolveLuck, luckThreshold, applyKnowledge, effectKind, blocksMovement } = await import(bundle);

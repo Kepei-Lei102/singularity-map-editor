@@ -1,12 +1,12 @@
 import { useState } from 'react';
-import { canEditMap, setUI, toast, update, useUI, useWorld, type Mode, type Tool, type UIState } from '../store';
-import { CONN_LABEL, type ConnKind, type Room } from '../types';
-import { numbering, playerNumbering } from '../render';
-import { effectiveLayer } from '../vision';
-import { newMap } from '../defaults';
-import { cellName, uid } from '../util';
+import { canEditMap, setUI, toast, update, useUI, useWorld, type Mode, type Tool, type UIState } from '../core/store';
+import { CONN_LABEL, type ConnKind, type Room } from '../core/types';
+import { numbering, playerNumbering } from '../scene/render';
+import { effectiveLayer } from '../scene/vision';
+import { newMap } from '../core/defaults';
+import { cellName, uid } from '../core/util';
 import { Area, Check, Num, Row, Section, Txt } from './fields';
-import { captureRoomReset, resetRoom, saveRoomLayout, deleteRoomLayout, paintFog, setVisionAlgo } from '../actions';
+import { captureRoomReset, resetRoom, saveRoomLayout, deleteRoomLayout, paintFog, setVisionAlgo } from '../runtime/actions';
 
 const ALL_TOOLS: [Tool, string, string][] = [
   ['select', '选择/移动', 'V'],

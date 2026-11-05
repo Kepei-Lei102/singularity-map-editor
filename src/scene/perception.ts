@@ -1,10 +1,10 @@
-import { objectEnabled } from './objectData.js';
+import { objectEnabled } from '../core/objectData.js';
 import { architectureBlocksSight, architectureGeometry, isArchitectureObject, segmentHitsRect, tokenPosition, isSubdivided, subKey } from './architecture';
 import { produce } from 'immer';
-import type { GameMap, MapObject, Token, VisionLayer, World } from './types';
+import type { GameMap, MapObject, Token, VisionLayer, World } from '../core/types';
 import { partyVisionOf, viewerOf } from './sight';
 import { cloneLayer, emptyVision, mergeLayers, visionKey } from './vision';
-import { cellLine, gridDist } from './util';
+import { cellLine, gridDist } from '../core/util';
 
 // 视野。尺度：1 格 = 0.75 米。
 //

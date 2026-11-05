@@ -7,7 +7,7 @@
 // 派生层不在这里：挡路/挡视线已经由 perception.blocksMovement() 从 state 现算，
 // 所以"门关了就走不过去"这句不需要任何代码——改完 state，通行自己变。
 
-import type { GameMap, Tier } from './types';
+import type { GameMap, Tier } from '../core/types';
 
 /**
  * 六维＋【幸运】。动作库里有动作的判定依据用到【幸运】（【教唆】【隐匿】），

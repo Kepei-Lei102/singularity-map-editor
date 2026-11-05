@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
-import { toast } from '../store';
-import { parseVault, unlockVault, vaultInfo } from '../vault';
-import type { VaultEnvelope } from '../vault';
+import { toast } from '../core/store';
+import { parseVault, unlockVault, vaultInfo } from '../core/vault';
+import type { VaultEnvelope } from '../core/vault';
 
 // 角色密档解锁：明文只在内存里活。关面板、切走标签页、或 3 分钟没人动，它就没。
 // 注意：这里不 import update / persist，一个字都不许写进存档。

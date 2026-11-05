@@ -1,10 +1,10 @@
 import { identityKnowledge } from './identity';
-import { objectEnabled } from './objectData.js';
+import { objectEnabled } from '../core/objectData.js';
 import { clipArchitecture, isArchitectureObject, migrateArchitecture } from './architecture';
-import { repairWorld } from './schema.js';
+import { repairWorld } from '../core/schema.js';
 import { current, isDraft, type Draft } from 'immer';
-import type { GameMap, MapObject, SeenObject, VisionLayer, World } from './types';
-import { linesToFlow } from './flow';
+import type { GameMap, MapObject, SeenObject, VisionLayer, World } from '../core/types';
+import { linesToFlow } from '../rules/flow';
 import { cloneLayer, emptyVision, mergeLayers, pruneMemory, spatialFog, visionKey } from './vision';
 
 // 星际争霸式迷雾：fog 0 没去过 / 1 看得见 / 2 记忆。

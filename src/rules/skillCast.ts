@@ -1,12 +1,13 @@
 // 技能发动：玩家自己发起 / 见证者代发起，两条入口落在同一个状态上。
 // 发动期间用统一的 focus 暂停别人（玩家窗口只能看不能动）。
 
-import { getUI, getWorld, setUI, toast, update } from './store';
+import { getUI, getWorld, setUI, toast } from '../core/store';
+import { pushFocus } from '../runtime/sync';
 import { SKILL_LIBRARY, type SkillDef } from './skills';
 import { ATTRS, resolve, type Attr } from './interaction';
-import type { SkillCast } from './types';
-export type { SkillCast } from './types';
-import { uid } from './util';
+import type { SkillCast } from '../core/types';
+export type { SkillCast } from '../core/types';
+import { uid } from '../core/util';
 
 export const APPROVAL_TIMEOUT_MS = 60_000;
 
@@ -20,6 +21,7 @@ function pcName(pcId: string): string {
 
 function setCast(next: SkillCast | null) {
   setUI({ cast: next, focus: next ? { kind: 'skill', actorPcId: next.actorPcId, label: `${pcName(next.actorPcId)} 正在发动【${skillById(next.skillId)?.name ?? '技能'}】` } : null });
+  pushFocus(); // 立刻推给玩家窗口：发动期间别人只能看不能动
 }
 
 /** 发起。玩家发起直接进确认；见证者代发起先等玩家同意（60 秒）。 */
@@ -77,9 +79,8 @@ export function resolveSkillCast(d20: number, target?: string): string | null {
 
 /** 收尾：清掉 focus，玩家窗口恢复可操作。 */
 export function closeSkillCast(note?: string): void {
-  const c = castOf();
-  setCast(null);
-  if (c) update(() => {}, { history: false }); // 触发一次重渲染，把 focus 撤掉的效果同步给玩家窗口
+  if (!castOf()) return;
+  setCast(null); // 里面会 pushFocus，玩家窗口立刻解冻
   if (note) toast(note);
 }
 

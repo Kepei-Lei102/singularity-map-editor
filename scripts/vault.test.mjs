@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createCipheriv, pbkdf2Sync, randomBytes } from 'node:crypto';
-import { parseVault, unlockVault, vaultInfo, VAULT_FORMAT } from '../src/vault.js';
+import { parseVault, unlockVault, vaultInfo, VAULT_FORMAT } from '../src/core/vault.js';
 
 const TEXT = '# 测试密档\n\n这一段只应该出现在内存里。\n';
 

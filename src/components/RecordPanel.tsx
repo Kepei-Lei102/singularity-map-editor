@@ -1,7 +1,7 @@
 import { useState } from 'react';
-import { update, useWorld } from '../store';
-import { exportSessionMarkdown, log } from '../actions';
-import { fmtTime } from '../util';
+import { update, useWorld } from '../core/store';
+import { exportSessionMarkdown, log } from '../runtime/actions';
+import { fmtTime } from '../core/util';
 import { Check, Section } from './fields';
 
 /** 带团记录：所有操作自动写进时间线，也可以随手记一笔。 */

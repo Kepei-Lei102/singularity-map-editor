@@ -9,7 +9,7 @@ import { build } from 'esbuild';
 const root = fileURLToPath(new URL('..', import.meta.url));
 const temp = await mkdtemp(join(tmpdir(), 'ts-vision-test-'));
 const bundle = join(temp, 'editor.cjs');
-await build({ stdin: { contents: `export * from './src/trial'; export * from './src/judgments'; export * from './src/defaults'; export * from './src/store'; export * from './src/actions'; export * from './src/vision'; export * from './src/memory'; export * from './src/sync'; export * from './src/schema.js'; export { produce } from 'immer';`, resolveDir: root }, outfile: bundle, bundle: true, platform: 'node', format: 'cjs', logLevel: 'silent' });
+await build({ stdin: { contents: `export * from './src/runtime/trial'; export * from './src/rules/judgments'; export * from './src/core/defaults'; export * from './src/core/store'; export * from './src/runtime/actions'; export * from './src/scene/vision'; export * from './src/scene/memory'; export * from './src/runtime/sync'; export * from './src/core/schema'; export { produce } from 'immer';`, resolveDir: root }, outfile: bundle, bundle: true, platform: 'node', format: 'cjs', logLevel: 'silent' });
 const storage = () => { const m = new Map(); return { getItem: k => m.get(k) ?? null, setItem: (k,v) => m.set(k,v), removeItem: k => m.delete(k) }; };
 globalThis.localStorage = storage(); globalThis.sessionStorage = storage();
 globalThis.location = { search: '', origin: 'http://localhost', href: 'http://localhost/' };

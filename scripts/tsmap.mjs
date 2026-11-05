@@ -9,7 +9,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import JSZip from 'jszip';
 import { fileURLToPath } from 'node:url';
-import { migrateArchitecture, checkWorld, missingMedia, repairWorld, safeId } from '../src/schema.js';
+import { migrateArchitecture, checkWorld, missingMedia, repairWorld, safeId } from '../src/core/schema.js';
 
 export { checkWorld, safeId };
 

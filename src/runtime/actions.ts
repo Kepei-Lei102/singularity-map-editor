@@ -1,28 +1,28 @@
-import { identityCheck } from './identity';
-import { objectEnabled } from './objectData.js';
-import { architectureGeometry, architectureWalls, architectureObjectBounds, isArchitectureObject, openingIsOpen, objectStateError, architectureTransitionError, normalizeArchitectureBounds, clipArchitecture, characterPathClear, setTokenPosition, tokenPosition, wallCovered } from './architecture';
-import { checkArchitecture } from './schema.js';
+import { identityCheck } from '../scene/identity';
+import { objectEnabled } from '../core/objectData.js';
+import { architectureGeometry, architectureWalls, architectureObjectBounds, isArchitectureObject, openingIsOpen, objectStateError, architectureTransitionError, normalizeArchitectureBounds, clipArchitecture, characterPathClear, setTokenPosition, tokenPosition, wallCovered } from '../scene/architecture';
+import { checkArchitecture } from '../core/schema.js';
 import { produce } from 'immer';
 import type { Draft } from 'immer';
 import JSZip from 'jszip';
-import { getUI, getWorld, reachableWorlds, replaceWorld, setUI, toast, update, worldContext, type Selection } from './store';
-import { blocksMovement, pcWithin, seesPoint, sightCosts, withVision } from './perception';
-import { applyKnowledge, type KnowledgeEffect } from './interaction';
-import type { Flow, GameMap, LogEntry, MapObject, MediaAttach, Memory, Room, RoomObjectSnapshot, Tier, World } from './types';
-import { newObject } from './defaults';
-import { NODE_H, NODE_W } from './flow';
-export { NODE_H, NODE_W, reachable } from './flow';
-import { CONN_LABEL } from './types';
-import { TIER_LABEL } from './types';
-import { download, uid } from './util';
-import { syncMemory } from './memory';
+import { getUI, getWorld, reachableWorlds, replaceWorld, setUI, toast, update, worldContext, type Selection } from '../core/store';
+import { blocksMovement, pcWithin, seesPoint, sightCosts, withVision } from '../scene/perception';
+import { applyKnowledge, type KnowledgeEffect } from '../rules/interaction';
+import type { Flow, GameMap, LogEntry, MapObject, MediaAttach, Memory, Room, RoomObjectSnapshot, Tier, World } from '../core/types';
+import { newObject } from '../core/defaults';
+import { NODE_H, NODE_W } from '../rules/flow';
+export { NODE_H, NODE_W, reachable } from '../rules/flow';
+import { CONN_LABEL } from '../core/types';
+import { TIER_LABEL } from '../core/types';
+import { download, uid } from '../core/util';
+import { syncMemory } from '../scene/memory';
 import { contentKey, getRaw, listStored, mediaChanged, putBlobs, storageKey } from './media';
-import { checkRoomObjects, checkWorld, repairWorld } from './schema.js';
-import { allSlots, dropSlot, loadSlot, saveSlot } from './persist';
+import { checkRoomObjects, checkWorld, repairWorld } from '../core/schema.js';
+import { allSlots, dropSlot, loadSlot, saveSlot } from '../core/persist';
 import { send } from './sync';
-import { migrateWorld } from './memory';
-import { knowledgeLayers, spatialKeys, visionMembers } from './vision';
-import { applySlidingMove, seesSlidingObject } from './sliding';
+import { migrateWorld } from '../scene/memory';
+import { knowledgeLayers, spatialKeys, visionMembers } from '../scene/vision';
+import { applySlidingMove, seesSlidingObject } from '../scene/sliding';
 
 export const findMap = (w: World | Draft<World>, id: string) => w.maps.find((m) => m.id === id);
 export const findObj = (w: World | Draft<World>, mapId: string, id: string) =>
@@ -1105,7 +1105,7 @@ export function giveMapKnowledge(mapId: string, pcIds?: string[]) {
   update((d) => {
     const m = findMap(d, mapId);
     if (!m) return;
-    const learn = (L: import('./types').VisionLayer) => {
+    const learn = (L: import('../core/types').VisionLayer) => {
       L.seen.cellRevs ??= Array(m.width * m.height).fill(0); L.seen.subRevs ??= {}; L.seen.architectureRevs ??= {};
       const rev = (d.observationSeq ?? 0) + 1;
       L.fog.forEach((f, k) => { if (!f) { L.fog[k] = 2; L.seen.cells[k] = m.cells[k]; L.seen.cellRevs![k] = rev; } });

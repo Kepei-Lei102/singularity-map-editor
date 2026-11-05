@@ -11,7 +11,7 @@ const root = fileURLToPath(new URL('..', import.meta.url));
 const temp = await mkdtemp(join(tmpdir(), 'ts-skills-'));
 const bundle = join(temp, 'editor.cjs');
 await build({
-  stdin: { contents: `export * from './src/skills'; export * from './src/skillCast'; export * from './src/defaults'; export * from './src/store';`, resolveDir: root },
+  stdin: { contents: `export * from './src/rules/skills'; export * from './src/rules/skillCast'; export * from './src/rules/consent'; export * from './src/core/defaults'; export * from './src/core/store';`, resolveDir: root },
   outfile: bundle, bundle: true, platform: 'node', format: 'cjs', logLevel: 'silent',
 });
 const storage = () => { const data = new Map(); return { getItem: (k) => data.get(k) ?? null, setItem: (k, v) => data.set(k, v), removeItem: (k) => data.delete(k) }; };
@@ -120,5 +120,24 @@ test('发动中不能再发起第二个', () => {
   fixture();
   api.beginSkillCast('pc', '037-9-101', 'player');
   assert.match(api.beginSkillCast('pc', '037-9-102', 'player'), /发动中/);
+  api.closeSkillCast();
+});
+
+test('玩家窗口回传：只认自己那个 cast，别的 id 不动', () => {
+  fixture();
+  api.beginSkillCast('pc', '037-9-101', 'gm');
+  const id = api.castOf().id;
+  assert.equal(api.handlePlayerDecision({ type: 'skill-decision', castId: 'nope', ok: true }), false);
+  assert.equal(api.castOf().step, 'approval');
+  assert.equal(api.handlePlayerDecision({ type: 'skill-decision', castId: id, ok: false }), true);
+  assert.equal(api.castOf(), null); // 拒绝后直接清掉
+});
+
+test('不是同意阶段的回传不处理', () => {
+  fixture();
+  api.beginSkillCast('pc', '037-9-101', 'player'); // 玩家自己发起，没有 approval 阶段
+  const id = api.castOf().id;
+  assert.equal(api.handlePlayerDecision({ type: 'skill-decision', castId: id, ok: true }), false);
+  assert.equal(api.castOf().step, 'confirm');
   api.closeSkillCast();
 });

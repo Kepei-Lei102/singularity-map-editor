@@ -1,4 +1,4 @@
-import type { MapObject, SeenObject } from './types';
+import type { MapObject, SeenObject } from '../core/types';
 
 export interface IdentityKnowledge { party?: boolean; recipients?: string[] }
 export const UNKNOWN_OBJECT = '未辨识物件';

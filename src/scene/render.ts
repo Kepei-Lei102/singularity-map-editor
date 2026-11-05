@@ -1,14 +1,14 @@
 import { playerObject, playerSeen } from './identity';
-import { objectEnabled } from './objectData.js';
+import { objectEnabled } from '../core/objectData.js';
 import { effectiveLayer, visionMembers } from './vision';
-import { visibleArchitectureGeometry } from './architectureData.js';
+import { visibleArchitectureGeometry } from '../core/architectureData.js';
 import { isArchitectureObject, clipArchitecture, fogAt, isSubdivided, tokenPosition } from './architecture';
 import { anyVisible } from './memory';
-import type { Selection, Tool, View } from './store';
-import type { GameMap, MapObject, SeenObject, World } from './types';
+import type { Selection, Tool, View } from '../core/store';
+import type { GameMap, MapObject, SeenObject, World } from '../core/types';
 import { staleMemories } from './memory';
-import { CONN_ICON, CONN_LABEL } from './types';
-import { CS, colName, distToRect, gridDist } from './util';
+import { CONN_ICON, CONN_LABEL } from '../core/types';
+import { CS, colName, distToRect, gridDist } from '../core/util';
 import { CLEAR_BANDS, visibleMarks } from './perception';
 import { viewerOf, visionOf } from './sight';
 
@@ -487,7 +487,7 @@ export function render(
     o.selection?.type === 'object' && o.selection.id === ob.id || o.tool === 'zone', view.zoom));
 
   // 建筑层：使用碰撞的实际矩形尺寸；玩家只画可见裁片与历史。
-  const drawArchitecture = (fragments: import('./types').ArchitectureFragment[]) => {
+  const drawArchitecture = (fragments: import('../core/types').ArchitectureFragment[]) => {
     for (const r of fragments) {
       ctx.fillStyle = r.material === 'glass' ? '#70c6dd' : r.material === 'door' ? '#966c41' : '#41434a';
       ctx.strokeStyle = r.material === 'glass' ? '#c1f3ff' : '#14171c'; ctx.lineWidth = .65 / view.zoom;

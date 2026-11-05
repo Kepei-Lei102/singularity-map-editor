@@ -1,11 +1,11 @@
 import { useEffect, useState } from 'react';
-import { setUI, useUI, useWorld } from '../store';
-import { MARK_LIFE, findMap, giveMapKnowledge, setVisionMode } from '../actions';
-import { HEAR_RANGE } from '../perception';
+import { setUI, useUI, useWorld } from '../core/store';
+import { MARK_LIFE, findMap, giveMapKnowledge, setVisionMode } from '../runtime/actions';
+import { HEAR_RANGE } from '../scene/perception';
 import {
   MOVE_PER_TURN, addTrialPlayer, clearTrialStatus, endTrial, setTrialStatus, statusLeft, switchTrialPlayer,
   toggleCombat, toggleMarkMode,
-} from '../trial';
+} from '../runtime/trial';
 
 const SYMBOLS = ['!', '?', '★', '✕', '→'];
 const STATUS_PRESETS: [string, number][] = [['晕厥', 15], ['泡温泉', 30]];

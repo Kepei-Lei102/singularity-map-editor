@@ -10,7 +10,7 @@ const root = fileURLToPath(new URL('..', import.meta.url));
 const temp = await mkdtemp(join(tmpdir(), 'ts-sight-test-'));
 const bundle = join(temp, 'editor.cjs');
 await build({
-  stdin: { contents: `export * from './src/sight';`, resolveDir: root },
+  stdin: { contents: `export * from './src/scene/sight';`, resolveDir: root },
   outfile: bundle, bundle: true, platform: 'node', format: 'cjs', logLevel: 'silent',
 });
 const { eyeHeight, coneFor, cellSightCost, canSee, inCone, visionOf, VISION_BUDGET, BASE_CELL_COST, objectSightCost } = await import(bundle);

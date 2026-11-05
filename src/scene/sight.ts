@@ -7,11 +7,11 @@
 //
 // 视野锥：按格子所在区域取。D20 区 120°，D100 区 60°（恐怖区）。30° 暂不做。
 
-import type { Facing, GameMap, MapObject, Sex, Stance, Token, World } from './types';
-export type { Facing, Sex, Stance } from './types';
-import { objectEnabled } from './objectData.js';
+import type { Facing, GameMap, MapObject, Sex, Stance, Token, World } from '../core/types';
+export type { Facing, Sex, Stance } from '../core/types';
+import { objectEnabled } from '../core/objectData.js';
 import { isArchitectureObject } from './architecture';
-import { cellLine, gridDist } from './util';
+import { cellLine, gridDist } from '../core/util';
 
 /** 视野预算。规则书：无障碍 15 格 = 1.5，＜1.56，所以第 16 格看不见。 */
 export const VISION_BUDGET = 1.56;

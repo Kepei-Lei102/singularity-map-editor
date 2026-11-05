@@ -1,11 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
-import { getUI, toast, update, useUI, useWorld } from '../store';
-import type { Npc } from '../types';
-import { cellName, uid } from '../util';
-import { findMap, jumpTo } from '../actions';
+import { getUI, toast, update, useUI, useWorld } from '../core/store';
+import type { Npc } from '../core/types';
+import { cellName, uid } from '../core/util';
+import { findMap, jumpTo } from '../runtime/actions';
 import {
   MONTH_NAMES, exportNpcs, importNpcs, inSeason, newNpc, nextStep, npcActive, npcAdvised, npcBeatDone, npcCast, npcMet, npcOrder, npcReset, npcReturned, npcSkipWait,
-} from '../npc';
+} from '../runtime/npc';
 import { Area, Num, Row, Section, Txt } from './fields';
 import { VaultPanel } from './VaultPanel';
 

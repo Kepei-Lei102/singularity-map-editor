@@ -1,20 +1,20 @@
-import { identityKnowledge, playerObject } from '../identity';
-import { isArchitectureObject, openingIsOpen, architectureObjectBounds, furnitureSweepBlocked, tokenPosition } from '../architecture';
-import { objectEnabled } from '../objectData.js';
-import { subdivideRegion, toggleArchitectureDoor } from '../actions';
+import { identityKnowledge, playerObject } from '../scene/identity';
+import { isArchitectureObject, openingIsOpen, architectureObjectBounds, furnitureSweepBlocked, tokenPosition } from '../scene/architecture';
+import { objectEnabled } from '../core/objectData.js';
+import { subdivideRegion, toggleArchitectureDoor } from '../runtime/actions';
 import type { Draft } from 'immer';
 import { useState } from 'react';
-import { canEditMap, setUI, toast, update, useUI, useWorld, type UIState } from '../store';
-import type { Connection, GameMap, MapObject, Secret, Token, World } from '../types';
-import { CONN_LABEL, TIERS, TIER_LABEL } from '../types';
+import { canEditMap, setUI, toast, update, useUI, useWorld, type UIState } from '../core/store';
+import type { Connection, GameMap, MapObject, Secret, Token, World } from '../core/types';
+import { CONN_LABEL, TIERS, TIER_LABEL } from '../core/types';
 import {
   deleteMap, duplicateMap, fillEmptyCells, findMap, giveMapKnowledge, reshapeMaps, setVisionMode, findObj, fireAttach, hideSecret, itemsAt, jumpTo, resizeMap, revealSecret,
   revealObjectIdentity, hideObjectIdentity, sameSel, setObjectEnabled, setObjectState, setObjectStates, resetRoom, applyRoomLayout, moveSlidingObject, deleteMapObject,
-} from '../actions';
-import { checkSlidingMove, seesSlidingObject, slidingPuzzleForObject } from '../sliding';
-import { CELL_METERS, nearestPc, type Nearest } from '../perception';
-import { cellName, parseCell, rangeName, uid } from '../util';
-import { MAX_SIDE } from '../schema.js';
+} from '../runtime/actions';
+import { checkSlidingMove, seesSlidingObject, slidingPuzzleForObject } from '../scene/sliding';
+import { CELL_METERS, nearestPc, type Nearest } from '../scene/perception';
+import { cellName, parseCell, rangeName, uid } from '../core/util';
+import { MAX_SIDE } from '../core/schema.js';
 import { Area, Check, Num, Row, Section, Txt } from './fields';
 
 export function Inspector() {

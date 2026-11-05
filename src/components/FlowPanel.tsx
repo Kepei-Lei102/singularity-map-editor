@@ -1,14 +1,14 @@
 import type { Draft } from 'immer';
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { beginBatch, canEditLines, endBatch, getWorld, setUI, update, useUI, useWorld } from '../store';
-import type { Flow, FlowEdge, FlowNode, World } from '../types';
-import { NODE_H, NODE_W, addChildNode, autoLayout, findObj, incomingCandidates, partyTags, reachable, setNodeStatus, setNodeVia } from '../actions';
-import { PATHWAY_SUGGESTIONS } from '../defaults';
-import { uid } from '../util';
+import { beginBatch, canEditLines, endBatch, getWorld, setUI, update, useUI, useWorld } from '../core/store';
+import type { Flow, FlowEdge, FlowNode, World } from '../core/types';
+import { NODE_H, NODE_W, addChildNode, autoLayout, findObj, incomingCandidates, partyTags, reachable, setNodeStatus, setNodeVia } from '../runtime/actions';
+import { PATHWAY_SUGGESTIONS } from '../core/defaults';
+import { uid } from '../core/util';
 import { Area, Row, Txt } from './fields';
-import { applyAIReply, buildAIContext } from '../ai';
-import { canvasToBlob, renderMapForAI } from '../aiRender';
-import { download } from '../util';
+import { applyAIReply, buildAIContext } from '../runtime/ai';
+import { canvasToBlob, renderMapForAI } from '../runtime/aiRender';
+import { download } from '../core/util';
 
 // 事件流程图（底特律式）：从上往下长。节点 = 事件，连线 = 谁做了什么。
 // 虚线 = 预测，亮绿实线 = 走过，暗 + 🔒 = 队伍里没人满足条件。

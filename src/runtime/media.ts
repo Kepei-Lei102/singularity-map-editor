@@ -1,5 +1,5 @@
 import { useEffect, useState, useSyncExternalStore } from 'react';
-import type { MediaMeta } from './types';
+import type { MediaMeta } from '../core/types';
 
 // 媒体文件（音频/视频/图片）存在浏览器的 IndexedDB 里，世界 JSON 只存元数据。
 // 主持人窗口和玩家窗口同源，所以玩家窗口可以直接读到同一份文件。

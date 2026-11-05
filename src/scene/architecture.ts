@@ -1,7 +1,7 @@
-import { objectEnabled } from './objectData.js';
-import { architectureGeometry, isArchitectureObject } from './architectureData.js';
-export { architectureGeometry, architectureWalls, architectureDoors, architectureObjectBounds, isArchitectureObject, openingIsOpen, migrateArchitecture, normalizeArchitectureBounds } from './architectureData.js';
-import type { ArchitectureFragment, GameMap, Point, Token, Wall, World } from './types';
+import { objectEnabled } from '../core/objectData.js';
+import { architectureGeometry, isArchitectureObject } from '../core/architectureData.js';
+export { architectureGeometry, architectureWalls, architectureDoors, architectureObjectBounds, isArchitectureObject, openingIsOpen, migrateArchitecture, normalizeArchitectureBounds } from '../core/architectureData.js';
+import type { ArchitectureFragment, GameMap, Point, Token, Wall, World } from '../core/types';
 
 export const tokenPosition = (t: { x: number; y: number; subcell?: Point }): Point => t.subcell
   ? { x: (t.subcell.x + 0.5) / 3, y: (t.subcell.y + 0.5) / 3 }

@@ -1,11 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { isPlayerEntry } from '../deployment';
-import { getUI, onProjectReplaced, projectContext, useUI, useWorld, worldContext } from '../store';
+import { isPlayerEntry } from '../core/deployment';
+import { getUI, onProjectReplaced, projectContext, useUI, useWorld, worldContext } from '../core/store';
 import {
   advisorChangeError, applyAdvisorChange, buildSessionAIContext, captureAdvisorSnapshot, CONTEXT_LIMIT,
   HISTORY_LIMIT, requestSessionAI, TURN_LIMIT,
   type AdvisorReply, type AdvisorSettings, type AdvisorSnapshot, type AdvisorTurn,
-} from '../sessionAI';
+} from '../runtime/sessionAI';
 
 interface Preview { context: string; messages: AdvisorTurn[]; snapshot: AdvisorSnapshot; settings: AdvisorSettings; prompt: string }
 interface Answer { reply: AdvisorReply; snapshot: AdvisorSnapshot; applied: number[] }

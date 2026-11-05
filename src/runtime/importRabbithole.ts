@@ -1,8 +1,8 @@
-import { MAX_COORD, MAX_SIDE } from './schema.js';
+import { MAX_COORD, MAX_SIDE } from '../core/schema.js';
 import JSZip from 'jszip';
-import type { GameMap, MapObject, MediaMeta, Room, Terrain, World } from './types';
-import { DEFAULT_TERRAINS, newMap, newObject } from './defaults';
-import { uid } from './util';
+import type { GameMap, MapObject, MediaMeta, Room, Terrain, World } from '../core/types';
+import { DEFAULT_TERRAINS, newMap, newObject } from '../core/defaults';
+import { uid } from '../core/util';
 
 // 导入旧工具 Rabbithole 的地图（map.json，或连配图一起打的 bundle zip）。
 // Rabbithole 每格记三样：roomId / objectId / interactiveId，格子的键是 "行,列"。

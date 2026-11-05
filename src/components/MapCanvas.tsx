@@ -1,15 +1,15 @@
-import { effectiveLayer } from '../vision';
-import { objectEnabled } from '../objectData.js';
-import { architectureWalls, architectureDoors, isArchitectureObject, characterPathClear, furnitureSweepBlocked, isSubdivided, tokenPosition } from '../architecture';
-import { addArchitectureDoor, addArchitectureWall, eraseArchitecture, moveMapToken, paintFog, subdivideRegion, toggleArchitectureDoor } from '../actions';
+import { effectiveLayer } from '../scene/vision';
+import { objectEnabled } from '../core/objectData.js';
+import { architectureWalls, architectureDoors, isArchitectureObject, characterPathClear, furnitureSweepBlocked, isSubdivided, tokenPosition } from '../scene/architecture';
+import { addArchitectureDoor, addArchitectureWall, eraseArchitecture, moveMapToken, paintFog, subdivideRegion, toggleArchitectureDoor } from '../runtime/actions';
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
-import type { GameMap, World } from '../types';
-import { CS, cellLine, uid } from '../util';
-import { beginBatch, canEditMap, endBatch, getUI, getWorld, setUI, toast, update, useUI, type Selection, type View } from '../store';
-import { checkEnterTriggers, clearPendingFocus, findMap, itemsAt, jumpTo, moveSlidingObject, pendingFocus, sameSel } from '../actions';
-import { checkSlidingMove, slidingPuzzleForObject } from '../sliding';
-import { newObject } from '../defaults';
-import { brushCells, render, type Mode, type Rect } from '../render';
+import type { GameMap, World } from '../core/types';
+import { CS, cellLine, uid } from '../core/util';
+import { beginBatch, canEditMap, endBatch, getUI, getWorld, setUI, toast, update, useUI, type Selection, type View } from '../core/store';
+import { checkEnterTriggers, clearPendingFocus, findMap, itemsAt, jumpTo, moveSlidingObject, pendingFocus, sameSel } from '../runtime/actions';
+import { checkSlidingMove, slidingPuzzleForObject } from '../scene/sliding';
+import { newObject } from '../core/defaults';
+import { brushCells, render, type Mode, type Rect } from '../scene/render';
 
 type Drag =
   | { k: 'wall'; ax: number; ay: number; bx: number; by: number }

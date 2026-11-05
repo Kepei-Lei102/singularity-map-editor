@@ -1,6 +1,6 @@
-import type { DiceJudgment } from './types';
-import { getWorld, update, worldContext } from './store';
-import { uid } from './util';
+import type { DiceJudgment } from '../core/types';
+import { getWorld, update, worldContext } from '../core/store';
+import { uid } from '../core/util';
 
 export function publishJudgment(input: Omit<DiceJudgment, 'id' | 'at' | 'session'>, context: string): string | null {
   const w = getWorld();

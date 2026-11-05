@@ -1,9 +1,9 @@
-import { deleteVisionGroup, setVisionGroup, setVisionMode } from '../actions';
-import { openPlayerWindow } from '../sync';
+import { deleteVisionGroup, setVisionGroup, setVisionMode } from '../runtime/actions';
+import { openPlayerWindow } from '../runtime/sync';
 import { useState } from 'react';
-import { setUI, update, useWorld } from '../store';
-import { PATHWAY_SUGGESTIONS } from '../defaults';
-import { uid } from '../util';
+import { setUI, update, useWorld } from '../core/store';
+import { PATHWAY_SUGGESTIONS } from '../core/defaults';
+import { uid } from '../core/util';
 import { Row, Section, Txt } from './fields';
 
 const COLORS = ['#e07a5f', '#81b29a', '#f2cc8f', '#3d85c6', '#b07cc6', '#e0a458'];

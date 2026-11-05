@@ -1,12 +1,12 @@
-import { architectureTransitionError } from './architecture';
+import { architectureTransitionError } from '../scene/architecture';
 import { produce, type Draft } from 'immer';
 import { useSyncExternalStore } from 'react';
 import type { World } from './types';
 import { demoWorld, emptyWorld } from './defaults';
 import { isPlayerEntry } from './deployment';
-import { migrateWorld, syncMemory } from './memory';
-import { setMediaIndex } from './media';
-import { withVision } from './perception';
+import { migrateWorld, syncMemory } from '../scene/memory';
+import { setMediaIndex } from '../runtime/media';
+import { withVision } from '../scene/perception';
 import { loadSlot, saveSlot } from './persist';
 import { onSessionRenewed } from './session';
 
@@ -245,7 +245,6 @@ export interface UIState {
   toast: string | null;
   focus?: import('./types').Focus | null; // 统一暂停：战斗/技能/对话
   cast?: import('./types').SkillCast | null; // 技能发动状态机
-  desk?: 'dice' | 'ai' | 'skill' | null; // 桌面面板
   privateNote: { to: string; title: string; text: string } | null;
   nowPlaying: { mediaId: string; label: string; broadcast: boolean } | null;
 }

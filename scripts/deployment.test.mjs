@@ -20,7 +20,7 @@ test('split ports pin origins and bindings, keep player role fixed, and reconnec
     globalThis.BroadcastChannel=class{postMessage(m){broadcasts.push(m);}addEventListener(){}removeEventListener(){}};
     const bundle = async role => {
       const file=join(dir,role+'.cjs');
-      await build({stdin:{contents:`export * from './src/deployment';export * from './src/sync';export * from './src/store';export * from './src/defaults';`,resolveDir:root},outfile:file,bundle:true,platform:'node',format:'cjs',logLevel:'silent',define:{'import.meta.env':JSON.stringify({VITE_APP_ROLE:role,VITE_HOST_ORIGIN:host,VITE_PLAYER_ORIGIN:player})}});
+      await build({stdin:{contents:`export * from './src/core/deployment';export * from './src/runtime/sync';export * from './src/core/store';export * from './src/core/defaults';`,resolveDir:root},outfile:file,bundle:true,platform:'node',format:'cjs',logLevel:'silent',define:{'import.meta.env':JSON.stringify({VITE_APP_ROLE:role,VITE_HOST_ORIGIN:host,VITE_PLAYER_ORIGIN:player})}});
       return createRequire(import.meta.url)(file);
     };
     const api=await bundle('host');const w=api.emptyWorld();w.party=[{id:'a',name:'Alice',tags:[],color:'#fff'}];

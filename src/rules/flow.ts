@@ -1,5 +1,5 @@
-import type { Flow, FlowNode, Line } from './types';
-import { uid } from './util';
+import type { Flow, FlowNode, Line } from '../core/types';
+import { uid } from '../core/util';
 
 // 流程图的纯函数部分（不依赖 store，避免循环引用）。
 

@@ -1,9 +1,9 @@
 import { current } from 'immer';
-import type { Npc, NpcProgress, World } from './types';
-import { update } from './store';
+import type { Npc, NpcProgress, World } from '../core/types';
+import { update } from '../core/store';
 import { log } from './actions';
-import { download, uid } from './util';
-import { checkNpc } from './schema.js';
+import { download, uid } from '../core/util';
+import { checkNpc } from '../core/schema.js';
 
 // 普通人 NPC 的"现在该怎么办"：全按现实日期算（奇点之后的游戏时间和现实时间绑定）。
 

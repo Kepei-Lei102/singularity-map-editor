@@ -1,7 +1,7 @@
-import { cleanupMedia, stopMedia, playMedia } from '../actions';
-import { storeBlob, useBlobUrl } from '../media';
-import { toast, update, useUI, useWorld, worldContext } from '../store';
-import { uid } from '../util';
+import { cleanupMedia, stopMedia, playMedia } from '../runtime/actions';
+import { storeBlob, useBlobUrl } from '../runtime/media';
+import { toast, update, useUI, useWorld, worldContext } from '../core/store';
+import { uid } from '../core/util';
 import { Section } from './fields';
 
 const isPdf = (mime: string) => mime === 'application/pdf';

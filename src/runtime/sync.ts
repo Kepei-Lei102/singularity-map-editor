@@ -1,22 +1,23 @@
-import { hostOrigin, playerOrigin, messageTarget, isPlayerEntry } from './deployment';
-import { identityKnown, playerSeen, UNKNOWN_OBJECT } from './identity';
-import { objectEnabled } from './objectData.js';
-import { isArchitectureObject, clipArchitecture, fogAt, tokenPosition } from './architecture';
-import { anyVisible } from './memory';
-import type { Endpoint, GameMap, PlayerClue, VisionLayer, World } from './types';
-import { visibleMarks } from './perception';
-import { numbering } from './render';
-import { getRealWorld, getWorld, getUI, saveNow, worldContext, toast } from './store';
-import { SESSION, rand, renewSession } from './session';
-import { effectiveLayer, emptyVision } from './vision';
-import { onProjectReplaced, projectContext } from './store';
+import { hostOrigin, playerOrigin, messageTarget, isPlayerEntry } from '../core/deployment';
+import { identityKnown, playerSeen, UNKNOWN_OBJECT } from '../scene/identity';
+import { objectEnabled } from '../core/objectData.js';
+import { isArchitectureObject, clipArchitecture, fogAt, tokenPosition } from '../scene/architecture';
+import { anyVisible } from '../scene/memory';
+import type { Endpoint, GameMap, PlayerClue, VisionLayer, World, Focus, SkillCast } from '../core/types';
+import { visibleMarks } from '../scene/perception';
+import { numbering } from '../scene/render';
+import { getRealWorld, getWorld, getUI, saveNow, worldContext, toast } from '../core/store';
+import { SESSION, rand, renewSession } from '../core/session';
+import { effectiveLayer, emptyVision } from '../scene/vision';
+import { onProjectReplaced, projectContext } from '../core/store';
 
 // 主持人窗口 ↔ 玩家窗口。玩家窗口用来共享屏幕给玩家（第一阶段还没有联网，靠共享屏幕）。
 // world / 播放仅通过已绑定窗口的 postMessage 定向发送。
 // 公共 BroadcastChannel 只传会话占用与存活，不传 world、角色或绑定凭据。
 
 export type SyncBody =
-  | { type: 'world'; world: World }
+  | { type: 'world'; world: World; focus?: Focus | null; cast?: SkillCast | null; you?: string }
+  | { type: 'skill-decision'; castId: string; ok: boolean } // 玩家窗口回传：同不同意发动
   | { type: 'hello'; binding?: string }
   | { type: 'clear' }
   | { type: 'play'; mediaId: string; label: string; mime: string; blob?: Blob }
@@ -176,7 +177,11 @@ export function send(body: SyncBody, to?: string) {
       const context = projectContext();
       const valid = p.context === context && (!p.trialContext || !!getUI().trial && p.trialContext === worldContext()) && w.party.some(pc => pc.id === p.pcId);
       const mapId = p.trialContext ? getUI().trial?.mapId ?? null : w.playerMapId;
-      const out: SyncBody = !valid ? { type: 'clear' } : body.type === 'world' ? { type: 'world', world: playerWorld(w, mapId, p.pcId) } : body;
+      const out: SyncBody = !valid
+        ? { type: 'clear' }
+        : body.type === 'world'
+          ? { type: 'world', world: playerWorld(w, mapId, p.pcId), focus: getUI().focus ?? null, cast: getUI().cast ?? null, you: p.pcId }
+          : body;
       try { p.win.postMessage(msg(out), target()); } catch { /* closed */ }
       if (!valid) { players.delete(binding); saveBindings(); }
     }
@@ -274,6 +279,11 @@ export function listenAsPlayer(fn: (m: SyncMsg) => void) {
     if (Date.now() - lastHeard > 10000 || !inst) send({ type: 'hello', binding: binding ?? undefined }, bound ?? undefined);
   }, 5000);
   return () => { off(); clearInterval(beat); };
+}
+
+/** focus / 技能发动状态变了要立刻推一次：玩家窗口靠它暂停（只能看不能动）。 */
+export function pushFocus() {
+  send({ type: 'world', world: getWorld() });
 }
 
 let timer: number | undefined;

@@ -1,7 +1,7 @@
-import { update } from './store';
-import type { Flow, FlowEdge, FlowNode, World } from './types';
-import { NODE_H, NODE_W } from './flow';
-import { cellName, rangeName, uid } from './util';
+import { update } from '../core/store';
+import type { Flow, FlowEdge, FlowNode, World } from '../core/types';
+import { NODE_H, NODE_W } from '../rules/flow';
+import { cellName, rangeName, uid } from '../core/util';
 
 // AI 接口：交给 AI 的就是「地图 JSON + 预测分支 JSON + 一段说明」。
 // 作者在 AI 那边直接说"我这里 xxx 要加一个这样的分支"，AI 交回改好的整份预测分支 JSON，粘回来合并。
