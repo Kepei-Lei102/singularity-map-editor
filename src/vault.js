@@ -1,5 +1,5 @@
 // NPC 角色密档：浏览器里只在内存里解。不落盘、不进 world.json、不进 localStorage。
-// 格式与 爱丽丝模组/人物卡/工具/密档.mjs 一致：qdz-npc-enc/v1，
+// 格式与作者私有仓库里的密档工具一致：qdz-npc-enc/v1，
 // PBKDF2-HMAC-SHA512（60 万次，16 字节盐）+ AES-256-GCM（12 字节 IV，tag 单独存）。
 // 纯 JS、只用 WebCrypto，所以 node 测试和 vite 都能直接 import。
 
