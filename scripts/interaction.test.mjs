@@ -13,7 +13,7 @@ await build({
   stdin: { contents: `export * from './src/interaction'; export { blocksMovement } from './src/perception';`, resolveDir: root },
   outfile: bundle, bundle: true, platform: 'node', format: 'cjs', logLevel: 'silent',
 });
-const { attrValue, pickRoll, tierOfRoll, resolve, resolveContest, finalDC, sideAdvantage, planEffects, resolveOutcomes, materialize, applyTransitions, parseAdHoc, applyAdHoc, meCost, checkForSource, checkPreconditions, describeUnmet, blocksMovement } = await import(bundle);
+const { attrValue, pickRoll, tierOfRoll, resolve, resolveContest, finalDC, sideAdvantage, planEffects, resolveOutcomes, materialize, applyTransitions, parseAdHoc, applyAdHoc, meCost, checkForSource, checkPreconditions, describeUnmet, resolveLuck, luckThreshold, blocksMovement } = await import(bundle);
 after(() => rm(temp, { recursive: true, force: true }));
 
 const sheet = (o = {}) => ({ 力量: 50, 敏捷: 50, 意志: 50, 观察: 50, 智慧: 50, 魅力: 50, ...o });
@@ -214,10 +214,10 @@ test('带计数的判定：前 3 次劣势，用够 7 次后 +2', () => {
   assert.equal(later.success, true);
 });
 
-test('【幸运】不在六维里，但仍可作为判定属性', () => {
-  const actor = sheet({ 幸运: 60 }); // 12
-  const r = resolve({ check: { attributes: ['幸运'], mode: 'single' }, actor, d20s: [[9]] });
-  assert.equal(r.success, true); // 12+9=21 ≥ 20
+test('【幸运】不在六维里，走纯骰规则而不是属性 DC', () => {
+  const actor = sheet({ 幸运: 60 });
+  assert.equal(resolve({ check: { attributes: ['幸运'], mode: 'single' }, actor, d20s: [[9]] }).success, false);  // 9 < 11
+  assert.equal(resolve({ check: { attributes: ['幸运'], mode: 'single' }, actor, d20s: [[12]] }).success, true);  // 12 ≥ 11
 });
 
 test('D100 区默认 DC 是 100，不是 20', () => {
@@ -248,4 +248,27 @@ test('前置条件：射程与状态', () => {
   assert.equal(checkPreconditions(pick, { targetProps: ['物理锁具'], distance: 1, targetState: 0 }).ok, true);
   assert.equal(checkPreconditions(pick, { targetProps: ['物理锁具'], distance: 3, targetState: 0 }).ok, false); // 太远
   assert.equal(checkPreconditions(pick, { targetProps: ['物理锁具'], distance: 1, targetState: 1 }).ok, false); // 已经开了
+});
+
+test('幸运：纯骰，D20 11–20 成，D100 51–00 成，不加属性不加调整值', () => {
+  assert.equal(luckThreshold('d20'), 11);
+  assert.equal(luckThreshold('d100'), 51);
+  assert.equal(resolveLuck(10).success, false);
+  assert.equal(resolveLuck(11).success, true);
+  assert.equal(resolveLuck(50, 'd100').success, false);
+  assert.equal(resolveLuck(51, 'd100').success, true);
+  // 幸运不看属性、不吃调整值
+  const actor = sheet({ 幸运: 5 });   // 区值 1，若按 DC 走必失败
+  const low = resolve({ check: { attributes: ['幸运'], mode: 'single' }, actor, d20s: [[12]], adjust: -5 });
+  assert.equal(low.success, true);    // 骰面 12 ≥ 11 即成功
+  // 幸运掷 20 不产生特大成功，掷 1 也不产生大失败
+  const twenty = resolve({ check: { attributes: ['幸运'], mode: 'single' }, actor, d20s: [[20]] });
+  assert.equal(twenty.tier, 'success');
+  const one = resolve({ check: { attributes: ['幸运'], mode: 'single' }, actor, d20s: [[1]] });
+  assert.equal(one.tier, 'fail');
+  // D100 掷 100（000）也不走补投链
+  const hi = resolve({ check: { attributes: ['幸运'], mode: 'single' }, actor, d20s: [[100, 20]], scale: 'd100' });
+  assert.equal(hi.success, true);   // 骰面 100 ≥ 51
+  assert.equal(hi.tier, 'success'); // 幸运不参与极值：000 也不升特大
+  assert.equal(hi.level, null);
 });

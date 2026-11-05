@@ -74,6 +74,18 @@ export function sideAdvantage(scale: Scale, actorValue: number, targetValue: num
   return { actor: 'normal', target: 'normal' };
 }
 
+/**
+ * 【幸运】检定：纯骰，不套 DC、不加属性、不加调整值，也不触发 000 特殊链。
+ * D20：1–10 失败，11–20 成功。D100：1–50 失败，51–000 成功。
+ */
+export function luckThreshold(scale: Scale): number {
+  return scale === 'd100' ? 51 : 11;
+}
+
+export function resolveLuck(roll: number, scale: Scale = 'd20'): { success: boolean } {
+  return { success: roll >= luckThreshold(scale) };
+}
+
 /** 优势取高、劣势取低。normal 时给一颗。 */
 export function pickRoll(rolls: number[], advantage: Advantage = 'normal'): number {
   if (advantage === 'advantage') return Math.max(...rolls);
@@ -136,7 +148,10 @@ export interface ResolveInput {
   target?: Record<Attr, number>;
   /** 攻击命中：掷 00 即特大成功。 */
   attack?: boolean;
-  /** 这个动作已经被用过几次（从 0 起算）：前 N 次劣势，超过 N2 次之后加值。 */
+  /**
+   * 这个角色用过这个动作几次（从 0 起算）：前 N 次劣势，超过 N2 次之后加值。
+   * 计数**绑在角色身上**，不是动作全局——同一个动作，A 用得多不影响 B。
+   */
   uses?: number;
   usage?: ActionUsage;
   d20s?: number[][];     // 每个属性一组骰点；优势/劣势给两颗
@@ -176,6 +191,12 @@ export function resolve(input: ResolveInput): CheckResult {
     const value = attrValue(input.actor[attr], scale);
     const targetValue = opposed ? attrValue(input.target![attr], scale) : undefined;
     const dc = finalDC({ base: baseDC, actorValue: value, targetValue, opposed, scale });
+    // 【幸运】不套 DC：只看骰面。属性、调整值都不参与。
+    if (attr === '幸运') {
+      const thrownLuck = input.d20s?.[i] ?? [];
+      const luckRoll = pickRoll(thrownLuck, input.advantage ?? 'normal');
+      return { attr, value, target: targetValue, rolls: thrownLuck, roll: luckRoll, dc: luckThreshold(scale), total: luckRoll, pass: luckRoll >= luckThreshold(scale) };
+    }
     // 对抗时按属性差给优势／劣势；非对抗时沿用调用方给的 advantage
     const adv = forcedDisadvantage
       ? 'disadvantage'
@@ -189,8 +210,10 @@ export function resolve(input: ResolveInput): CheckResult {
     return { attr, value, target: targetValue, rolls: thrown, roll, dc, total, pass };
   });
 
-  const crit = rolls.find((r) => tierOfRoll(scale, r.roll, critRoll, { attack: input.attack }).tier === 'crit');
-  const fumbles = rolls.filter((r) => tierOfRoll(scale, r.roll, critRoll, { attack: input.attack }).tier === 'fumble');
+  // 【幸运】不参与极值判定：掷 20／000 都不产生大成功，掷 1 也不产生大失败。
+  const judged = rolls.filter((r) => r.attr !== '幸运');
+  const crit = judged.find((r) => tierOfRoll(scale, r.roll, critRoll, { attack: input.attack }).tier === 'crit');
+  const fumbles = judged.filter((r) => tierOfRoll(scale, r.roll, critRoll, { attack: input.attack }).tier === 'fumble');
 
   let success: boolean;
   switch (input.check.mode) {
