@@ -13,7 +13,7 @@ await build({
   stdin: { contents: `export * from './src/interaction'; export { blocksMovement } from './src/perception';`, resolveDir: root },
   outfile: bundle, bundle: true, platform: 'node', format: 'cjs', logLevel: 'silent',
 });
-const { attrValue, pickRoll, tierOfRoll, resolve, resolveContest, finalDC, sideAdvantage, planEffects, resolveOutcomes, materialize, applyTransitions, parseAdHoc, applyAdHoc, meCost, checkForSource, checkPreconditions, describeUnmet, resolveLuck, luckThreshold, blocksMovement } = await import(bundle);
+const { attrValue, pickRoll, tierOfRoll, resolve, resolveContest, finalDC, sideAdvantage, planEffects, resolveOutcomes, materialize, applyTransitions, parseAdHoc, applyAdHoc, meCost, checkForSource, checkPreconditions, describeUnmet, resolveLuck, luckThreshold, applyKnowledge, effectKind, blocksMovement } = await import(bundle);
 after(() => rm(temp, { recursive: true, force: true }));
 
 const sheet = (o = {}) => ({ 力量: 50, 敏捷: 50, 意志: 50, 观察: 50, 智慧: 50, 魅力: 50, ...o });
@@ -272,4 +272,31 @@ test('幸运：纯骰，D20 11–20 成，D100 51–00 成，不加属性不加�
   assert.equal(hi.success, true);   // 骰面 100 ≥ 51
   assert.equal(hi.tier, 'success'); // 幸运不参与极值：000 也不升特大
   assert.equal(hi.level, null);
+});
+
+test('效果面：applyTransitions 只吃物理效果，跳过信息和心理', () => {
+  const map = {
+    id: 'm', width: 4, height: 4,
+    objects: [{ id: 'door', name: '门', kind: 'object', x: 1, y: 1, w: 1, h: 1, states: ['关', '开'], state: 0, stateRev: 0, secrets: [{ id: 's1', label: '锁芯型号', check: '观察', kind: 'auto', range: 2, tiers: { crit: '', success: '', fail: '', fumble: '' } }], blocksWhen: [0] }],
+  };
+  const state = { mapId: 'm', objectId: 'door', from: 0, to: 1, rev: 0 };
+  const knowledge = { kind: 'knowledge', mapId: 'm', objectId: 'door', secretId: 's1', to: ['pc'], tier: 'success' };
+  const attitude = { kind: 'attitude', npcId: 'ian', from: 0, to: 1 };
+  assert.equal(effectKind(state), 'state');
+  assert.equal(effectKind(knowledge), 'knowledge');
+  applyTransitions(map, [state, knowledge, attitude]);
+  assert.equal(map.objects[0].state, 1);       // 物理生效
+  assert.equal(map.objects[0].secrets[0].discoveries, undefined); // 信息没被状态函数误写
+});
+
+test('applyKnowledge 按角色记下发现，返回条数', () => {
+  const map = {
+    id: 'm', width: 4, height: 4,
+    objects: [{ id: 'clue', name: '刻痕', kind: 'object', x: 0, y: 0, w: 1, h: 1, states: ['正常'], state: 0, secrets: [{ id: 's1', label: '刻痕朝向', check: '观察', kind: 'auto', range: 1, tiers: { crit: '', success: '', fail: '', fumble: '' } }] }],
+  };
+  const n = applyKnowledge(map, [{ kind: 'knowledge', mapId: 'm', objectId: 'clue', secretId: 's1', to: ['a', 'b'], tier: 'success', at: 7 }]);
+  assert.equal(n, 1);
+  assert.equal(map.objects[0].secrets[0].discoveries.a.at, 7);
+  assert.equal(map.objects[0].secrets[0].discoveries.b.tier, 'success');
+  assert.equal(applyKnowledge(map, [{ kind: 'state', mapId: 'm', objectId: 'clue', from: 0, to: 1, rev: 0 }]), 0);
 });

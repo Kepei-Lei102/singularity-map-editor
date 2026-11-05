@@ -7,6 +7,7 @@ import type { Draft } from 'immer';
 import JSZip from 'jszip';
 import { getUI, getWorld, reachableWorlds, replaceWorld, setUI, toast, update, worldContext, type Selection } from './store';
 import { blocksMovement, pcWithin, seesPoint, sightCosts, withVision } from './perception';
+import { applyKnowledge, type KnowledgeEffect } from './interaction';
 import type { Flow, GameMap, LogEntry, MapObject, MediaAttach, Memory, Room, RoomObjectSnapshot, Tier, World } from './types';
 import { newObject } from './defaults';
 import { NODE_H, NODE_W } from './flow';
@@ -366,8 +367,13 @@ export function checkEnterTriggers(mapId: string, tokenId: string, fromX: number
 }
 
 /** 带团时：玩家角色走进"自动浮现"的范围（且中间没墙），信息自动出现给全队。 */
+/**
+ * 自动浮现：改走统一的「信息效果」结算（applyKnowledge），不再各自往秘密里写。
+ * 物理效果改地图状态，信息效果只改「谁知道什么」——这是 C 方案的分界。
+ */
 export function autoReveal(mapId: string) {
   const w = getWorld(), m = findMap(w, mapId); if (!m) return;
+  const effects: KnowledgeEffect[] = [];
   for (const o of m.objects) for (const s of o.secrets) {
     if (s.kind !== 'auto' || s.revealed?.scope === 'party') continue;
     const recipients = new Set<string>();
@@ -376,14 +382,21 @@ export function autoReveal(mapId: string) {
         for (const id of visionMembers(w, p.id)) if (!s.discoveries?.[id]) recipients.add(id);
     }
     if (!recipients.size) continue;
-    update(d => {
-      const secret = findObj(d, mapId, o.id)!.secrets.find(x => x.id === s.id)!;
-      secret.discoveries ??= {};
-      for (const id of recipients) secret.discoveries[id] = { tier: 'success', at: Date.now() };
-      log(d, 'reveal', `自动浮现：${o.name}·${s.label}（${d.party.filter(p => recipients.has(p.id)).map(p => p.name).join('、')}）`, mapId);
-    });
+    effects.push({ kind: 'knowledge', mapId, objectId: o.id, secretId: s.id, to: [...recipients], tier: 'success' });
     toast(`自动浮现：${o.name}·${s.label}`);
   }
+  if (!effects.length) return;
+  update(d => {
+    const dm = findMap(d, mapId)!;
+    applyKnowledge(dm, effects);
+    const names = effects.map((e) => {
+      const o = dm.objects.find((x) => x.id === e.objectId)!;
+      const sec = o.secrets.find((x) => x.id === e.secretId)!;
+      const who = d.party.filter((p) => e.to.includes(p.id)).map((p) => p.name).join('、');
+      return `${o.name}·${sec.label}（${who}）`;
+    }).join('、');
+    log(d, 'reveal', `自动浮现：${names}`, mapId);
+  });
 }
 
 // ---------- 一格多物 ----------

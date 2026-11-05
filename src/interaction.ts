@@ -358,16 +358,70 @@ export function planEffects(def: ActionDef, tier: Tier): EffectTemplate[] {
 }
 
 /** 施加。只改 state 与 stateRev——联动交给派生层现算。 */
-export function applyTransitions(map: GameMap, transitions: StateTransition[]): void {
+// ---- 三种效果面（C 方案）：物理改世界、信息改「谁知道什么」、心理留形状 ----
+//
+// 分层不是「动作归类」，而是「效果往哪里写」：同一个动作可以同时产出物理和信息效果
+// （摸墙：触感是信息，推它是物理）。心理层只留类型，不实现。
+
+export type EffectKind = 'state' | 'knowledge' | 'attitude';
+
+/** 信息效果：不碰地图状态，只写「谁发现了哪个秘密」。 */
+export interface KnowledgeEffect {
+  kind: 'knowledge';
+  mapId: string;
+  objectId: string;
+  secretId: string;
+  to: string[]; // 接收角色 id
+  tier: Tier;
+  at?: number;
+}
+
+/** 心理效果：预留给态度/情绪，现在不实现。 */
+export interface AttitudeEffect {
+  kind: 'attitude';
+  npcId: string;
+  from?: number;
+  to: number;
+  label?: string;
+}
+
+export type AnyEffect = StateTransition | KnowledgeEffect | AttitudeEffect;
+
+export const effectKind = (e: AnyEffect): EffectKind => (e as { kind?: EffectKind }).kind ?? 'state';
+
+/** 信息效果：把发现记到物件的秘密上（按角色存，不随换组转发）。返回写了几条。 */
+export function applyKnowledge(map: GameMap, effects: AnyEffect[]): number {
+  let n = 0;
+  for (const e of effects) {
+    if (effectKind(e) !== 'knowledge') continue;
+    const k = e as KnowledgeEffect;
+    if (k.mapId !== map.id) continue;
+    const o = map.objects.find((x) => x.id === k.objectId);
+    const secret = o?.secrets.find((x) => x.id === k.secretId);
+    if (!secret) continue;
+    secret.discoveries ??= {};
+    for (const id of k.to) secret.discoveries[id] = { tier: k.tier, at: k.at ?? Date.now() };
+    n++;
+  }
+  return n;
+}
+
+/** 施加层：只处理物理效果；信息效果走 applyKnowledge()，心理效果暂不处理。 */
+export function applyTransitions(map: GameMap, transitions: AnyEffect[]): void {
   for (const t of transitions) {
-    if (t.mapId !== map.id) continue;
-    const o = map.objects.find((x) => x.id === t.objectId);
-    if (!o) continue;
-    o.state = t.to;
-    o.stateRev = (o.stateRev ?? 0) + 1;
-    t.rev = o.stateRev;
+    if (effectKind(t) !== 'state') continue;
+    const st = t as StateTransition;
+    if (st.mapId !== map.id) continue;
+    {
+      const o = map.objects.find((x) => x.id === st.objectId);
+      if (!o) continue;
+      o.state = st.to;
+      o.stateRev = (o.stateRev ?? 0) + 1;
+      st.rev = o.stateRev;
+    }
   }
 }
+
 
 /** 从模板算出具体转移（读当前 state 得到 from）。 */
 export function materialize(map: GameMap, templates: EffectTemplate[], targetObjectId: string): StateTransition[] {
