@@ -243,6 +243,7 @@ export interface PC {
   color: string;
   sex?: Sex; // 不填按「其他」算，默认身高 170
   heightCm?: number; // 不填按性别默认
+  skills?: string[]; // 已解锁的技能 id（技能数据随编辑器走）
 }
 
 export interface Effect {
@@ -426,3 +427,27 @@ export interface World {
 
 /** 玩家窗口的线索列表里的一条（只带揭示到的那一档）。 */
 export interface PlayerClue { id: Id; object: string; label: string; kind: 'auto' | 'roll'; check: string; tier: Tier; text: string; at: number }
+
+/** 统一"暂停/焦点"：战斗中、技能发动、对话都可能暂停别人，暂停逻辑只读这个。 */
+export type FocusKind = 'battle' | 'skill' | 'dialogue';
+export interface Focus {
+  kind: FocusKind;
+  actorPcId?: string;
+  label?: string;
+}
+
+/** 技能发动状态机。玩家发起和见证者代发起共用这一份状态。 */
+export type CastStep = 'approval' | 'confirm' | 'result';
+export interface SkillCast {
+  id: string;
+  actorPcId: string;
+  skillId: string;
+  initiator: 'player' | 'gm';
+  step: CastStep;
+  target?: string;
+  expiresAt?: number;
+  roll?: number;
+  total?: number;
+  success?: boolean | null;
+  note?: string;
+}

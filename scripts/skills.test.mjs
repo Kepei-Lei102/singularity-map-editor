@@ -1,0 +1,124 @@
+import assert from 'node:assert/strict';
+import { after, test } from 'node:test';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { createRequire } from 'node:module';
+import { build } from 'esbuild';
+
+const root = fileURLToPath(new URL('..', import.meta.url));
+const temp = await mkdtemp(join(tmpdir(), 'ts-skills-'));
+const bundle = join(temp, 'editor.cjs');
+await build({
+  stdin: { contents: `export * from './src/skills'; export * from './src/skillCast'; export * from './src/defaults'; export * from './src/store';`, resolveDir: root },
+  outfile: bundle, bundle: true, platform: 'node', format: 'cjs', logLevel: 'silent',
+});
+const storage = () => { const data = new Map(); return { getItem: (k) => data.get(k) ?? null, setItem: (k, v) => data.set(k, v), removeItem: (k) => data.delete(k) }; };
+globalThis.localStorage = storage();
+globalThis.sessionStorage = storage();
+globalThis.location = { search: '', origin: 'http://localhost' };
+globalThis.window = { setTimeout: () => 0, open: () => ({ closed: false, postMessage() {} }) };
+globalThis.BroadcastChannel = class { postMessage() {} };
+const api = createRequire(import.meta.url)(bundle);
+after(() => rm(temp, { recursive: true, force: true }));
+
+test('一级途径、二级技能组：锁定的不出现', () => {
+  const unlocked = new Set(['037-9-101', '037-9-102']);
+  const groups = api.groupSkills(api.SKILL_LIBRARY, unlocked);
+  assert.equal(groups.length, 1);
+  assert.equal(groups[0].pathway, '金手指途径');
+  const names = groups[0].groups.map((g) => g.name).sort((a, b) => a.localeCompare(b, 'zh'));
+  assert.deepEqual(names.slice().sort(), ['医疗·调养', '战斗·兵器'].sort());
+  const all = groups[0].groups.flatMap((g) => g.skills.map((s) => s.name));
+  assert.deepEqual(all.sort(), ['以慢制快', '冥想'].sort());
+});
+
+test('升级视图能看到未解锁的名字', () => {
+  const unlocked = new Set(['037-9-101']);
+  assert.equal(api.groupSkills(api.SKILL_LIBRARY, unlocked).length, 1);
+  const up = api.groupSkills(api.SKILL_LIBRARY, unlocked, { levelUp: true });
+  const count = up.flatMap((g) => g.groups).flatMap((g) => g.skills).length;
+  assert.equal(count, api.SKILL_LIBRARY.length);
+});
+
+test('搜索命中名字、技能组、说明；锁定的不搜出来', () => {
+  const unlocked = new Set(['037-9-101']);
+  assert.equal(api.filterSkills(api.SKILL_LIBRARY, '冥想', unlocked).length, 1);
+  assert.equal(api.filterSkills(api.SKILL_LIBRARY, '战斗', unlocked).length, 0);      // 锁定的
+  assert.equal(api.filterSkills(api.SKILL_LIBRARY, '战斗', unlocked, { levelUp: true }).length, 1);
+});
+
+test('ME 不够时不能发动', () => {
+  const skill = api.SKILL_LIBRARY[0];
+  assert.equal(api.canCast(skill, null).ok, true);
+  assert.equal(api.canCast({ ...skill, me: 3 }, 2).ok, false);
+});
+
+function fixture() {
+  const world = api.emptyWorld();
+  world.party = [{ id: 'pc', name: 'Ian', color: '#fff', tags: [], skills: ['037-9-101', '037-9-102'] }];
+  api.replaceWorld(world);
+  api.setUI({ mapId: 'x', mode: 'edit' });
+  return world;
+}
+
+test('玩家发起：直接进确认，focus 立起来', () => {
+  fixture();
+  assert.equal(api.beginSkillCast('pc', '037-9-101', 'player'), null);
+  const c = api.castOf();
+  assert.equal(c.step, 'confirm');
+  assert.equal(api.getUI().focus.kind, 'skill');
+  assert.match(api.getUI().focus.label, /冥想/);
+  api.closeSkillCast();
+  assert.equal(api.getUI().focus, null);
+});
+
+test('见证者代发起：先等同意，同意后才进确认', () => {
+  fixture();
+  api.beginSkillCast('pc', '037-9-101', 'gm');
+  assert.equal(api.castOf().step, 'approval');
+  assert.ok(api.castOf().expiresAt > Date.now());
+  assert.equal(api.approveSkillCast(true), null);
+  assert.equal(api.castOf().step, 'confirm');
+  api.closeSkillCast();
+});
+
+test('玩家不同意：清掉 focus', () => {
+  fixture();
+  api.beginSkillCast('pc', '037-9-101', 'gm');
+  api.approveSkillCast(false);
+  assert.equal(api.castOf(), null);
+  assert.equal(api.getUI().focus, null);
+});
+
+test('同意超时视为休眠，并清掉 focus', () => {
+  fixture();
+  api.beginSkillCast('pc', '037-9-101', 'gm');
+  api.setUI({ cast: { ...api.castOf(), expiresAt: Date.now() - 1 } });
+  assert.equal(api.timeoutSkillCast(), true);
+  assert.equal(api.castOf(), null);
+  assert.equal(api.getUI().focus, null);
+});
+
+test('掷骰结算：D20 20 成功、5 失败', () => {
+  fixture();
+  api.beginSkillCast('pc', '037-9-101', 'player');
+  api.resolveSkillCast(20);
+  assert.equal(api.castOf().step, 'result');
+  assert.equal(api.castOf().success, true);
+  api.closeSkillCast();
+
+  fixture();
+  api.beginSkillCast('pc', '037-9-101', 'player');
+  api.resolveSkillCast(5);
+  assert.equal(api.castOf().success, false);
+  api.closeSkillCast();
+});
+
+test('发动中不能再发起第二个', () => {
+  fixture();
+  api.beginSkillCast('pc', '037-9-101', 'player');
+  assert.match(api.beginSkillCast('pc', '037-9-102', 'player'), /发动中/);
+  api.closeSkillCast();
+});

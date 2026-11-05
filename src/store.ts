@@ -243,6 +243,9 @@ export interface UIState {
   showRulers: boolean;
   showSubgrid: boolean;
   toast: string | null;
+  focus?: import('./types').Focus | null; // 统一暂停：战斗/技能/对话
+  cast?: import('./types').SkillCast | null; // 技能发动状态机
+  desk?: 'dice' | 'ai' | 'skill' | null; // 桌面面板
   privateNote: { to: string; title: string; text: string } | null;
   nowPlaying: { mediaId: string; label: string; broadcast: boolean } | null;
 }
@@ -269,6 +272,8 @@ let ui: UIState = {
   knowledgeTarget: '',
   tab: 'inspect',
   showFogInEdit: false,
+  focus: null,
+  cast: null,
   visionAlgo: 'rulebook',
   showNumbers: false,
   showRulers: true,

@@ -2,6 +2,7 @@ import { isPlayerEntry } from './deployment';
 import { useEffect, useRef, useState } from 'react';
 import { JudgmentPanel } from './components/JudgmentPanel';
 import { SessionAI } from './components/SessionAI';
+import { SkillPanel } from './components/SkillPanel';
 import { canEditMap, getRealWorld, getUI, getWorld, redo, setUI, undo, update, useUI, useWorld, type Mode, type Tab } from './store';
 import { autoLoadFromLauncher, checkDiskTarget, deleteMapObject, exportProject, findMap, hasBackup, importAnyFile, restoreBackup, saveToDisk, startFreshWorld } from './actions';
 import { demoWorld, emptyWorld } from './defaults';
@@ -51,7 +52,7 @@ function deleteSelection() {
 function Editor() {
   const world = useWorld();
   const ui = useUI();
-  const [desk, setDesk] = useState<'dice' | 'ai' | null>(null);
+  const [desk, setDesk] = useState<'dice' | 'ai' | 'skill' | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const rhRef = useRef<HTMLInputElement>(null);
   const left = usePanel('left', 220);
@@ -125,6 +126,7 @@ function Editor() {
         </div>
         <button onClick={() => setDesk(desk === 'dice' ? null : 'dice')}>骰子判定</button>
         <button onClick={() => setDesk(desk === 'ai' ? null : 'ai')}>本场 AI</button>
+        <button onClick={() => setDesk(desk === 'skill' ? null : 'skill')}>技能</button>
         {ui.trial && <button onClick={() => openPlayerWindow(ui.trial!.players[ui.trial!.current]?.pcId, true)}>打开试玩玩家端</button>}
         {run && <span className="session">第 {world.session} 场</span>}
         {ui.mode !== 'edit' && (
@@ -201,6 +203,7 @@ function Editor() {
         <button className="desk-close" onClick={() => setDesk(null)}>关闭面板</button>
         <div hidden={desk !== 'dice'}><JudgmentPanel /></div>
         <div hidden={desk !== 'ai'}><SessionAI active={desk === 'ai'} /></div>
+        <div hidden={desk !== 'skill'}><SkillPanel /></div>
       </aside>
       {ui.privateNote && (
         <div className="modal-bg" onClick={() => setUI({ privateNote: null })}>
