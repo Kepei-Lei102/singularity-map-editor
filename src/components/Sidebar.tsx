@@ -123,7 +123,7 @@ export function Sidebar() {
               <button className={ui.fine ? '' : 'on'} onClick={() => setUI({ fine: false })}>大格</button>
               <button className={ui.fine ? 'on' : ''} onClick={() => setUI({ fine: true, showSubgrid: true })}>小格 1/3</button>
             </span></Row>
-            <div className="hint">流程：用「细分为3×3」框选格子（会自动切到小格），放物件/触发区时落点按 1/3 格吸附并顺手细分落到的格子；放完点「大格」回到整格。</div>
+            <div className="hint">流程：用「细分为3×3」框选格子（会自动切到小格）。小格里放物件/触发区按 1/3 格吸附，画笔/矩形填充/橡皮改的是子格地形，落到的格子会自动细分；大格画笔会把这一格下的子格覆盖清掉。放完点「大格」回到整格。</div>
           </>
         )}
         <Check label="显示子格线" value={ui.showSubgrid} onChange={(v) => setUI({ showSubgrid: v })} />

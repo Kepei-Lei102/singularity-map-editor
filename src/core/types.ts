@@ -160,6 +160,8 @@ export interface GameMap {
   spawn: { x: number; y: number } | null; // 试玩出生点（null = 自动：最北、最居中的门外）
   objects: MapObject[];
   subdivisions?: number[];
+  /** 子格地形覆盖：key = sy3 * width*3 + sx3，仅对细分过的格子生效；没有的退回 cells。 */
+  subCells?: Record<number, string>;
   architecture?: Architecture;
   architectureFragments?: ArchitectureFragment[]; // 仅玩家同步的实时可见片段
   subFog?: Record<number, number>; // key = sy*(width*3)+sx，仅明确细分处

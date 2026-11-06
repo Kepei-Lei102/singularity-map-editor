@@ -1,4 +1,5 @@
 import { identityKnowledge } from './identity';
+import { terrainAtSubcell } from './terrain';
 import { objectEnabled } from '../core/objectData.js';
 import { clipArchitecture, isArchitectureObject, migrateArchitecture } from './architecture';
 import { repairWorld } from '../core/schema.js';
@@ -50,7 +51,7 @@ function syncLayer(m: Draft<GameMap>, L: Draft<VisionLayer>, rev: number) {
   L.seen.subCells ??= {};
   for (const [key, f] of Object.entries(L.subFog ?? {})) if (f === 1) {
     const sx = +key % (m.width * 3), sy = Math.floor(+key / (m.width * 3));
-    L.seen.subCells[+key] = m.cells[Math.floor(sy / 3) * m.width + Math.floor(sx / 3)];
+    L.seen.subCells[+key] = terrainAtSubcell(m, sx, sy);
   }
   const historical = clipArchitecture(source, layer, 2, layer.seen.architecture ?? []);
   L.seen.architecture = [...historical, ...clipArchitecture(source, layer)];

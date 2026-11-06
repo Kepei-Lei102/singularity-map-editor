@@ -8,6 +8,7 @@ import type { Facing, GameMap, MapObject, World } from '../core/types';
 import { gridDist, uid } from '../core/util';
 import { blocksMovement, ROUND_MINUTES } from '../scene/perception';
 import { characterPathClear, furnitureSweepBlocked, nextTokenStep, setTokenPosition, tokenPosition } from '../scene/architecture';
+import { terrainBlocksPoint, terrainBlocksRect } from '../scene/terrain';
 import { slidingPuzzleForObject } from '../scene/sliding';
 
 // 试玩：放白板玩家进去，用 WASD 走，体验视野。退出时一切恢复原样（沙盒）。
@@ -42,10 +43,10 @@ function canPush(w: World, m: GameMap, shelf: MapObject, dx: number, dy: number)
   const sx = shelf.x + dx, sy = shelf.y + dy;
   if (furnitureSweepBlocked(m, shelf, sx, sy)) return false;
   if (sx < 0 || sy < 0 || sx + shelf.w > m.width || sy + shelf.h > m.height) return false;
+  const a = shelf.anchor ?? { x: 0, y: 0 };
+  if (terrainBlocksRect(w, m, { x: sx + a.x / 3, y: sy + a.y / 3, w: shelf.w, h: shelf.h })) return false;
   for (let y = sy; y < sy + shelf.h; y++)
     for (let x = sx; x < sx + shelf.w; x++) {
-      const t = w.terrains.find((t) => t.id === m.cells[y * m.width + x]);
-      if (!t || t.blocksMove) return false;
       if (m.objects.some((o) => o !== shelf && o.kind === 'object' && objectEnabled(m, o) && blocksMovement(o) && insideRect(o, x, y))) return false;
       if (m.tokens.some((k) => k.x === x && k.y === y)) return false;
     }
@@ -60,8 +61,7 @@ function hasHelper(m: GameMap, shelf: MapObject, pusherId: string) {
 
 function walkable(w: World, m: GameMap, x: number, y: number) {
   if (x < 0 || y < 0 || x >= m.width || y >= m.height) return false;
-  const t = w.terrains.find((t) => t.id === m.cells[y * m.width + x]);
-  if (!t || t.blocksMove) return false; // 空白格（地图外）也不能走
+  if (terrainBlocksPoint(w, m, x + 0.5, y + 0.5)) return false; // 空白格（地图外）也不能走
   if (!characterPathClear(w, { ...m, tokens: [] }, { x: x + 0.5, y: y + 0.5 }, { x: x + 0.5, y: y + 0.5 })) return false;
   return !m.objects.some((o) => o.kind === 'object' && objectEnabled(m, o) && blocksMovement(o) && x >= o.x && x < o.x + o.w && y >= o.y && y < o.y + o.h);
 }

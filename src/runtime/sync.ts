@@ -102,7 +102,12 @@ export function playerWorld(w: World, mapId: string | null = w.playerMapId, pcId
   ]);
   const labels: Record<string, string> = {};
   if (src) numbering(w, src).forEach((n) => { if (keep.has(n.id)) labels[n.id] = n.label; });
-  const usedTerrains = new Set(pm ? [...pm.cells, ...pm.seen.cells, ...Object.values(pm.views).flatMap((L) => L.seen.cells)] : []);
+  const usedTerrains = new Set(pm ? [
+    ...pm.cells, ...pm.seen.cells,
+    ...Object.values(pm.subCells ?? {}),
+    ...Object.values(pm.seen.subCells ?? {}),
+    ...Object.values(pm.views).flatMap((L) => [...L.seen.cells, ...Object.values(L.seen.subCells ?? {})]),
+  ] : []);
   const clues: PlayerClue[] = valid ? w.maps.flatMap(m => m.objects.flatMap(o => o.secrets.flatMap(s => {
     const r = s.revealed;
     const manual = r && (r.scope === 'party' || pcId && r.recipients?.includes(pcId)) ? r : undefined;
@@ -140,6 +145,7 @@ export function playerMap(m: GameMap, L: VisionLayer, pcId?: string): GameMap {
     architectureFragments: clipArchitecture(m, L),
     subdivisions: m.subdivisions?.filter(i => L.fog[i]),
     cells: m.cells.map((c, i) => L.fog[i] === 1 ? c : ''),
+    subCells: Object.fromEntries(Object.entries(m.subCells ?? {}).filter(([key]) => L.subFog?.[+key] === 1)),
     d100: m.d100.map(() => 0), rooms: [], roomCells: m.roomCells.map(() => ''), notes: '', spawn: null,
     tokens: m.tokens.filter(t => { const p = tokenPosition(t); return t.pcId === pcId || fogAt(m, L, p.x, p.y) === 1; }),
     objects: m.objects.filter(o => objectEnabled(m, o) && o.kind === 'object' && !isArchitectureObject(o) && !o.hidden && anyVisible({ ...m, ...L }, o)).map(o => ({

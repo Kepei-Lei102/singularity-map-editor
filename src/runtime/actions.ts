@@ -7,6 +7,7 @@ import type { Draft } from 'immer';
 import JSZip from 'jszip';
 import { getUI, getWorld, reachableWorlds, replaceWorld, setUI, toast, update, worldContext, type Selection } from '../core/store';
 import { blocksMovement, pcWithin, seesPoint, sightCosts, withVision } from '../scene/perception';
+import { subKey, terrainAtSubcell } from '../scene/terrain';
 import { objectRect } from '../scene/architecture';
 import { applyKnowledge, type KnowledgeEffect } from '../rules/interaction';
 import type { Flow, GameMap, LogEntry, MapObject, MediaAttach, Memory, Room, RoomObjectSnapshot, Tier, World } from '../core/types';
@@ -633,8 +634,9 @@ export function reshapeMaps(mapIds: string[], left: number, top: number, right: 
       m.subdivisions = m.subdivisions?.flatMap(i => { const x = i % oldWidth + left, y = Math.floor(i / oldWidth) + top; return x >= 0 && y >= 0 && x < W && y < H ? [y * W + x] : []; });
       for (const o of m.objects) for (const p of o.geometry ? [o.geometry.a, o.geometry.b] : []) { p.x += left * 3; p.y += top * 3; }
       for (const t of m.tokens) if (t.subcell) { t.subcell.x += left * 3; t.subcell.y += top * 3; }
+      const shiftSub = <T,>(data: Record<number, T>) => Object.fromEntries(Object.entries(data).flatMap(([key, v]) => { const x = +key % (oldWidth * 3) + left * 3, y = Math.floor(+key / (oldWidth * 3)) + top * 3; return x >= 0 && y >= 0 && x < W * 3 && y < H * 3 ? [[y * W * 3 + x, v]] : []; }));
+      if (m.subCells) m.subCells = shiftSub(m.subCells);
       for (const L of [m, ...Object.values(m.views)]) {
-        const shiftSub = <T,>(data: Record<number, T>) => Object.fromEntries(Object.entries(data).flatMap(([key, v]) => { const x = +key % (oldWidth * 3) + left * 3, y = Math.floor(+key / (oldWidth * 3)) + top * 3; return x >= 0 && y >= 0 && x < W * 3 && y < H * 3 ? [[y * W * 3 + x, v]] : []; }));
         if (L.subFog) L.subFog = shiftSub(L.subFog);
         if (L.seen.subCells) L.seen.subCells = shiftSub(L.seen.subCells);
         if (L.seen.observed) L.seen.observed = shiftSub(L.seen.observed);
@@ -1135,7 +1137,9 @@ export function giveMapKnowledge(mapId: string, pcIds?: string[]) {
       L.subFog ??= {}; L.seen.subCells ??= {};
       for (const i of m.subdivisions ?? []) for (let sy = 0; sy < 3; sy++) for (let sx = 0; sx < 3; sx++) {
         const key = (Math.floor(i / m.width) * 3 + sy) * m.width * 3 + i % m.width * 3 + sx;
-        if (!L.subFog[key]) { L.subFog[key] = 2; L.seen.subCells[key] = m.cells[i]; L.seen.subRevs[key] = rev; }
+        if (!L.subFog[key]) {
+          L.subFog[key] = 2; L.seen.subCells[key] = terrainAtSubcell(m, (i % m.width) * 3 + sx, Math.floor(i / m.width) * 3 + sy); L.seen.subRevs[key] = rev;
+        }
       }
       L.seen.architecture = [...clipArchitecture(m, L, 1, L.seen.architecture ?? []), ...clipArchitecture(m, L, 2)];
       for (let key = 0; key < m.width * m.height * 9; key++) L.seen.architectureRevs![key] = rev;
@@ -1193,6 +1197,39 @@ function cellsAlongWall(m: GameMap, a: { x: number; y: number }, b: { x: number;
     if (inside.length) out.add(inside[0][1] * m.width + inside[0][0]);
   }
   return [...out];
+}
+
+/** 大格画笔：写 cells，并把这一格下残留的子格覆盖清掉（否则底色换了、角落还是旧材质）。 */
+export function paintTerrainCells(mapId: string, cells: [number, number][], terrainId: string | null) {
+  update((d) => {
+    const m = findMap(d, mapId); if (!m) return;
+    for (const [x, y] of cells) {
+      if (x < 0 || y < 0 || x >= m.width || y >= m.height) continue;
+      m.cells[y * m.width + x] = terrainId ?? '';
+      if (m.subCells) for (let sy = 0; sy < 3; sy++) for (let sx = 0; sx < 3; sx++) delete m.subCells[subKey(m, x * 3 + sx, y * 3 + sy)];
+    }
+  });
+}
+
+/** 小格画笔：写子格覆盖；落在没细分的格子上会顺手细分，并把新子格的迷雾/记忆初始化成和大格一致。 */
+export function paintTerrainSubcells(mapId: string, cells3: [number, number][], terrainId: string | null) {
+  update((d) => {
+    const m = findMap(d, mapId); if (!m) return;
+    const valid: [number, number][] = [];
+    const touched = new Set<number>();
+    for (const [x3, y3] of cells3) {
+      if (x3 < 0 || y3 < 0 || x3 >= m.width * 3 || y3 >= m.height * 3) continue;
+      valid.push([x3, y3]);
+      touched.add(Math.floor(y3 / 3) * m.width + Math.floor(x3 / 3));
+    }
+    const add = [...touched].filter((i) => !m.subdivisions?.includes(i));
+    if (add.length) {
+      m.subdivisions = [...(m.subdivisions ?? []), ...add];
+      for (const L of [m, ...Object.values(m.views)]) applySubdivision(L, m, add, false);
+    }
+    m.subCells ??= {};
+    for (const [x3, y3] of valid) m.subCells[subKey(m, x3, y3)] = terrainId ?? '';
+  });
 }
 
 /** 选中矩形显式细分；取消前验证墙/门/棋子，不删任何内容。 */

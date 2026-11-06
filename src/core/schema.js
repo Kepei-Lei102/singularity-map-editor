@@ -232,6 +232,15 @@ export function checkWorld(w, migrated = false) {
     }
     const n = m.width * m.height;
     if (m.subdivisions !== undefined) arr(m.subdivisions, `${at}.subdivisions`);
+    if (m.subCells !== undefined) {
+      for (const [key, value] of Object.entries(obj(m.subCells, `${at}.subCells`))) {
+        const k = +key; int(k, `${at}.subCells key`, 0, m.width * m.height * 9 - 1);
+        optStr(value, `${at}.subCells value`);
+        const x3 = k % (m.width * 3), y3 = Math.floor(k / (m.width * 3));
+        const cell = Math.floor(y3 / 3) * m.width + Math.floor(x3 / 3);
+        if (!m.subdivisions?.includes(cell)) fail(`${at}.subCells`, '子格地形只能落在细分过的格子里');
+      }
+    }
     checkArchitecture(m);
     if (m.architectureFragments !== undefined) fragments(m.architectureFragments, `${at}.architectureFragments`);
     const checkSubFog = (L, at) => {

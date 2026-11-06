@@ -1,7 +1,7 @@
 import { effectiveLayer } from '../scene/vision';
 import { objectEnabled } from '../core/objectData.js';
 import { architectureWalls, architectureDoors, isArchitectureObject, characterPathClear, furnitureSweepBlocked, isSubdivided, tokenPosition, objectRect, anchorFromPoint } from '../scene/architecture';
-import { addArchitectureDoor, addArchitectureWall, eraseArchitecture, moveMapToken, paintFog, subdivideRegion, toggleArchitectureDoor } from '../runtime/actions';
+import { addArchitectureDoor, addArchitectureWall, eraseArchitecture, moveMapToken, paintFog, paintTerrainCells, paintTerrainSubcells, subdivideRegion, toggleArchitectureDoor } from '../runtime/actions';
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { GameMap, World } from '../core/types';
 import { CS, cellLine, uid } from '../core/util';
@@ -14,8 +14,8 @@ import { brushCells, render, type Mode, type Rect } from '../scene/render';
 type Drag =
   | { k: 'wall'; ax: number; ay: number; bx: number; by: number }
   | { k: 'pan'; sx: number; sy: number; px: number; py: number }
-  | { k: 'paint'; lx: number; ly: number; value: number }
-  | { k: 'rect'; x0: number; y0: number; x1: number; y1: number; ax: number; ay: number }
+  | { k: 'paint'; lx: number; ly: number; fx: number; fy: number; value: number }
+  | { k: 'rect'; x0: number; y0: number; x1: number; y1: number; ax: number; ay: number; fine?: boolean; fx0?: number; fy0?: number; fx1?: number; fy1?: number }
   | { k: 'obj'; id: string; ox: number; oy: number; moved: boolean; next: Selection }
   | { k: 'tok'; id: string; fx: number; fy: number; moved: boolean; next: Selection }
   | { k: 'click'; next: Selection };
@@ -160,21 +160,40 @@ export function MapCanvas({ world, map, mode, playerNumbers = false, follow, vie
     return { sx, sy, gx: (sx - v.panX) / v.zoom / CS, gy: (sy - v.panY) / v.zoom / CS, cx: Math.floor((sx - v.panX) / v.zoom / CS), cy: Math.floor((sy - v.panY) / v.zoom / CS) };
   };
 
+  /** 只剩按大格生效的工具：迷雾 / D100 / 房间。地形画笔在 paintTerrain 里。 */
   const paintCells = (cells: [number, number][], value: number) => {
-    const { tool, terrainId, roomId, knowledgeTarget } = getUI();
+    const { tool, roomId, knowledgeTarget } = getUI();
     if (tool.startsWith('fog')) return paintFog(map.id, cells, tool as 'fogReveal' | 'fogHide' | 'fogBlack', knowledgeTarget ? [knowledgeTarget] : undefined);
     update((d) => {
       const m = findMap(d, map.id)!;
       for (const [x, y] of cells) {
         if (x < 0 || y < 0 || x >= m.width || y >= m.height) continue;
         const i = y * m.width + x;
-        if (tool === 'paint') m.cells[i] = terrainId;
-        else if (tool === 'erase') m.cells[i] = '';
-        else if (tool === 'd100') m.d100[i] = value;
+        if (tool === 'd100') m.d100[i] = value;
         else if (tool === 'room') m.roomCells[i] = roomId;
-
       }
     });
+  };
+
+  /** 小格画笔落点：n 按小格算。 */
+  const brushSubcells = (x3: number, y3: number, n: number): [number, number][] => {
+    const out: [number, number][] = [];
+    const start = -Math.floor((Math.max(1, n) - 1) / 2);
+    for (let dy = 0; dy < Math.max(1, n); dy++) for (let dx = 0; dx < Math.max(1, n); dx++) out.push([x3 + start + dx, y3 + start + dy]);
+    return out;
+  };
+
+  /** 地形画笔统一入口：大格写 cells，小格写 subCells；d100/房间/迷雾仍按大格。 */
+  const paintTerrain = (cx: number, cy: number, fx: number, fy: number, value: number, tool: string, brush: number, fine: boolean, terrainId: string) => {
+    if (fine && (tool === 'paint' || tool === 'erase')) {
+      paintTerrainSubcells(map.id, brushSubcells(fx, fy, brush), tool === 'erase' ? '' : terrainId);
+      return;
+    }
+    if (tool === 'paint' || tool === 'erase') {
+      paintTerrainCells(map.id, brushCells(cx, cy, brush), tool === 'erase' ? '' : terrainId);
+      return;
+    }
+    paintCells(brushCells(cx, cy, brush), value);
   };
 
   const onDown = (e: React.PointerEvent) => {
@@ -270,14 +289,19 @@ export function MapCanvas({ world, map, mode, playerNumbers = false, follow, vie
     if (PAINT_TOOLS.includes(tool)) {
       beginBatch();
       const value = tool === 'd100' ? (m.d100[cy * m.width + cx] ? 0 : 1) : 0;
-      drag.current = { k: 'paint', lx: cx, ly: cy, value };
-      paintCells(brushCells(cx, cy, s.brush), value);
+      const { gx, gy } = toCell(e);
+      const fx = Math.floor(gx * 3), fy = Math.floor(gy * 3);
+      drag.current = { k: 'paint', lx: cx, ly: cy, fx, fy, value };
+      paintTerrain(cx, cy, fx, fy, value, tool, s.brush, s.fine, s.terrainId);
       return;
     }
     if (tool === 'fill' || tool === 'object' || tool === 'zone' || tool === 'subdivide' || tool === 'unsubdivide') {
-      const a = anchorFromPoint({ x: toCell(e).gx, y: toCell(e).gy });
-      drag.current = { k: 'rect', x0: cx, y0: cy, x1: cx, y1: cy, ax: a.x, ay: a.y };
-      setPreview({ x: cx, y: cy, w: 1, h: 1 });
+      const { gx, gy } = toCell(e);
+      const a = anchorFromPoint({ x: gx, y: gy });
+      const fineFill = s.fine && tool === 'fill';
+      const fx0 = fineFill ? Math.floor(gx * 3) : 0, fy0 = fineFill ? Math.floor(gy * 3) : 0;
+      drag.current = { k: 'rect', x0: cx, y0: cy, x1: cx, y1: cy, ax: a.x, ay: a.y, fine: fineFill, fx0, fy0, fx1: fx0, fy1: fy0 };
+      setPreview(fineFill ? { x: fx0 / 3, y: fy0 / 3, w: 1 / 3, h: 1 / 3 } : { x: cx, y: cy, w: 1, h: 1 });
       return;
     }
     if (tool === 'conn') {
@@ -330,11 +354,27 @@ export function MapCanvas({ world, map, mode, playerNumbers = false, follow, vie
       dr.bx = bx; dr.by = by;
       setPreview({ x: Math.min(dr.ax, bx) / 3, y: Math.min(dr.ay, by) / 3, w: Math.max(.05, Math.abs(bx - dr.ax) / 3), h: Math.max(.05, Math.abs(by - dr.ay) / 3) });
     } else if (dr.k === 'paint') {
+      const { gx, gy } = toCell(e);
+      const fx = Math.floor(gx * 3), fy = Math.floor(gy * 3);
+      const s = getUI();
+      if (s.fine && (s.tool === 'paint' || s.tool === 'erase')) {
+        if (fx === dr.fx && fy === dr.fy) return;
+        paintTerrainSubcells(map.id, cellLine(dr.fx, dr.fy, fx, fy).flatMap(([x, y]) => brushSubcells(x, y, s.brush)), s.tool === 'erase' ? '' : s.terrainId);
+        dr.fx = fx; dr.fy = fy;
+        return;
+      }
       if (cx === dr.lx && cy === dr.ly) return;
-      const n = getUI().brush;
-      paintCells(cellLine(dr.lx, dr.ly, cx, cy).flatMap(([x, y]) => brushCells(x, y, n)), dr.value);
+      paintTerrain(cx, cy, fx, fy, dr.value, s.tool, s.brush, false, s.terrainId);
       dr.lx = cx; dr.ly = cy;
     } else if (dr.k === 'rect') {
+      if (dr.fine && dr.fx0 !== undefined && dr.fy0 !== undefined) {
+        const { gx, gy } = toCell(e);
+        const fx = Math.max(0, Math.min(m.width * 3 - 1, Math.floor(gx * 3)));
+        const fy = Math.max(0, Math.min(m.height * 3 - 1, Math.floor(gy * 3)));
+        dr.fx1 = fx; dr.fy1 = fy;
+        setPreview({ x: Math.min(dr.fx0, fx) / 3, y: Math.min(dr.fy0, fy) / 3, w: (Math.abs(fx - dr.fx0) + 1) / 3, h: (Math.abs(fy - dr.fy0) + 1) / 3 });
+        return;
+      }
       dr.x1 = clampX(cx); dr.y1 = clampY(cy);
       setPreview({ x: Math.min(dr.x0, dr.x1), y: Math.min(dr.y0, dr.y1), w: Math.abs(dr.x1 - dr.x0) + 1, h: Math.abs(dr.y1 - dr.y0) + 1 });
     } else if (dr.k === 'obj') {
@@ -411,10 +451,17 @@ export function MapCanvas({ world, map, mode, playerNumbers = false, follow, vie
         if (error) toast(error);
         else if (tool === 'subdivide') setUI({ fine: true, showSubgrid: true }); // 细分完直接给小格画笔
       } else if (tool === 'fill') {
-        update((d) => {
-          const m = findMap(d, map.id)!;
-          for (let y = r.y; y < r.y + r.h; y++) for (let x = r.x; x < r.x + r.w; x++) m.cells[y * m.width + x] = terrainId;
-        });
+        if (dr.fine && dr.fx0 !== undefined && dr.fx1 !== undefined && dr.fy0 !== undefined && dr.fy1 !== undefined) {
+          const cells3: [number, number][] = [];
+          for (let y = Math.min(dr.fy0, dr.fy1); y <= Math.max(dr.fy0, dr.fy1); y++)
+            for (let x = Math.min(dr.fx0, dr.fx1); x <= Math.max(dr.fx0, dr.fx1); x++) cells3.push([x, y]);
+          paintTerrainSubcells(map.id, cells3, terrainId);
+        } else {
+          update((d) => {
+            const m = findMap(d, map.id)!;
+            for (let y = r.y; y < r.y + r.h; y++) for (let x = r.x; x < r.x + r.w; x++) m.cells[y * m.width + x] = terrainId;
+          });
+        }
       } else {
         const o = newObject(tool === 'zone' ? 'zone' : 'object', r.x, r.y, r.w, r.h);
         const fineNow = getUI().fine;

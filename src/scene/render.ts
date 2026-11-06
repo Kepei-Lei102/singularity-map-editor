@@ -4,6 +4,7 @@ import { effectiveLayer, visionMembers } from './vision';
 import { visibleArchitectureGeometry } from '../core/architectureData.js';
 import { isArchitectureObject, clipArchitecture, fogAt, isSubdivided, tokenPosition } from './architecture';
 import { anyVisible } from './memory';
+import { subKey, terrainAtSubcell } from './terrain';
 import type { Selection, Tool, View } from '../core/store';
 import type { GameMap, MapObject, SeenObject, World } from '../core/types';
 import { staleMemories } from './memory';
@@ -390,8 +391,12 @@ export function render(
       const i = y * W + x;
       const n = isSubdivided(map, x, y) ? 3 : 1;
       for (let sy = 0; sy < n; sy++) for (let sx = 0; sx < n; sx++) {
-        const f = fogAt(map, map, x + (sx + .5) / n, y + (sy + .5) / n), key = (y * 3 + sy) * W * 3 + x * 3 + sx;
-        const id = player ? (f === 1 ? map.cells[i] : f === 2 ? n === 3 ? map.seen.subCells?.[key] ?? '' : map.seen.cells[i] : '') : map.cells[i];
+        const f = fogAt(map, map, x + (sx + .5) / n, y + (sy + .5) / n), key = subKey(map, x * 3 + sx, y * 3 + sy);
+        const base = map.cells[i];
+        const id = player
+          ? (f === 1 ? (n === 3 ? terrainAtSubcell(map, x * 3 + sx, y * 3 + sy) : base)
+            : f === 2 ? (n === 3 ? map.seen.subCells?.[key] ?? '' : map.seen.cells[i]) : '')
+          : (n === 3 ? terrainAtSubcell(map, x * 3 + sx, y * 3 + sy) : base);
         if (!id) continue;
         ctx.fillStyle = terrains.get(id)?.color ?? '#ff00ff';
         ctx.fillRect((x + sx / n) * CS, (y + sy / n) * CS, CS / n + .1, CS / n + .1);

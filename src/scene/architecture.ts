@@ -2,11 +2,12 @@ import { objectEnabled } from '../core/objectData.js';
 import { architectureGeometry, isArchitectureObject } from '../core/architectureData.js';
 export { architectureGeometry, architectureWalls, architectureDoors, architectureObjectBounds, isArchitectureObject, openingIsOpen, migrateArchitecture, normalizeArchitectureBounds } from '../core/architectureData.js';
 import type { ArchitectureFragment, GameMap, Point, Token, Wall, World } from '../core/types';
+import { isSubdivided, subKey, terrainBlockers } from './terrain';
+export { isSubdivided, subKey } from './terrain';
 
 export const tokenPosition = (t: { x: number; y: number; subcell?: Point }): Point => t.subcell
   ? { x: (t.subcell.x + 0.5) / 3, y: (t.subcell.y + 0.5) / 3 }
   : { x: t.x + 0.5, y: t.y + 0.5 };
-export const isSubdivided = (m: GameMap, x: number, y: number) => (m.subdivisions ?? []).includes(Math.floor(y) * m.width + Math.floor(x));
 
 /** 物件的实际占位矩形：x/y 是整格，anchor 是 1/3 格的偏移（0/1/2）。尺寸仍按整格。 */
 export const anchorOf = (o: { anchor?: Point }) => ({ x: o.anchor?.x ?? 0, y: o.anchor?.y ?? 0 });
@@ -19,7 +20,6 @@ export const anchorFromPoint = (p: Point): Point => {
   const cx = Math.floor(p.x), cy = Math.floor(p.y);
   return { x: Math.min(2, Math.max(0, Math.floor((p.x - cx) * 3 + 1e-8))), y: Math.min(2, Math.max(0, Math.floor((p.y - cy) * 3 + 1e-8))) };
 };
-export const subKey = (m: GameMap, x: number, y: number) => y * m.width * 3 + x;
 export function fogAt(m: GameMap, L: { fog: number[]; subFog?: Record<number, number> }, x: number, y: number) {
   if (isSubdivided(m, x, y)) return L.subFog?.[subKey(m, Math.floor(x * 3), Math.floor(y * 3))] ?? 0;
   return L.fog[Math.floor(y) * m.width + Math.floor(x)] ?? 0;
@@ -61,11 +61,9 @@ export function characterPathClear(w: World, m: GameMap, a: Point, b: Point, id?
   const radius = 1 / 3; // 0.50m 直径 / 0.75m 主格
   if (Math.min(a.x, b.x) < radius || Math.min(a.y, b.y) < radius || Math.max(a.x, b.x) > m.width - radius || Math.max(a.y, b.y) > m.height - radius) return false;
   if (architectureGeometry(m).some(r => r.blocksMove && circleSweep(a, b, r, radius))) return false;
-  for (let y = Math.max(0, Math.floor(Math.min(a.y, b.y) - radius)); y <= Math.min(m.height - 1, Math.floor(Math.max(a.y, b.y) + radius)); y++)
-    for (let x = Math.max(0, Math.floor(Math.min(a.x, b.x) - radius)); x <= Math.min(m.width - 1, Math.floor(Math.max(a.x, b.x) + radius)); x++) {
-      const t = w.terrains.find(t => t.id === m.cells[y * m.width + x]);
-      if ((!t || t.blocksMove) && circleSweep(a, b, { x, y, w: 1, h: 1 }, radius)) return false;
-    }
+  const area = { x: Math.min(a.x, b.x) - radius, y: Math.min(a.y, b.y) - radius,
+    w: Math.abs(b.x - a.x) + radius * 2, h: Math.abs(b.y - a.y) + radius * 2 };
+  for (const r of terrainBlockers(w, m, area)) if (circleSweep(a, b, r, radius)) return false;
   if (m.objects.some(o => o.enabled !== false && o.kind === 'object' && !isArchitectureObject(o) && (o.physical?.blocksMove ?? (o.blocksWhen ? o.blocksWhen.includes(o.state) : o.height >= 0.5)) && circleSweep(a, b, objectRect(o), radius))) return false;
   return !m.tokens.some(t => t.id !== id && circleSweep(a, b, { ...tokenPosition(t), w: 0, h: 0 }, radius * 2));
 }
