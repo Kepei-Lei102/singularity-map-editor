@@ -13,7 +13,7 @@ await build({
   stdin: { contents: `export * from './src/scene/sight';`, resolveDir: root },
   outfile: bundle, bundle: true, platform: 'node', format: 'cjs', logLevel: 'silent',
 });
-const { eyeHeight, coneFor, cellSightCost, canSee, inCone, visionOf, VISION_BUDGET, BASE_CELL_COST, objectSightCost } = await import(bundle);
+const { eyeHeight, coneFor, cellSightCost, canSee, inCone, visionOf, visionDetailOf, visiblePoint, VISION_BUDGET, BASE_CELL_COST, objectSightCost } = await import(bundle);
 after(() => rm(temp, { recursive: true, force: true }));
 
 const world = { terrains: [
@@ -98,4 +98,19 @@ test('visionOf：锥形 + 预算一起生效', () => {
   assert.equal(vis[9 * 20 + 10], 1);   // 北 1 格
   assert.equal(vis[12 * 20 + 10], 0);  // 南 2 格，在身后
   assert.equal(vis[10 * 20 + 10], 1);  // 自己那格
+});
+
+test('子格视野：衰减仍按整格，只有挡死小块按 1/3 细化', () => {
+  const map = mkMap(20, 3);
+  map.subdivisions = [1 * 20 + 5, 1 * 20 + 6];
+  map.subCells = { [4 * 60 + 15]: 'wall' }; // 第 5 格中间那排、左边 1/3
+  const eye = { x: 1, y: 1, sex: '男' };
+  assert.equal(visiblePoint(world, map, eye, { x: 7.5, y: 1.5 }), false);
+  assert.equal(visiblePoint(world, map, eye, { x: 3.5, y: 1.5 }), true); // 墙前
+  const detail = visionDetailOf(world, map, eye);
+  assert.equal(detail.sub[4 * 60 + 19], 0); // 墙后面的 1/3 小格
+  // 墙挪到下面一排，同一水平线就不再挡
+  map.subCells[5 * 60 + 15] = 'wall';
+  delete map.subCells[4 * 60 + 15];
+  assert.equal(visiblePoint(world, map, eye, { x: 7.5, y: 1.5 }), true);
 });

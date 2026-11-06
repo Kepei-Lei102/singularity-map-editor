@@ -4,7 +4,8 @@ import { objectEnabled } from '../core/objectData.js';
 import { isArchitectureObject, clipArchitecture, fogAt, tokenPosition } from '../scene/architecture';
 import { anyVisible } from '../scene/memory';
 import type { DiceJudgment, Endpoint, GameMap, PlayerClue, VisionLayer, World, Focus, SkillCast, PublicSkill } from '../core/types';
-import { seesPoint, sightCosts, visibleMarks } from '../scene/perception';
+import { visibleMarks } from '../scene/perception';
+import { viewerOf, visiblePoint } from '../scene/sight';
 import { currentPathwayOf, publicSkillsOf } from '../rules/skills';
 import { numbering } from '../scene/render';
 import { getRealWorld, getWorld, getUI, saveNow, worldContext, toast } from '../core/store';
@@ -142,7 +143,8 @@ function judgmentVisible(w: World, j: DiceJudgment, pcId: string): boolean {
   const m = w.maps.find((x) => x.id === j.place!.mapId);
   const t = m?.tokens.find((x) => x.pcId === pcId);
   if (!m || !t) return false;
-  return seesPoint(sightCosts(w, m), m, t, { x: j.place.x, y: j.place.y });
+  const pc = w.party.find((p) => p.id === pcId);
+  return visiblePoint(w, m, viewerOf(t, { sex: pc?.sex, heightCm: pc?.heightCm }), { x: j.place.x, y: j.place.y });
 }
 
 /** Only the bound role's live cells and memory leave the host. */

@@ -7,10 +7,11 @@
 //
 // 视野锥：按格子所在区域取。D20 区 120°，D100 区 60°（恐怖区）。30° 暂不做。
 
-import type { Facing, GameMap, MapObject, Sex, Stance, Token, World } from '../core/types';
+import type { Facing, GameMap, MapObject, Point, Sex, Stance, Token, World } from '../core/types';
 export type { Facing, Sex, Stance } from '../core/types';
 import { objectEnabled } from '../core/objectData.js';
-import { isArchitectureObject } from './architecture';
+import { architectureGeometry, isArchitectureObject, segmentHitsRect } from './architecture';
+import { SUB, subKey, terrainAtSubcell } from './terrain';
 import { cellLine, gridDist } from '../core/util';
 
 /** 视野预算。规则书：无障碍 15 格 = 1.5，＜1.56，所以第 16 格看不见。 */
@@ -121,7 +122,51 @@ export function inCone(facing: Facing, x0: number, y0: number, x1: number, y1: n
 export interface Viewer extends Body {
   x: number;
   y: number;
+  subcell?: Point;   // 绝对子格索引；和 Token.subcell 同一套
   facing?: Facing;   // 不填＝全向（老行为）
+}
+
+/** 观察者的实际眼睛位置。x/y 是所属主格；有 subcell 时用子格中心。 */
+export function eyePoint(v: Viewer): Point {
+  return v.subcell ? { x: (v.subcell.x + 0.5) / SUB, y: (v.subcell.y + 0.5) / SUB } : { x: v.x + 0.5, y: v.y + 0.5 };
+}
+
+/**
+ * 子格挡死表：1 = 这 1/3 小格是完全挡死的（地形 visionCoef ≥ 99）。
+ * 只用于细化遮挡，不参与衰减；整格衰减仍按 cellSightCost。
+ */
+export function sightSubcellBlockers(world: World, map: GameMap): Uint8Array | null {
+  if (!map.subdivisions?.length) return null;
+  const w3 = map.width * SUB, h3 = map.height * SUB;
+  const coef = new Map(world.terrains.map((t) => [t.id, t.visionCoef]));
+  const out = new Uint8Array(w3 * h3);
+  for (let y3 = 0; y3 < h3; y3++) for (let x3 = 0; x3 < w3; x3++) {
+    const c = coef.get(terrainAtSubcell(map, x3, y3)) ?? 0;
+    if (c >= FULL_BLOCK) out[y3 * w3 + x3] = 1;
+  }
+  return out;
+}
+
+/** 高精度线是否穿过挡死子格；起点和终点自身不算。 */
+/** 从 from 点到 to 点，是否穿过挡死子格。地图没细分就是 false。 */
+export function subcellSightBlocked(world: World, map: GameMap, from: Point, to: Point): boolean {
+  const block = sightSubcellBlockers(world, map);
+  if (!block) return false;
+  const w3 = map.width * SUB, h3 = map.height * SUB;
+  const sx = Math.max(0, Math.min(w3 - 1, Math.floor(from.x * SUB))), sy = Math.max(0, Math.min(h3 - 1, Math.floor(from.y * SUB)));
+  const tx = Math.max(0, Math.min(w3 - 1, Math.floor(to.x * SUB))), ty = Math.max(0, Math.min(h3 - 1, Math.floor(to.y * SUB)));
+  return subcellLineBlocked(block, w3, sx, sy, tx, ty);
+}
+
+function subcellLineBlocked(block: Uint8Array, width3: number, x0: number, y0: number, x1: number, y1: number) {
+  const line = cellLine(x0, y0, x1, y1);
+  for (let i = 1; i < line.length - 1; i++) {
+    const [px, py] = line[i - 1], [x, y] = line[i];
+    if (block[y * width3 + x]) return true;
+    // 斜穿 1/3 格墙角：两侧都挡死就过不去
+    if (px !== x && py !== y && block[py * width3 + x] && block[y * width3 + px]) return true;
+  }
+  return false;
 }
 
 /** 一个观察者看得见哪些格。返回 Uint8Array（1 = 看得见）。 */
@@ -139,6 +184,26 @@ export function visionOf(world: World, map: GameMap, viewer: Viewer): Uint8Array
   return vis;
 }
 
+/** 一个人看得见的细分格。粗格仍由 visionOf 决定；这里只细化“线穿过哪块 1/3”。 */
+export function visionDetailOf(world: World, map: GameMap, viewer: Viewer): { vis: Uint8Array; sub: Record<number, number> } {
+  const vis = visionOf(world, map, viewer);
+  const sub: Record<number, number> = {};
+  const block = sightSubcellBlockers(world, map);
+  if (!block || !map.subdivisions?.length) return { vis, sub };
+  const p = eyePoint(viewer);
+  const w3 = map.width * SUB, h3 = map.height * SUB;
+  const ex = Math.max(0, Math.min(w3 - 1, Math.floor(p.x * SUB))), ey = Math.max(0, Math.min(h3 - 1, Math.floor(p.y * SUB)));
+  for (const idx of map.subdivisions) {
+    const x = idx % map.width, y = Math.floor(idx / map.width);
+    if (!vis[idx]) continue;
+    for (let sy = 0; sy < SUB; sy++) for (let sx = 0; sx < SUB; sx++) {
+      const x3 = x * SUB + sx, y3 = y * SUB + sy;
+      sub[subKey(map, x3, y3)] = subcellLineBlocked(block, w3, ex, ey, x3, y3) ? 0 : 1;
+    }
+  }
+  return { vis, sub };
+}
+
 /** 队伍视野：各人取并集。 */
 export function partyVisionOf(world: World, map: GameMap, viewers: Viewer[]): Uint8Array {
   const out = new Uint8Array(map.width * map.height);
@@ -149,7 +214,36 @@ export function partyVisionOf(world: World, map: GameMap, viewers: Viewer[]): Ui
   return out;
 }
 
+/** 队伍视野，细到 1/3 小格。 */
+export function partyVisionDetailOf(world: World, map: GameMap, viewers: Viewer[]): { vis: Uint8Array; sub: Record<number, number> } {
+  const vis = new Uint8Array(map.width * map.height), sub: Record<number, number> = {};
+  for (const v of viewers) {
+    const one = visionDetailOf(world, map, v);
+    for (let i = 0; i < vis.length; i++) if (one.vis[i]) vis[i] = 1;
+    for (const [k, val] of Object.entries(one.sub)) if (val) sub[+k] = 1;
+  }
+  return { vis, sub };
+}
+
+/**
+ * 一个点能不能被这双眼睛看到。口径和规则书视野一致：
+ * 主格衰减走 canSee（包含目标格），建筑薄墙走连续几何，子格挡死表只细化遮挡。
+ * 用于开门、判定可见性、滑块、看清范围这类“点”判定，不走老的 sightCosts。
+ */
+export function visiblePoint(world: World, map: GameMap, eye: Viewer, target: Point, geometry?: ReturnType<typeof architectureGeometry>): boolean {
+  const p = eyePoint(eye);
+  if (p.x < 0 || p.y < 0 || p.x > map.width || p.y > map.height || target.x < 0 || target.y < 0 || target.x > map.width || target.y > map.height) return false;
+  const x0 = Math.floor(p.x), y0 = Math.floor(p.y), x1 = Math.floor(target.x), y1 = Math.floor(target.y);
+  const cost = cellSightCost(world, map, eyeHeight(eye));
+  if (!canSee(cost, map.width, x0, y0, x1, y1)) return false;
+  if (eye.facing && !inCone(eye.facing, p.x, p.y, target.x, target.y, coneFor(map, x0, y0))) return false;
+  const g = geometry ?? architectureGeometry(map);
+  if (g.some((r) => r.blocksSight && segmentHitsRect(p, target, r))) return false;
+  if (subcellSightBlocked(world, map, p, target)) return false;
+  return true;
+}
+
 /** 把 Token 转成观察者。朝向与姿态是可选字段，没写就是全向站立。 */
 export function viewerOf(t: Token & { facing?: Facing; stance?: Stance }, body: Body = {}): Viewer {
-  return { x: t.x, y: t.y, facing: t.facing, stance: t.stance ?? body.stance, sex: body.sex, heightCm: body.heightCm };
+  return { x: t.x, y: t.y, subcell: t.subcell, facing: t.facing, stance: t.stance ?? body.stance, sex: body.sex, heightCm: body.heightCm };
 }

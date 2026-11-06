@@ -6,7 +6,8 @@ import { produce } from 'immer';
 import type { Draft } from 'immer';
 import JSZip from 'jszip';
 import { getUI, getWorld, reachableWorlds, replaceWorld, setUI, toast, update, worldContext, type Selection } from '../core/store';
-import { blocksMovement, pcWithin, seesPoint, sightCosts, withVision } from '../scene/perception';
+import { blocksMovement, pcWithin, withVision } from '../scene/perception';
+import { viewerOf, visiblePoint } from '../scene/sight';
 import { subKey, terrainAtSubcell } from '../scene/terrain';
 import { objectRect } from '../scene/architecture';
 import { applyKnowledge, type KnowledgeEffect } from '../rules/interaction';
@@ -1285,7 +1286,8 @@ function doorInteractionError(m: GameMap, id: string): string | null {
   if (!rect || !t || door.hidden) return '需要靠近门才能开关';
   const mid = { x: rect.x + rect.w / 2, y: rect.y + rect.h / 2 };
   const geometry = architectureGeometry(m).filter(r => r.objectId !== id);
-  if (Math.hypot(tokenPosition(t).x - mid.x, tokenPosition(t).y - mid.y) > 1.5 || !seesPoint(sightCosts(getWorld(), m), m, t, mid, geometry)) return '需要靠近门才能开关';
+  const world = getWorld(), pc = world.party.find(p => p.id === t.pcId);
+  if (Math.hypot(tokenPosition(t).x - mid.x, tokenPosition(t).y - mid.y) > 1.5 || !visiblePoint(world, m, viewerOf(t, { sex: pc?.sex, heightCm: pc?.heightCm }), mid, geometry)) return '需要靠近门才能开关';
   return null;
 }
 export function toggleArchitectureDoor(mapId: string, id: string): string | null {

@@ -2,7 +2,7 @@ import { objectEnabled } from '../core/objectData.js';
 import { architectureBlocksSight, architectureGeometry, isArchitectureObject, segmentHitsRect, tokenPosition, isSubdivided, subKey } from './architecture';
 import { produce } from 'immer';
 import type { GameMap, MapObject, Token, VisionLayer, World } from '../core/types';
-import { partyVisionOf, viewerOf } from './sight';
+import { partyVisionDetailOf, subcellSightBlocked, visiblePoint, viewerOf, type Viewer } from './sight';
 import { cloneLayer, emptyVision, mergeLayers, visionKey } from './vision';
 import { cellLine, gridDist } from '../core/util';
 
@@ -77,15 +77,15 @@ export function seesPoint(cost: Float32Array, map: GameMap, eye: { x: number; y:
   const p = tokenPosition(eye);
   return canSee(cost, map.width, Math.floor(p.x), Math.floor(p.y), Math.floor(target.x), Math.floor(target.y)) && !(geometry ? geometry.some(r => r.blocksSight && segmentHitsRect(p, target, r)) : architectureBlocksSight(map, p, target));
 }
-function sightToObject(cost: Float32Array, map: GameMap, t: { x: number; y: number; subcell?: { x: number; y: number } }, o: MapObject) {
+function sightToObject(world: World, map: GameMap, eye: Viewer, o: MapObject) {
   if (!objectEnabled(map, o)) return { d: Infinity, los: false };
-  const p = tokenPosition(t);
+  const p = tokenPosition(eye);
   let best = { d: Infinity, los: false };
   if (isArchitectureObject(o)) {
     const geometry = architectureGeometry(map, true), others = geometry.filter(r => r.objectId !== o.id && r.blocksSight);
     for (const r of geometry.filter(r => r.objectId === o.id)) {
       const target = { x: Math.max(r.x, Math.min(r.x + r.w, p.x)), y: Math.max(r.y, Math.min(r.y + r.h, p.y)) };
-      const d = gridDist(target.x - p.x, target.y - p.y), los = seesPoint(cost, map, t, target, others);
+      const d = gridDist(target.x - p.x, target.y - p.y), los = visiblePoint(world, map, eye, target, others);
       if ((los && !best.los) || los === best.los && d < best.d) best = { d, los };
     }
     return best;
@@ -94,7 +94,7 @@ function sightToObject(cost: Float32Array, map: GameMap, t: { x: number; y: numb
     const fine = isSubdivided(map, x, y), n = fine ? 3 : 1;
     for (let sy = 0; sy < n; sy++) for (let sx = 0; sx < n; sx++) {
       const target = { x: x + (sx + 0.5) / n, y: y + (sy + 0.5) / n };
-      const d = gridDist(target.x - p.x, target.y - p.y), los = seesPoint(cost, map, t, target);
+      const d = gridDist(target.x - p.x, target.y - p.y), los = visiblePoint(world, map, eye, target);
       if ((los && !best.los) || los === best.los && d < best.d) best = { d, los };
     }
   }
@@ -107,7 +107,7 @@ export function detailedVision(world: World, map: GameMap, eyes: { x: number; y:
     const n = isSubdivided(map, x, y) ? 3 : 1;
     for (let sy = 0; sy < n; sy++) for (let sx = 0; sx < n; sx++) {
       const target = { x: x + (sx + 0.5) / n, y: y + (sy + 0.5) / n };
-      const visible = eyes.some(t => seesPoint(cost, map, t, target, geometry)) ? 1 : 0;
+      const visible = eyes.some(t => seesPoint(cost, map, t, target, geometry) && !subcellSightBlocked(world, map, tokenPosition(t), target)) ? 1 : 0;
       if (visible) vis[y * map.width + x] = 1;
       if (n === 3) sub[subKey(map, x * 3 + sx, y * 3 + sy)] = visible;
     }
@@ -121,21 +121,14 @@ export type VisionAlgo = 'legacy' | 'rulebook';
 
 /**
  * 规则书视野。只有棋子才有朝向和姿态，所以这里收棋子列表而不是坐标。
- * 子格：细分格整格同可见性（粗粒度），暂时不做子格级别的视线。
+ * 子格：主格衰减仍按整格；细分格再用 1/3 精度判断线穿过的挡死小块。
  */
 export function detailedVisionRulebook(world: World, map: GameMap, tokens: Token[]): { vis: Uint8Array; sub: Record<number, number> } {
   const viewers = tokens.map((t) => {
     const pc = world.party.find((p) => p.id === t.pcId);
     return viewerOf(t, { sex: pc?.sex, heightCm: pc?.heightCm });
   });
-  const vis = partyVisionOf(world, map, viewers);
-  const sub: Record<number, number> = {};
-  for (let y = 0; y < map.height; y++) for (let x = 0; x < map.width; x++) {
-    if (!isSubdivided(map, x, y)) continue;
-    const v = vis[y * map.width + x];
-    for (let sy = 0; sy < 3; sy++) for (let sx = 0; sx < 3; sx++) sub[subKey(map, x * 3 + sx, y * 3 + sy)] = v;
-  }
-  return { vis, sub };
+  return partyVisionDetailOf(world, map, viewers);
 }
 
 /** 全队能看见的格子。 */
@@ -189,11 +182,12 @@ export interface Nearest { tokenId: string; name: string; d: number; los: boolea
 
 /** 离物件最近的玩家角色（优先看得见的）。 */
 export function nearestPc(world: World, map: GameMap, o: MapObject): Nearest | null {
-  const cost = sightCosts(world, map);
   let best: Nearest | null = null;
   for (const t of map.tokens) {
     if (!t.pcId) continue;
-    const { d, los } = sightToObject(cost, map, t, o);
+    const pc = world.party.find((p) => p.id === t.pcId);
+    const eye = viewerOf(t, { sex: pc?.sex, heightCm: pc?.heightCm });
+    const { d, los } = sightToObject(world, map, eye, o);
     const better = !best || (los && !best.los) || (los === best.los && d < best.d);
     if (better) best = { tokenId: t.id, name: t.name, d, los };
   }
@@ -202,10 +196,11 @@ export function nearestPc(world: World, map: GameMap, o: MapObject): Nearest | n
 
 /** 有没有哪个玩家角色在 range 以内、且看得见。 */
 export function pcWithin(world: World, map: GameMap, o: MapObject, range: number) {
-  const cost = sightCosts(world, map);
   return map.tokens.find((t) => {
     if (!t.pcId) return false;
-    const result = sightToObject(cost, map, t, o);
+    const pc = world.party.find((p) => p.id === t.pcId);
+    const eye = viewerOf(t, { sex: pc?.sex, heightCm: pc?.heightCm });
+    const result = sightToObject(world, map, eye, o);
     return result.los && result.d <= range;
   });
 }

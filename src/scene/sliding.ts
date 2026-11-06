@@ -1,15 +1,17 @@
 import type { GameMap, World } from '../core/types';
 import { objectEnabled } from '../core/objectData.js';
 import { objectStateError, isArchitectureObject, furnitureSweepBlocked, isSubdivided, tokenPosition } from './architecture';
-import { blocksMovement, seesPoint, sightCosts } from './perception';
+import { blocksMovement } from './perception';
+import { viewerOf, visiblePoint } from './sight';
 
 /** 当前操控者确实看见家具的一部分，记忆与队友视野不算。 */
 export function seesSlidingObject(world: World, map: GameMap, objectId: string, tokenId: string): boolean {
   const o = map.objects.find(o => o.id === objectId), t = map.tokens.find(t => t.id === tokenId);
   if (!o || !objectEnabled(map, o) || o.hidden || !t) return false;
-  const cost = sightCosts(world, map);
+  const pc = world.party.find((p) => p.id === t.pcId);
+  const eye = viewerOf(t, { sex: pc?.sex, heightCm: pc?.heightCm });
   for (let y = o.y; y < o.y + o.h; y++) for (let x = o.x; x < o.x + o.w; x++)
-    { const n = isSubdivided(map, x, y) ? 3 : 1; for (let sy = 0; sy < n; sy++) for (let sx = 0; sx < n; sx++) if (seesPoint(cost, map, t, { x: x + (sx + .5) / n, y: y + (sy + .5) / n })) return true; }
+    { const n = isSubdivided(map, x, y) ? 3 : 1; for (let sy = 0; sy < n; sy++) for (let sx = 0; sx < n; sx++) if (visiblePoint(world, map, eye, { x: x + (sx + .5) / n, y: y + (sy + .5) / n })) return true; }
   return false;
 }
 
