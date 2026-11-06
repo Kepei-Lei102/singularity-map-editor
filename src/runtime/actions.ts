@@ -954,7 +954,7 @@ async function commitImport(w: World, files: { id: string; blob: Blob }[], ctx =
   return true;
 }
 
-async function importProject(file: File, ctx: string) {
+async function importProject(file: File, ctx: string): Promise<boolean> {
   try {
     let w: World;
     const files: { id: string; blob: Blob }[] = [];
@@ -974,11 +974,13 @@ async function importProject(file: File, ctx: string) {
     const have = new Set(files.map((f) => f.id));
     const missing: string[] = [];
     for (const m of w.media) if (!have.has(m.id) && !(await readRaw(m.key ?? m.id))) missing.push(m.name);
-    if (!(await commitImport(w, files, ctx))) return;
+    if (!(await commitImport(w, files, ctx))) return false;
     setUI({ mapId: w.maps[0].id, selection: null, views: {}, flowId: w.flows[0]?.id ?? null });
     toast(`已导入：${w.name}${missing.length ? `（缺 ${missing.length} 个媒体文件：${missing.join('、')}）` : ''}`);
+    return true;
   } catch (e) {
     toast('导入失败：' + (e as Error).message);
+    return false;
   }
 }
 
@@ -1000,16 +1002,18 @@ export function exportSessionMarkdown() {
   download(`${w.name}-第${s}场记录.md`, out.join('\n'), 'text/markdown');
 }
 
-async function importRabbitholeFile(file: File, ctx: string) {
+async function importRabbitholeFile(file: File, ctx: string): Promise<boolean> {
   try {
     const { importRabbithole } = await import('./importRabbithole');
     const { world, blobs, summary } = await importRabbithole(file);
     checkWorld(world, true);
-    if (!(await commitImport(world, blobs, ctx))) return;
+    if (!(await commitImport(world, blobs, ctx))) return false;
     setUI({ mapId: world.maps[0].id, selection: null, views: {}, flowId: world.flows[0]?.id ?? null, mode: 'edit', tool: 'select' });
     toast(summary);
+    return true;
   } catch (e) {
     toast('Rabbithole 导入失败：' + (e as Error).message);
+    return false;
   }
 }
 
@@ -1048,9 +1052,9 @@ export async function restoreBackup() {
 }
 
 /** 自动认出文件类型：本编辑器的工程，或 Rabbithole 的地图。 */
-export async function importAnyFile(file: File) {
-  if (getUI().trial) return toast('试玩中不能导入，先结束试玩');
-  await exclusive('导入', async () => { // 从读文件的第一步就占住：这期间不能试玩、保存、再导入
+export async function importAnyFile(file: File): Promise<boolean> {
+  if (getUI().trial) { toast('试玩中不能导入，先结束试玩'); return false; }
+  const ok = await exclusive('导入', async () => { // 从读文件的第一步就占住：这期间不能试玩、保存、再导入
     const ctx = worldContext();
     let rabbithole = false;
     try {
@@ -1062,21 +1066,24 @@ export async function importAnyFile(file: File) {
         rabbithole = !zip.file('world.json') && !!zip.file('map.json');
       }
     } catch (e) {
-      return toast('读不了这个文件：' + (e as Error).message);
+      toast('读不了这个文件：' + (e as Error).message);
+      return false;
     }
-    await (rabbithole ? importRabbitholeFile(file, ctx) : importProject(file, ctx));
+    return rabbithole ? importRabbitholeFile(file, ctx) : importProject(file, ctx);
   });
+  return ok ?? false;
 }
 
 /** 用命令行带文件启动时（npm start -- 文件），打开页面就自动导入。 */
 export async function autoLoadFromLauncher() {
   const name = new URLSearchParams(location.search).get('load');
   if (!name) return;
-  history.replaceState(null, '', location.pathname); // 刷新页面时不再重复导入
   try {
     const res = await fetch('/__load');
     if (!res.ok) throw new Error((await res.text().catch(() => '')) || `启动器没有提供文件（${res.status}）`);
-    await importAnyFile(new File([await res.blob()], name));
+    const done = await importAnyFile(new File([await res.blob()], name));
+    // 导入成功之后才去掉 ?load：大工程读到一半刷新，页面会重新导入而不是退回浏览器里的旧自动保存。
+    if (done) history.replaceState(null, '', location.pathname);
   } catch (e) {
     toast('自动导入失败：' + (e as Error).message);
   }
