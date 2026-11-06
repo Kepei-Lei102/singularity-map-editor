@@ -414,7 +414,18 @@ export function checkWorld(w, migrated = false) {
     endpoint(cn.a, `${ca}.a`); endpoint(cn.b, `${ca}.b`);
   });
   unique(w.connections, 'connections');
-  arr(w.party, 'party').forEach((p, i) => { obj(p, `party[${i}]`); id(p.id, `party[${i}].id`); str(p.name, `party[${i}].name`); str(p.color, `party[${i}].color`); strings(p.tags, `party[${i}].tags`); });
+  arr(w.party, 'party').forEach((p, i) => {
+    obj(p, `party[${i}]`); id(p.id, `party[${i}].id`); str(p.name, `party[${i}].name`); str(p.color, `party[${i}].color`); strings(p.tags, `party[${i}].tags`);
+    if (p.avatar !== undefined) {
+      optStr(p.avatar, `party[${i}].avatar`);
+      if (!/^data:image\/(png|jpeg|webp);base64,/.test(p.avatar)) fail(`party[${i}].avatar`, '头像必须是 data:image/…;base64 的小图');
+      if (p.avatar.length > 262144) fail(`party[${i}].avatar`, '头像太大（上限 256KB），重新上传小图');
+    }
+    if (p.me !== undefined) num(p.me, `party[${i}].me`, 0);
+    if (p.meMax !== undefined) num(p.meMax, `party[${i}].meMax`, 0);
+    if (p.pathway !== undefined) optStr(p.pathway, `party[${i}].pathway`);
+    for (const skill of p.skills ?? []) optStr(skill, `party[${i}].skills`);
+  });
   unique(w.party, 'party');
   if (w.judgments !== undefined) {
     arr(w.judgments, 'judgments').forEach((j, i) => {

@@ -145,8 +145,44 @@ test('不是同意阶段的回传不处理', () => {
 test('发给玩家窗口的技能只有公开字段', () => {
   const all = api.publicSkillsOf(['037-9-101', '999-不存在']);
   assert.equal(all.length, 1);
-  assert.deepEqual(Object.keys(all[0]).sort(), ['desc', 'group', 'id', 'name', 'pathway', 'sequence']);
+  assert.deepEqual(Object.keys(all[0]).sort(), ['desc', 'group', 'id', 'me', 'name', 'pathway', 'sequence']);
   const mine = api.publicSkillsOf(['037-9-101', '037-9-102', '037-9-003', '037-9-201', '037-9-101']);
   assert.equal(mine.length, 4); // 重复 id 不重复发
-  assert.ok(!('check' in mine[0]) && !('actionId' in mine[0]) && !('me' in mine[0]));
+  assert.ok(!('check' in mine[0]) && !('actionId' in mine[0]));
+});
+
+test('发动就扣 ME；换途径多扣 1 点，取消退回', () => {
+  fixture();
+  api.update((d) => { const pc = d.party[0]; pc.me = 10; pc.meMax = 10; pc.pathway = '游戏鉴赏家'; });
+  assert.equal(api.beginSkillCast('pc', '037-9-101', 'player'), null); // 金手指途径的冥想
+  assert.equal(api.castOf().meCost, 2); // 冥想 1 + 换途径 1
+  assert.equal(api.getWorld().party[0].me, 8);
+  assert.equal(api.getWorld().party[0].pathway, '金手指途径');
+  api.cancelSkillCast('测完取消');
+  assert.equal(api.getWorld().party[0].me, 10);
+  assert.equal(api.getWorld().party[0].pathway, '游戏鉴赏家');
+  assert.equal(api.castOf(), null);
+});
+
+test('同途径不额外扣，ME 不够时拒绝发起', () => {
+  fixture();
+  api.update((d) => { const pc = d.party[0]; pc.me = 1; pc.pathway = '金手指途径'; });
+  assert.equal(api.beginSkillCast('pc', '037-9-101', 'player'), null);
+  assert.equal(api.castOf().meCost, 1);
+  assert.equal(api.getWorld().party[0].me, 0);
+  api.closeSkillCast();
+
+  api.update((d) => { const pc = d.party[0]; pc.me = 1; pc.pathway = '游戏鉴赏家'; });
+  assert.match(api.beginSkillCast('pc', '037-9-101', 'player') ?? '', /ME 不够/);
+  assert.equal(api.castOf(), null);
+});
+
+test('见证者代发起：玩家点头时才扣 ME', () => {
+  fixture();
+  api.update((d) => { const pc = d.party[0]; pc.me = 5; pc.meMax = 5; pc.pathway = '金手指途径'; });
+  api.beginSkillCast('pc', '037-9-101', 'gm');
+  assert.equal(api.getWorld().party[0].me, 5); // 还没点头，不扣
+  api.approveSkillCast(true);
+  assert.equal(api.getWorld().party[0].me, 4);
+  api.closeSkillCast();
 });

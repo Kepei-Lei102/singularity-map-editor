@@ -1,9 +1,10 @@
 // 技能发动：玩家自己发起 / 见证者代发起，两条入口落在同一个状态上。
 // 发动期间用统一的 focus 暂停别人（玩家窗口只能看不能动）。
 
-import { getUI, getWorld, setUI, toast } from '../core/store';
+import { getUI, getWorld, setUI, toast, update } from '../core/store';
 import { pushFocus } from '../runtime/sync';
-import { SKILL_LIBRARY, type SkillDef } from './skills';
+import { castCost, skillById } from './skills';
+export { skillById };
 import { ATTRS, resolve, type Attr } from './interaction';
 import type { SkillCast } from '../core/types';
 export type { SkillCast } from '../core/types';
@@ -12,8 +13,29 @@ import { uid } from '../core/util';
 export const APPROVAL_TIMEOUT_MS = 60_000;
 
 
-export const skillById = (id: string): SkillDef | undefined => SKILL_LIBRARY.find((s) => s.id === id);
 export const castOf = (): SkillCast | null => (getUI().cast as SkillCast | null) ?? null;
+
+/** 发动即扣：扣 ME，并把当前途径换过去。取消时按 charged 退。 */
+function charge(c: SkillCast) {
+  const cost = c.meCost ?? 0;
+  update((d) => {
+    const pc = d.party.find((p) => p.id === c.actorPcId);
+    if (!pc) return;
+    if (cost > 0 && pc.me != null) pc.me = Math.max(0, pc.me - cost);
+    if (c.pathwayTo) pc.pathway = c.pathwayTo;
+  });
+  setCast({ ...c, charged: cost });
+}
+function refund(c: SkillCast) {
+  const back = c.charged ?? 0;
+  if (!back) return;
+  update((d) => {
+    const pc = d.party.find((p) => p.id === c.actorPcId);
+    if (!pc) return;
+    if (pc.me != null) pc.me = Math.min(pc.meMax ?? Infinity, pc.me + back);
+    if (c.pathwayFrom) pc.pathway = c.pathwayFrom; // 没发动成，途径也退回原来的
+  });
+}
 
 function pcName(pcId: string): string {
   return getWorld().party.find((p) => p.id === pcId)?.name ?? '某人';
@@ -28,13 +50,20 @@ function setCast(next: SkillCast | null) {
 export function beginSkillCast(actorPcId: string, skillId: string, initiator: 'player' | 'gm'): string | null {
   if (!skillById(skillId)) return '没有这个技能';
   if (castOf()) return '已经有技能在发动中，先处理完';
-  if (!getWorld().party.some((p) => p.id === actorPcId)) return '找不到这个角色';
+  const pc = getWorld().party.find((p) => p.id === actorPcId);
+  if (!pc) return '找不到这个角色';
+  const skill = skillById(skillId)!;
+  const { cost, from } = castCost(pc, skill);
+  if (pc.me != null && pc.me < cost) return `ME 不够：【${skill.name}】要 ${cost} ME，现在只有 ${pc.me}`;
   const cast: SkillCast = {
     id: uid(), actorPcId, skillId, initiator,
     step: initiator === 'gm' ? 'approval' : 'confirm',
     expiresAt: initiator === 'gm' ? Date.now() + APPROVAL_TIMEOUT_MS : undefined,
+    meCost: cost, pathwayFrom: from ?? undefined, pathwayTo: skill.pathway,
   };
   setCast(cast);
+  // 玩家自己发起：当场算发动，直接扣；见证者代发起要等玩家点头才扣。
+  if (initiator === 'player') charge(cast);
   return null;
 }
 
@@ -45,7 +74,9 @@ export function approveSkillCast(ok = true): string | null {
   if (c.step !== 'approval') return '这个技能已经同意过了';
   if (c.expiresAt && c.expiresAt <= Date.now()) { cancelSkillCast('玩家没在时限内回应，视为休眠'); return '已超时'; }
   if (!ok) { cancelSkillCast('玩家不同意'); return null; }
-  setCast({ ...c, step: 'confirm', expiresAt: undefined });
+  const next: SkillCast = { ...c, step: 'confirm', expiresAt: undefined };
+  setCast(next);
+  charge(next); // 玩家点头了，才算发动，这时扣 ME
   return null;
 }
 
@@ -85,6 +116,8 @@ export function closeSkillCast(note?: string): void {
 }
 
 export function cancelSkillCast(reason = '取消'): void {
+  const c = castOf();
+  if (c && c.step !== 'approval') refund(c); // 还没点头就取消的不退（没扣过）；点头后取消退回去
   setCast(null);
   toast(`技能发动取消：${reason}`);
 }

@@ -3,9 +3,9 @@ import { openPlayerWindow } from '../runtime/sync';
 import { useState } from 'react';
 import { setUI, update, useWorld } from '../core/store';
 import { PATHWAY_SUGGESTIONS } from '../core/defaults';
-import { SKILL_LIBRARY } from '../rules/skills';
+import { SKILL_LIBRARY, currentPathwayOf } from '../rules/skills';
 import { uid } from '../core/util';
-import { Row, Section, Txt } from './fields';
+import { Num, Row, Section, Txt } from './fields';
 
 const COLORS = ['#e07a5f', '#81b29a', '#f2cc8f', '#3d85c6', '#b07cc6', '#e0a458'];
 
@@ -61,6 +61,34 @@ export function PartyPanel() {
           <button className="small" onClick={() => openPlayerWindow(p.id)}>打开 {p.name} 的玩家窗口</button>
           <Row label="途径"><TagInput tags={p.tags} onChange={(t) => update((d) => { d.party.find((x) => x.id === p.id)!.tags = t; })} /></Row>
           <button className="small" onClick={() => setUI({ tool: 'token', tokenPcId: p.id })}>在地图上放棋子</button>
+          <Row label="当前途径"><select value={p.pathway ?? ''} onChange={(e) => update((d) => {
+            const pc = d.party.find((x) => x.id === p.id)!;
+            if (e.target.value) pc.pathway = e.target.value; else delete pc.pathway;
+          })}>
+            <option value="">按已解锁技能自动（{currentPathwayOf(p) ?? '未设定'}）</option>
+            {[...new Set(SKILL_LIBRARY.map((s) => s.pathway))].map((x) => <option key={x} value={x}>{x}</option>)}
+          </select></Row>
+          <Row label="头像"><span className="inline">
+            {p.avatar && <img className="pc-avatar" src={p.avatar} alt="" />}
+            <label className="upload small">上传<input type="file" accept="image/*" onChange={(e) => {
+              const f = e.target.files?.[0]; e.target.value = '';
+              if (!f) return;
+              const img = new Image();
+              img.onload = () => {
+                const c = document.createElement('canvas'); c.width = c.height = 96;
+                const ctx = c.getContext('2d')!; const s = Math.min(img.width, img.height);
+                ctx.drawImage(img, (img.width - s) / 2, (img.height - s) / 2, s, s, 0, 0, 96, 96);
+                update((d) => { d.party.find((x) => x.id === p.id)!.avatar = c.toDataURL('image/png'); });
+              };
+              img.src = URL.createObjectURL(f);
+            }} /></label>
+            {p.avatar && <button className="small" onClick={() => update((d) => { delete d.party.find((x) => x.id === p.id)!.avatar; })}>清除</button>}
+          </span></Row>
+          <Row label="ME"><span className="inline">
+            <Num value={p.me ?? 0} min={0} onChange={(v) => update((d) => { d.party.find((x) => x.id === p.id)!.me = Math.max(0, Number.isFinite(v) ? v : 0); })} /> /
+            <Num value={p.meMax ?? 10} min={0} onChange={(v) => update((d) => { d.party.find((x) => x.id === p.id)!.meMax = Math.max(0, Number.isFinite(v) ? v : 0); })} />
+          </span></Row>
+          <div className="hint">只能发动「当前途径」下的技能；换途径多付 1 ME。ME 留空就不扣也不拦。</div>
           <details className="pc-skills">
             <summary>已解锁技能 <span className="muted">{p.skills?.length ?? 0}</span></summary>
             {SKILL_LIBRARY.map((s) => (

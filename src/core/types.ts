@@ -169,7 +169,7 @@ export interface GameMap {
 
 /** 玩家记得的物件样子。回到灰区之前，物件怎么变玩家都不知道。 */
 /** 发给玩家窗口的技能说明：只有公开的那部分，私有实现不进玩家端数据。 */
-export interface PublicSkill { id: string; name: string; pathway: string; group: string; sequence: number; desc: string }
+export interface PublicSkill { id: string; name: string; pathway: string; group: string; sequence: number; desc: string; me: number }
 
 export interface SeenObject {
   id: Id;
@@ -250,6 +250,13 @@ export interface PC {
   sex?: Sex; // 不填按「其他」算，默认身高 170
   heightCm?: number; // 不填按性别默认
   skills?: string[]; // 已解锁的技能 id（技能数据随编辑器走）
+  /** 当前发动的途径。只能发动这个途径下的技能；换途径要付 1 ME。不填就按第一个已解锁技能的途径算。 */
+  pathway?: string;
+  /** 当前 ME。角色卡还没导入时留空：留空就不扣也不拦。 */
+  me?: number;
+  meMax?: number;
+  /** 头像：编辑器里压成 96×96 的小图，data URL 存在工程里，跟着工程走。 */
+  avatar?: string;
 }
 
 export interface Effect {
@@ -445,6 +452,13 @@ export interface Focus {
 /** 技能发动状态机。玩家发起和见证者代发起共用这一份状态。 */
 export type CastStep = 'approval' | 'confirm' | 'result';
 export interface SkillCast {
+  /** 这次发动的 ME 消耗（含换途径的 1 点）。 */
+  meCost?: number;
+  /** 换途径：从哪个途径换到哪个。 */
+  pathwayFrom?: string;
+  pathwayTo?: string;
+  /** 已经扣掉的 ME（取消时按这个数退）。 */
+  charged?: number;
   id: string;
   actorPcId: string;
   skillId: string;

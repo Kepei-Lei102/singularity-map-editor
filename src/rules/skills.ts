@@ -2,7 +2,7 @@
 // 一个技能可以反复调用，ME 消耗按卡走；locked 由角色自己的已解锁列表决定。
 
 import type { CheckSpec } from './interaction';
-import type { PublicSkill } from '../core/types';
+import type { PC, PublicSkill } from '../core/types';
 
 export interface SkillDef {
   id: string; // 技能序号，例如 037-9-101
@@ -16,11 +16,27 @@ export interface SkillDef {
   actionId?: string; // 指向公共动作卡；现在是空，等 actions.json
 }
 
-/** 发给玩家窗口的公开说明：只有 id/名字/途径/组/序列/描述，检查口径与动作卡不进玩家端。 */
+/** 发给玩家窗口的公开说明：只有 id/名字/途径/组/序列/描述/ME，检查口径与动作卡不进玩家端。 */
 export function publicSkillsOf(ids: readonly string[]): PublicSkill[] {
   const wanted = new Set(ids);
   return SKILL_LIBRARY.filter((s) => wanted.has(s.id))
-    .map((s) => ({ id: s.id, name: s.name, pathway: s.pathway, group: s.group, sequence: s.sequence, desc: s.desc }));
+    .map((s) => ({ id: s.id, name: s.name, pathway: s.pathway, group: s.group, sequence: s.sequence, desc: s.desc, me: s.me }));
+}
+
+export const skillById = (id: string): SkillDef | undefined => SKILL_LIBRARY.find((s) => s.id === id);
+
+/** 当前的途径：角色没指定时，按第一个已解锁技能的途径算；一个技能都没有就是 null。 */
+export function currentPathwayOf(pc: Pick<PC, 'pathway' | 'skills'>): string | null {
+  if (pc.pathway) return pc.pathway;
+  for (const id of pc.skills ?? []) { const s = skillById(id); if (s) return s.pathway; }
+  return null;
+}
+
+/** 发动一个技能的 ME 消耗：技能自己的，加上换途径的 1 点。 */
+export function castCost(pc: Pick<PC, 'pathway' | 'skills'>, skill: SkillDef): { cost: number; switching: boolean; from: string | null } {
+  const from = currentPathwayOf(pc);
+  const switching = !!from && from !== skill.pathway;
+  return { cost: skill.me + (switching ? 1 : 0), switching, from };
 }
 
 /** Ian 的 4 条（动作库解锁明细 037-9-*）。密档里还有 2 条，等拿到再补。 */

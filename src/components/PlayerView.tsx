@@ -17,6 +17,8 @@ export function PlayerView() {
   const [cast, setCast] = useState<SkillCast | null>(null);
   const [you, setYou] = useState<string | null>(null);
   const [skills, setSkills] = useState<PublicSkill[]>([]);
+  const [pathway, setPathway] = useState<string | null>(null);
+  const [avatar, setAvatar] = useState<string | null>(null);
 
   useEffect(() => {
     const off = listenAsPlayer((m) => {
@@ -26,6 +28,8 @@ export function PlayerView() {
         setCast(m.cast ?? null);
         setYou(m.you ?? null);
         setSkills(m.skills ?? []);
+        setPathway(m.pathway ?? null);
+        setAvatar(m.avatar ?? null);
       } else if (m.type === 'clear') { setWorld(null); setMedia(null); setFocus(null); setCast(null); }
       else if (m.type === 'play') setMedia({ mediaId: m.mediaId, label: m.label, mime: m.mime, blob: m.blob });
       else if (m.type === 'stop') setMedia(null);
@@ -44,6 +48,7 @@ export function PlayerView() {
     <div className="player">
       {map ? <MapCanvas world={world!} map={map} mode="player" playerNumbers={nums} viewer={undefined} /> : <div className="player-wait">{window.opener ? '等待主持人推送地图……' : '玩家端已就绪。请在创作者／见证者端选择「打开玩家窗口…」中的角色，建立专属视角。'}</div>}
       {map && <div className="player-title">{map.layer} · {map.name}</div>}
+      {map && avatar && <img className="player-avatar" src={avatar} alt="角色头像" />}
       {map && <button className="player-nums" onClick={() => setNums(!nums)}>{nums ? '隐藏编号' : '显示编号'}</button>}
       {map && <span className="player-viewer">{world!.party[0]?.name} 的视角</span>}
       {clues.length > 0 && (
@@ -59,10 +64,11 @@ export function PlayerView() {
       )}
       {skills.length > 0 && (
         <details className="player-skills">
-          <summary>我的技能 <span className="muted">{skills.length}</span></summary>
+          <summary>我的技能 <span className="muted">{skills.length}</span>{pathway && <span className="muted"> · 当前途径：{pathway}</span>}</summary>
           {skills.map((s) => (
             <div key={s.id} className="player-skill">
-              <b>【{s.name}】</b> <span className="muted">{s.pathway} · 序列 {s.sequence}</span>
+              <b>【{s.name}】</b> <span className="muted">{s.pathway} · 序列 {s.sequence} · {s.me} ME</span>
+              {pathway && s.pathway !== pathway && <span className="badge">换途径 +1 ME</span>}
               <div>{s.desc}</div>
             </div>
           ))}

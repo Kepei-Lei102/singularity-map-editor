@@ -5,7 +5,7 @@ import { isArchitectureObject, clipArchitecture, fogAt, tokenPosition } from '..
 import { anyVisible } from '../scene/memory';
 import type { Endpoint, GameMap, PlayerClue, VisionLayer, World, Focus, SkillCast, PublicSkill } from '../core/types';
 import { visibleMarks } from '../scene/perception';
-import { publicSkillsOf } from '../rules/skills';
+import { currentPathwayOf, publicSkillsOf } from '../rules/skills';
 import { numbering } from '../scene/render';
 import { getRealWorld, getWorld, getUI, saveNow, worldContext, toast } from '../core/store';
 import { SESSION, rand, renewSession } from '../core/session';
@@ -17,7 +17,7 @@ import { onProjectReplaced, projectContext } from '../core/store';
 // 公共 BroadcastChannel 只传会话占用与存活，不传 world、角色或绑定凭据。
 
 export type SyncBody =
-  | { type: 'world'; world: World; focus?: Focus | null; cast?: SkillCast | null; you?: string; skills?: PublicSkill[] }
+  | { type: 'world'; world: World; focus?: Focus | null; cast?: SkillCast | null; you?: string; skills?: PublicSkill[]; pathway?: string | null; avatar?: string | null }
   | { type: 'skill-decision'; castId: string; ok: boolean } // 玩家窗口回传：同不同意发动
   | { type: 'hello'; binding?: string }
   | { type: 'clear' }
@@ -181,7 +181,9 @@ export function send(body: SyncBody, to?: string) {
       const out: SyncBody = !valid
         ? { type: 'clear' }
         : body.type === 'world'
-          ? { type: 'world', world: playerWorld(w, mapId, p.pcId), focus: getUI().focus ?? null, cast: getUI().cast ?? null, you: p.pcId, skills: publicSkillsOf(w.party.find((pc) => pc.id === p.pcId)?.skills ?? []) }
+          ? { type: 'world', world: playerWorld(w, mapId, p.pcId), focus: getUI().focus ?? null, cast: getUI().cast ?? null, you: p.pcId, skills: publicSkillsOf(w.party.find((pc) => pc.id === p.pcId)?.skills ?? []),
+            pathway: currentPathwayOf(w.party.find((pc) => pc.id === p.pcId) ?? { skills: [] }),
+            avatar: w.party.find((pc) => pc.id === p.pcId)?.avatar ?? null }
           : body;
       try { p.win.postMessage(msg(out), target()); } catch { /* closed */ }
       if (!valid) { players.delete(binding); saveBindings(); }

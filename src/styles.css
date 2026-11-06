@@ -3,6 +3,8 @@
 .desk-close { float: right; }
 .judgment-panel label { display: grid; gap: 6px; margin: 10px 0; }
 .judgment-panel article { border-top: 1px solid #444; padding: 10px 0; }
+.pc-avatar { width: 36px; height: 36px; border-radius: 50%; object-fit: cover; border: 1px solid #3a3a44; }
+.player-avatar { position: absolute; right: 14px; top: 14px; width: 56px; height: 56px; border-radius: 50%; object-fit: cover; border: 2px solid #3a3a44; z-index: 6; }
 .pc-skills { margin-top: 6px; }
 .pc-skill { display: block; padding: 3px 0; font-size: 13px; }
 .player-skills {

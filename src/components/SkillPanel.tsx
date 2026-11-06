@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { getWorld, useUI, useWorld } from '../core/store';
-import { SKILL_LIBRARY, filterSkills, groupSkills, type SkillDef } from '../rules/skills';
+import { SKILL_LIBRARY, currentPathwayOf, filterSkills, groupSkills, type SkillDef } from '../rules/skills';
 import { objectEnabled } from '../core/objectData.js';
 import { approveSkillCast, beginSkillCast, cancelSkillCast, closeSkillCast, resolveSkillCast, timeoutSkillCast } from '../rules/skillCast';
 
@@ -26,6 +26,8 @@ export function SkillPanel() {
   const [msg, setMsg] = useState('');
   const actor = party.find((p) => p.id === actorId);
   const unlocked = new Set(actor?.skills ?? []);
+  const nowPathway = actor ? currentPathwayOf(actor) : null;
+  const switchNote = (p: string) => (nowPathway && p !== nowPathway ? ' · 换途径 +1 ME' : '');
 
   // 等待同意的倒计时：到点自动视为休眠
   useEffect(() => {
@@ -57,7 +59,7 @@ export function SkillPanel() {
     if (cast.step === 'confirm') return (
       <div className="cast-box">
         <div className="cast-title">确认发动 · 【{skill?.name}】</div>
-        <div className="muted">{actorName} · 消耗 {skill?.me} ME · 判定：{skill?.check ? skill.check.attributes.join('+') : '智慧'}（D20 / DC 20）</div>
+        <div className="muted">{actorName} · 消耗 {cast.meCost ?? skill?.me} ME{cast.pathwayFrom && cast.pathwayTo && cast.pathwayFrom !== cast.pathwayTo ? `（换途径 ${cast.pathwayFrom} → ${cast.pathwayTo}：+1）` : ''} · 判定：{skill?.check ? skill.check.attributes.join('+') : '智慧'}（D20 / DC 20）</div>
         <label>目标<select value={target} onChange={(e) => setTarget(e.target.value)}>
           <option value="">（无目标）</option>
           {world.maps.find((m) => m.id === ui.mapId)?.objects.filter((o) => objectEnabled(world.maps.find((m) => m.id === ui.mapId)!, o)).map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
@@ -100,7 +102,7 @@ export function SkillPanel() {
           {q && hits.length === 0 && <p className="muted">没找到。</p>}
           {q && hits.map((s) => (
             <button key={s.id} className="skill-item" onClick={() => start(s)}>
-              【{s.name}】· {s.group} · {s.me} ME
+              【{s.name}】· {s.group} · {s.me} ME{switchNote(s.pathway)}
             </button>
           ))}
           {!q && (
@@ -108,7 +110,7 @@ export function SkillPanel() {
               <div className="btns">{groups?.map((g) => <button key={g.pathway} className={pathway === g.pathway ? 'on' : ''} onClick={() => { setPathway(g.pathway); setGroup(null); }}>{g.pathway}</button>)}</div>
               {pathway && <div className="btns">{groups?.find((g) => g.pathway === pathway)?.groups.map((g) => <button key={g.name} className={group === g.name ? 'on' : ''} onClick={() => setGroup(g.name)}>{g.name}</button>)}</div>}
               {group && skillsInGroup.map((s) => (
-                <button key={s.id} className="skill-item" onClick={() => start(s)}>【{s.name}】· {s.me} ME</button>
+                <button key={s.id} className="skill-item" onClick={() => start(s)}>【{s.name}】· {s.me} ME{switchNote(s.pathway)}</button>
               ))}
               {pathway && !group && <p className="muted">选一个技能组。</p>}
               {!pathway && <p className="muted">选一个途径。</p>}
