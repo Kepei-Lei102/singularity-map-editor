@@ -27,7 +27,7 @@ export function MediaPanel() {
   };
   return (
     <Section title="媒体库">
-      <div className="hint">文件存在这台电脑的浏览器里。换电脑请用「导出工程」打包带走。</div>
+      <div className="hint">文件存在这台电脑的浏览器里。换电脑请用「文件 → 导出成 zip」打包带走。</div>
       <button className="small" title="删掉浏览器里没有任何工程、存档、备份用到的旧文件" onClick={() => cleanupMedia()}>清理用不到的文件</button>
       <label className="upload">
         上传音频 / 视频 / 图片 / PDF

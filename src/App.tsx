@@ -5,7 +5,7 @@ import { SessionAI } from './components/SessionAI';
 import { SkillPanel } from './components/SkillPanel';
 import { listenPlayerDecisions } from './rules/consent';
 import { canEditMap, getRealWorld, getUI, getWorld, redo, setUI, undo, update, useUI, useWorld, type Mode, type Tab } from './core/store';
-import { autoLoadFromLauncher, checkDiskTarget, deleteMapObject, exportProject, findMap, hasBackup, importAnyFile, restoreBackup, saveToDisk, startFreshWorld } from './runtime/actions';
+import { exportWorldJson, autoLoadFromLauncher, checkDiskTarget, deleteMapObject, exportProject, findMap, hasBackup, importAnyFile, restoreBackup, saveToDisk, startFreshWorld } from './runtime/actions';
 import { demoWorld, emptyWorld } from './core/defaults';
 import { broadcastWorld, listenAsEditor, openPlayerWindow, send } from './runtime/sync';
 import { storageOK } from './core/store';
@@ -151,9 +151,10 @@ function Editor() {
           <summary>文件</summary>
           <div className="menu-body" onClick={(e) => (e.currentTarget.parentElement as HTMLDetailsElement).open = false}>
             {ui.diskTarget && <button onClick={saveToDisk} title={ui.diskTarget}>保存回文件（⌘S）</button>}
-            <button onClick={exportProject}>导出工程（.zip，含媒体）</button>
-            <button onClick={() => fileRef.current?.click()}>导入工程…</button>
-            <button onClick={() => confirm('导入 Rabbithole 地图会替换当前内容，当前内容请先导出。继续？') && rhRef.current?.click()}>导入 Rabbithole 地图（.zip / .json）…</button>
+            <button onClick={exportProject}>导出成 zip（文字数据＋全部媒体）</button>
+            <button onClick={exportWorldJson}>导出成 JSON（只文字数据，不含媒体）</button>
+            <button onClick={() => fileRef.current?.click()}>导入 zip / JSON…</button>
+            <button onClick={() => confirm('导入 Rabbithole 地图会替换当前内容。当前内容请先用「导出成 zip」留一份。继续？') && rhRef.current?.click()}>导入 Rabbithole 地图（zip / JSON，会替换当前内容）…</button>
             <button onClick={() => startFreshWorld(emptyWorld(), '新建空白世界')}>新建空白世界</button>
             <button onClick={() => startFreshWorld(demoWorld(), '载入示例数据')}>载入示例</button>
             {hasBackup() && <button onClick={() => confirm('换回上一次导入前的内容？（现在的内容会存成备份，可以再换回来）') && restoreBackup()}>恢复导入前的内容</button>}
@@ -164,7 +165,7 @@ function Editor() {
         <input ref={fileRef} type="file" accept=".zip,.json" hidden onChange={(e) => { const f = e.target.files?.[0]; if (f) importAnyFile(f); e.target.value = ''; }} />
       </header>
 
-      {!storageOK && <div className="storage-warn">这个浏览器不让本页保存数据（无痕模式或用某些浏览器直接打开本地文件时会这样）。关掉之前请用「文件 → 导出工程」保存。推荐用 Chrome 或 Edge 打开。</div>}
+      {!storageOK && <div className="storage-warn">这个浏览器不让本页保存数据（无痕模式或用某些浏览器直接打开本地文件时会这样）。关掉之前请用「文件 → 导出成 zip」保存。推荐用 Chrome 或 Edge 打开。</div>}
       <div className="main">
         {left.open && <div className="side-wrap" style={{ width: left.width }}><Sidebar /></div>}
         <Splitter side="left" panel={left} max={480} />

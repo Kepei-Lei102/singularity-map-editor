@@ -809,6 +809,15 @@ export async function exportProject() {
   });
 }
 
+/** 只导出文字数据（world.json）：体积小、方便看 diff；媒体文件不跟着走，换电脑请用 zip。 */
+export function exportWorldJson() {
+  if (getUI().trial) return toast('试玩中不能导出，先结束试玩');
+  const w = getWorld();
+  try { checkWorld(w); } catch (e) { return toast('导出失败：' + (e as Error).message); }
+  download(`${w.name || '世界'}.json`, JSON.stringify(w, null, 2), 'application/json');
+  toast(w.media.length ? `已导出 JSON（不含 ${w.media.length} 个媒体文件；换电脑请用「导出成 zip」）` : '已导出 JSON');
+}
+
 /** 用命令行带文件启动时才有：存回硬盘（见 scripts/open.mjs）。 */
 export async function checkDiskTarget() {
   try {
