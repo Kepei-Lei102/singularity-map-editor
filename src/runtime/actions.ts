@@ -9,6 +9,7 @@ import { getUI, getWorld, reachableWorlds, replaceWorld, setUI, toast, update, w
 import { blocksMovement, pcWithin, withVision } from '../scene/perception';
 import { viewerOf, visiblePoint } from '../scene/sight';
 import { subKey, terrainAtSubcell } from '../scene/terrain';
+import { materialAtCell, materialAtSubcell } from '../scene/material';
 import { objectRect } from '../scene/architecture';
 import { applyKnowledge, type KnowledgeEffect } from '../rules/interaction';
 import type { Flow, GameMap, LogEntry, MapObject, MediaAttach, Memory, Room, RoomObjectSnapshot, Tier, World } from '../core/types';
@@ -636,10 +637,15 @@ export function reshapeMaps(mapIds: string[], left: number, top: number, right: 
       for (const o of m.objects) for (const p of o.geometry ? [o.geometry.a, o.geometry.b] : []) { p.x += left * 3; p.y += top * 3; }
       for (const t of m.tokens) if (t.subcell) { t.subcell.x += left * 3; t.subcell.y += top * 3; }
       const shiftSub = <T,>(data: Record<number, T>) => Object.fromEntries(Object.entries(data).flatMap(([key, v]) => { const x = +key % (oldWidth * 3) + left * 3, y = Math.floor(+key / (oldWidth * 3)) + top * 3; return x >= 0 && y >= 0 && x < W * 3 && y < H * 3 ? [[y * W * 3 + x, v]] : []; }));
+      const shiftCells = <T,>(data: Record<number, T>) => Object.fromEntries(Object.entries(data).flatMap(([key, v]) => { const x = +key % oldWidth + left, y = Math.floor(+key / oldWidth) + top; return x >= 0 && y >= 0 && x < W && y < H ? [[y * W + x, v]] : []; }));
       if (m.subCells) m.subCells = shiftSub(m.subCells);
+      if (m.materialCells) m.materialCells = shiftCells(m.materialCells);
+      if (m.materialSubCells) m.materialSubCells = shiftSub(m.materialSubCells);
       for (const L of [m, ...Object.values(m.views)]) {
         if (L.subFog) L.subFog = shiftSub(L.subFog);
         if (L.seen.subCells) L.seen.subCells = shiftSub(L.seen.subCells);
+        if (L.seen.materialCells) L.seen.materialCells = shiftCells(L.seen.materialCells);
+        if (L.seen.materialSubCells) L.seen.materialSubCells = shiftSub(L.seen.materialSubCells);
         if (L.seen.observed) L.seen.observed = shiftSub(L.seen.observed);
         if (L.seen.subRevs) L.seen.subRevs = shiftSub(L.seen.subRevs);
         if (L.seen.architectureRevs) L.seen.architectureRevs = shiftSub(L.seen.architectureRevs);
@@ -1133,13 +1139,16 @@ export function giveMapKnowledge(mapId: string, pcIds?: string[]) {
     if (!m) return;
     const learn = (L: import('../core/types').VisionLayer) => {
       L.seen.cellRevs ??= Array(m.width * m.height).fill(0); L.seen.subRevs ??= {}; L.seen.architectureRevs ??= {};
+      L.seen.materialCells ??= {}; L.seen.materialSubCells ??= {};
       const rev = (d.observationSeq ?? 0) + 1;
-      L.fog.forEach((f, k) => { if (!f) { L.fog[k] = 2; L.seen.cells[k] = m.cells[k]; L.seen.cellRevs![k] = rev; } });
+      L.fog.forEach((f, k) => { if (!f) { L.fog[k] = 2; L.seen.cells[k] = m.cells[k]; L.seen.cellRevs![k] = rev; const mid = materialAtCell(m, k); if (mid) L.seen.materialCells![k] = mid; else delete L.seen.materialCells![k]; } });
       L.subFog ??= {}; L.seen.subCells ??= {};
       for (const i of m.subdivisions ?? []) for (let sy = 0; sy < 3; sy++) for (let sx = 0; sx < 3; sx++) {
         const key = (Math.floor(i / m.width) * 3 + sy) * m.width * 3 + i % m.width * 3 + sx;
         if (!L.subFog[key]) {
           L.subFog[key] = 2; L.seen.subCells[key] = terrainAtSubcell(m, (i % m.width) * 3 + sx, Math.floor(i / m.width) * 3 + sy); L.seen.subRevs[key] = rev;
+          const mid = materialAtSubcell(m, (i % m.width) * 3 + sx, Math.floor(i / m.width) * 3 + sy);
+          if (mid) L.seen.materialSubCells![key] = mid; else delete L.seen.materialSubCells![key];
         }
       }
       L.seen.architecture = [...clipArchitecture(m, L, 1, L.seen.architecture ?? []), ...clipArchitecture(m, L, 2)];
@@ -1178,11 +1187,15 @@ export function addMark(mapId: string, author: string, x: number, y: number, sym
 
 /** 细分／取消细分时同步子格迷雾。 */
 function applySubdivision(L: { subFog?: Record<number, number>; fog: number[]; seen: Memory }, m: GameMap, cells: Iterable<number>, remove: boolean) {
-  L.subFog ??= {}; L.seen.subCells ??= {};
+  L.subFog ??= {}; L.seen.subCells ??= {}; L.seen.materialSubCells ??= {};
   for (const i of cells) for (let sy = 0; sy < 3; sy++) for (let sx = 0; sx < 3; sx++) {
     const key = (Math.floor(i / m.width) * 3 + sy) * m.width * 3 + i % m.width * 3 + sx;
-    if (remove) { delete L.subFog[key]; delete L.seen.subCells[key]; delete L.seen.subRevs?.[key]; }
-    else if (L.subFog[key] === undefined) { L.subFog[key] = L.fog[i]; L.seen.subCells[key] = L.seen.cells[i]; L.seen.subRevs ??= {}; L.seen.subRevs[key] = L.seen.cellRevs?.[i] ?? 0; }
+    if (remove) { delete L.subFog[key]; delete L.seen.subCells[key]; delete L.seen.subRevs?.[key]; delete L.seen.materialSubCells[key]; }
+    else if (L.subFog[key] === undefined) {
+      L.subFog[key] = L.fog[i]; L.seen.subCells[key] = L.seen.cells[i]; L.seen.subRevs ??= {}; L.seen.subRevs[key] = L.seen.cellRevs?.[i] ?? 0;
+      const mid = materialAtSubcell(m, (i % m.width) * 3 + sx, Math.floor(i / m.width) * 3 + sy);
+      if (mid) L.seen.materialSubCells[key] = mid;
+    }
   }
 }
 
@@ -1233,6 +1246,45 @@ export function paintTerrainSubcells(mapId: string, cells3: [number, number][], 
   });
 }
 
+/** 大格材质：写 materialCells；顺手清掉这一格下的子格材质覆盖。 */
+export function paintMaterialCells(mapId: string, cells: [number, number][], materialId: string | null) {
+  update((d) => {
+    const m = findMap(d, mapId); if (!m) return;
+    m.materialCells ??= {};
+    m.materialSubCells ??= {};
+    for (const [x, y] of cells) {
+      if (x < 0 || y < 0 || x >= m.width || y >= m.height) continue;
+      const i = y * m.width + x;
+      if (materialId) m.materialCells[i] = materialId; else delete m.materialCells[i];
+      for (let sy = 0; sy < 3; sy++) for (let sx = 0; sx < 3; sx++) delete m.materialSubCells[subKey(m, x * 3 + sx, y * 3 + sy)];
+    }
+  });
+}
+
+/** 小格材质：写 materialSubCells；落在没细分的格子上会顺手细分。 */
+export function paintMaterialSubcells(mapId: string, cells3: [number, number][], materialId: string | null) {
+  update((d) => {
+    const m = findMap(d, mapId); if (!m) return;
+    const valid: [number, number][] = [];
+    const touched = new Set<number>();
+    for (const [x3, y3] of cells3) {
+      if (x3 < 0 || y3 < 0 || x3 >= m.width * 3 || y3 >= m.height * 3) continue;
+      valid.push([x3, y3]);
+      touched.add(Math.floor(y3 / 3) * m.width + Math.floor(x3 / 3));
+    }
+    const add = materialId ? [...touched].filter((i) => !m.subdivisions?.includes(i)) : [];
+    if (add.length) {
+      m.subdivisions = [...(m.subdivisions ?? []), ...add];
+      for (const L of [m, ...Object.values(m.views)]) applySubdivision(L, m, add, false);
+    }
+    m.materialSubCells ??= {};
+    for (const [x3, y3] of valid) {
+      if (materialId) m.materialSubCells[subKey(m, x3, y3)] = materialId;
+      else delete m.materialSubCells[subKey(m, x3, y3)];
+    }
+  });
+}
+
 /** 选中矩形显式细分；取消前验证墙/门/棋子，不删任何内容。 */
 export function subdivideRegion(mapId: string, r: { x: number; y: number; w: number; h: number }, remove = false): string | null {
   const m = findMap(getWorld(), mapId); if (!m) return '找不到地图';
@@ -1245,6 +1297,11 @@ export function subdivideRegion(mapId: string, r: { x: number; y: number; w: num
   }
   update(d => {
     const dm = findMap(d, mapId)!; dm.subdivisions = subs;
+    if (remove) for (const i of cells) for (let sy = 0; sy < 3; sy++) for (let sx = 0; sx < 3; sx++) {
+      const key = subKey(dm, (i % dm.width) * 3 + sx, Math.floor(i / dm.width) * 3 + sy);
+      if (dm.subCells) delete dm.subCells[key];
+      if (dm.materialSubCells) delete dm.materialSubCells[key];
+    }
     for (const L of [dm, ...Object.values(dm.views)]) applySubdivision(L, m, cells, remove);
   });
   return null;

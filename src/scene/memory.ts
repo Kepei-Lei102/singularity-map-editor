@@ -1,11 +1,13 @@
 import { identityKnowledge } from './identity';
 import { terrainAtSubcell } from './terrain';
+import { materialAtCell, materialAtSubcell } from './material';
 import { objectEnabled } from '../core/objectData.js';
 import { clipArchitecture, isArchitectureObject, migrateArchitecture } from './architecture';
 import { repairWorld } from '../core/schema.js';
 import { current, isDraft, type Draft } from 'immer';
 import type { GameMap, MapObject, SeenObject, VisionLayer, World } from '../core/types';
 import { linesToFlow } from '../rules/flow';
+import { DEFAULT_MATERIALS } from '../core/defaults';
 import { cloneLayer, emptyVision, mergeLayers, pruneMemory, spatialFog, visionKey } from './vision';
 
 // 星际争霸式迷雾：fog 0 没去过 / 1 看得见 / 2 记忆。
@@ -47,11 +49,18 @@ function syncLayer(m: Draft<GameMap>, L: Draft<VisionLayer>, rev: number) {
   L.seen.cellRevs ??= Array(m.width * m.height).fill(0); L.seen.observed ??= {}; L.seen.objectRevs ??= {}; L.seen.subRevs ??= {}; L.seen.architectureRevs ??= {};
   for (let key = 0; key < source.width * source.height * 9; key++) if (spatialFog(source, layer, key) === 1) { L.seen.observed[key] = rev; L.seen.subRevs[key] = rev; L.seen.architectureRevs[key] = rev; }
   const n = m.width * m.height;
-  for (let i = 0; i < n; i++) if (L.fog[i] === 1) { L.seen.cells[i] = m.cells[i]; L.seen.cellRevs[i] = rev; }
+  L.seen.materialCells ??= {}; L.seen.materialSubCells ??= {};
+  for (let i = 0; i < n; i++) if (L.fog[i] === 1) {
+    L.seen.cells[i] = m.cells[i]; L.seen.cellRevs[i] = rev;
+    const mid = materialAtCell(m, i);
+    if (mid) L.seen.materialCells[i] = mid; else delete L.seen.materialCells[i];
+  }
   L.seen.subCells ??= {};
   for (const [key, f] of Object.entries(L.subFog ?? {})) if (f === 1) {
     const sx = +key % (m.width * 3), sy = Math.floor(+key / (m.width * 3));
     L.seen.subCells[+key] = terrainAtSubcell(m, sx, sy);
+    const mid = materialAtSubcell(m, sx, sy);
+    if (mid) L.seen.materialSubCells[+key] = mid; else delete L.seen.materialSubCells[+key];
   }
   const historical = clipArchitecture(source, layer, 2, layer.seen.architecture ?? []);
   L.seen.architecture = [...historical, ...clipArchitecture(source, layer)];
@@ -111,6 +120,7 @@ export function migrateWorld(w: World): World {
     if (m.subdivisions?.length && !m.autoFog && !m.subFog) m.subFog = {};
     for (const o of m.objects) for (const s of o.secrets) { s.kind ??= 'roll'; s.range ??= 1; }
   }
+  w.materials ??= structuredClone(DEFAULT_MATERIALS);
   w.visionMode ??= 'shared';
   w.visionGroups ??= [];
   const groupIds = new Set(w.visionGroups.map(g => g.id));

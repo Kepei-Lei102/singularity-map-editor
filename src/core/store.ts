@@ -209,6 +209,8 @@ export interface UIState {
   mapId: string;
   tool: Tool;
   terrainId: string;
+  materialId: string;
+  paintLayer: 'terrain' | 'material'; // 画笔/矩形/橡皮写哪一层
   roomId: string; // 房间笔刷：'' = 擦掉房间
   brush: number;
   wallThickness: number;
@@ -255,6 +257,8 @@ let ui: UIState = {
   mapId: world.maps[0]?.id ?? '',
   tool: 'select',
   terrainId: 'floor',
+  materialId: 'wood',
+  paintLayer: 'terrain',
   roomId: '',
   brush: 1,
   wallThickness: 100,

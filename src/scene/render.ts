@@ -5,6 +5,7 @@ import { visibleArchitectureGeometry } from '../core/architectureData.js';
 import { isArchitectureObject, clipArchitecture, fogAt, isSubdivided, tokenPosition } from './architecture';
 import { anyVisible } from './memory';
 import { subKey, terrainAtSubcell } from './terrain';
+import { materialAtSubcell, materialMap, rememberedMaterialAtSubcell } from './material';
 import type { Selection, Tool, View } from '../core/store';
 import type { GameMap, MapObject, SeenObject, World } from '../core/types';
 import { staleMemories } from './memory';
@@ -383,6 +384,7 @@ export function render(
   const x1 = Math.min(W - 1, Math.ceil((cw - view.panX) / view.zoom / CS));
   const y1 = Math.min(H - 1, Math.ceil((ch - view.panY) / view.zoom / CS));
   const terrains = new Map(world.terrains.map((t) => [t.id, t]));
+  const materials = materialMap(world);
 
   ctx.fillStyle = '#262830';
   ctx.fillRect(0, 0, W * CS, H * CS);
@@ -400,6 +402,16 @@ export function render(
         if (!id) continue;
         ctx.fillStyle = terrains.get(id)?.color ?? '#ff00ff';
         ctx.fillRect((x + sx / n) * CS, (y + sy / n) * CS, CS / n + .1, CS / n + .1);
+        const mid = player
+          ? (f === 1 ? materialAtSubcell(map, x * 3 + sx, y * 3 + sy) : f === 2 ? rememberedMaterialAtSubcell(map, x * 3 + sx, y * 3 + sy) : '')
+          : materialAtSubcell(map, x * 3 + sx, y * 3 + sy);
+        const mat = mid ? materials.get(mid) : undefined;
+        if (mat) {
+          ctx.globalAlpha = .78;
+          ctx.fillStyle = mat.color;
+          ctx.fillRect((x + sx / n) * CS, (y + sy / n) * CS, CS / n + .1, CS / n + .1);
+          ctx.globalAlpha = 1;
+        }
       }
     }
 

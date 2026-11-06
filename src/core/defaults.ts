@@ -1,4 +1,4 @@
-import type { Effect, FlowNode, GameMap, MapObject, Terrain, World } from './types';
+import type { Effect, FlowNode, GameMap, MapObject, Material, Terrain, World } from './types';
 import { uid } from './util';
 
 export const DEFAULT_TERRAINS: Terrain[] = [
@@ -9,6 +9,14 @@ export const DEFAULT_TERRAINS: Terrain[] = [
   { id: 'rug', name: '地毯', color: '#a8505a', blocksMove: false, visionCoef: 0.1 },
   { id: 'water', name: '水', color: '#5a8fc0', blocksMove: false, visionCoef: 0.1 },
   { id: 'hole', name: '洞', color: '#1a1420', blocksMove: false, visionCoef: 0.1 },
+];
+
+export const DEFAULT_MATERIALS: Material[] = [
+  { id: 'wood', name: '木', color: '#8b5a2b', friction: 0.6 },
+  { id: 'stone', name: '石', color: '#77736e', friction: 0.5 },
+  { id: 'tile', name: '瓷砖', color: '#d8d5cf', friction: 0.3 },
+  { id: 'metal', name: '金属', color: '#9299a3', friction: 0.2 },
+  { id: 'carpet-material', name: '地毯', color: '#8f4f5a', friction: 0.9 },
 ];
 
 export function newMap(name: string, layer: string, floor: number, w: number, h: number, fill = 'floor', walls = true): GameMap {
@@ -38,7 +46,7 @@ export function newObject(kind: 'object' | 'zone', x: number, y: number, w: numb
 export function emptyWorld(): World {
   const m = newMap('一楼', '现实', 1, 24, 16);
   return {
-    version: 1, name: '未命名世界', terrains: structuredClone(DEFAULT_TERRAINS),
+    version: 1, name: '未命名世界', terrains: structuredClone(DEFAULT_TERRAINS), materials: structuredClone(DEFAULT_MATERIALS),
     maps: [m], connections: [], party: [], log: [], media: [],
     flows: [{ id: uid(), name: '主线', mapId: null, edges: [], nodes: [{ id: uid(), title: '开场', x: 40, y: 40, kind: 'start', effect: null, origin: 'predicted', status: 'predicted' }] }],
     session: 1, playerMapId: null, visionMode: 'shared', marks: [], npcs: [],

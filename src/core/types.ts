@@ -9,6 +9,16 @@ export interface Terrain {
   visionCoef: number;
 }
 
+/** 独立材质层。地形决定通行/视线，材质只决定表面（颜色，贴图/脚步声/摩擦先留字段）。 */
+export interface Material {
+  id: Id;
+  name: string;
+  color: string;
+  texture?: string; // 贴图媒体 ID（预留）
+  footstep?: string; // 脚步声媒体 ID（预留）
+  friction?: number; // 摩擦（预留，0–10）
+}
+
 export interface SecretTiers {
   crit: string;
   success: string;
@@ -159,6 +169,10 @@ export interface GameMap {
   views: Record<Id, VisionLayer>; // 视野各自独立时，每个玩家角色（pcId）自己的一份迷雾和记忆
   spawn: { x: number; y: number } | null; // 试玩出生点（null = 自动：最北、最居中的门外）
   objects: MapObject[];
+  /** 独立材质层：主格材质 id；没有就不覆写地形颜色。 */
+  materialCells?: Record<number, Id>;
+  /** 细分格的材质覆盖；key 和 subCells 一样。 */
+  materialSubCells?: Record<number, Id>;
   subdivisions?: number[];
   /** 子格地形覆盖：key = sy3 * width*3 + sx3，仅对细分过的格子生效；没有的退回 cells。 */
   subCells?: Record<number, string>;
@@ -205,6 +219,8 @@ export interface Memory {
   objectRevs?: Record<Id, number>;
   architecture?: ArchitectureFragment[];
   subCells?: Record<number, string>;
+  materialCells?: Record<number, Id>;
+  materialSubCells?: Record<number, Id>;
   cells: string[]; // 记得的地形，'' = 不记得
   objects: SeenObject[];
 }
@@ -430,6 +446,7 @@ export interface World {
   version: 1;
   name: string;
   terrains: Terrain[];
+  materials?: Material[];
   maps: GameMap[];
   connections: Connection[];
   party: PC[];

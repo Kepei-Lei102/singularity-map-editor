@@ -109,6 +109,12 @@ export function playerWorld(w: World, mapId: string | null = w.playerMapId, pcId
     ...Object.values(pm.seen.subCells ?? {}),
     ...Object.values(pm.views).flatMap((L) => [...L.seen.cells, ...Object.values(L.seen.subCells ?? {})]),
   ] : []);
+  const usedMaterials = new Set(pm ? [
+    ...Object.values(pm.materialCells ?? {}),
+    ...Object.values(pm.materialSubCells ?? {}),
+    ...Object.values(pm.seen.materialCells ?? {}),
+    ...Object.values(pm.seen.materialSubCells ?? {}),
+  ] : []);
   const clues: PlayerClue[] = valid ? w.maps.flatMap(m => m.objects.flatMap(o => o.secrets.flatMap(s => {
     const r = s.revealed;
     const manual = r && (r.scope === 'party' || pcId && r.recipients?.includes(pcId)) ? r : undefined;
@@ -121,6 +127,7 @@ export function playerWorld(w: World, mapId: string | null = w.playerMapId, pcId
     visionGroups: undefined, observationSeq: undefined, viewerId: pcId,
     party: pcId ? w.party.filter(p => p.id === pcId).map(p => ({ id: p.id, name: p.name, tags: [], color: p.color })) : [],
     terrains: w.terrains.filter((t) => usedTerrains.has(t.id)),
+    materials: (w.materials ?? []).filter((m) => usedMaterials.has(m.id)),
     flows: [], log: [], npcs: [], media: [],
     ...(() => {
       if (!valid || !pcId) return { judgments: [] };
@@ -157,6 +164,8 @@ export function playerMap(m: GameMap, L: VisionLayer, pcId?: string): GameMap {
     }).map(r => playerSeen(r, pcId, m.objects.find(o => o.id === r.id))),
     architecture: [...clipArchitecture(m, L, 1, L.seen.architecture ?? []), ...clipArchitecture(m, L, 2, L.seen.architecture ?? [])],
     subCells: Object.fromEntries(Object.entries(L.seen.subCells ?? {}).filter(([key]) => L.subFog?.[+key])),
+    materialCells: Object.fromEntries(Object.entries(L.seen.materialCells ?? {}).filter(([key]) => L.fog[+key])),
+    materialSubCells: Object.fromEntries(Object.entries(L.seen.materialSubCells ?? {}).filter(([key]) => L.subFog?.[+key])),
   };
   return {
     id: m.id, name: m.name, layer: m.layer, floor: m.floor, width: m.width, height: m.height,
@@ -165,6 +174,8 @@ export function playerMap(m: GameMap, L: VisionLayer, pcId?: string): GameMap {
     subdivisions: m.subdivisions?.filter(i => L.fog[i]),
     cells: m.cells.map((c, i) => L.fog[i] === 1 ? c : ''),
     subCells: Object.fromEntries(Object.entries(m.subCells ?? {}).filter(([key]) => L.subFog?.[+key] === 1)),
+    materialCells: Object.fromEntries(Object.entries(m.materialCells ?? {}).filter(([key]) => L.fog[+key] === 1)),
+    materialSubCells: Object.fromEntries(Object.entries(m.materialSubCells ?? {}).filter(([key]) => L.subFog?.[+key] === 1)),
     d100: m.d100.map(() => 0), rooms: [], roomCells: m.roomCells.map(() => ''), notes: '', spawn: null,
     tokens: m.tokens.filter(t => { const p = tokenPosition(t); return t.pcId === pcId || fogAt(m, L, p.x, p.y) === 1; }),
     objects: m.objects.filter(o => objectEnabled(m, o) && o.kind === 'object' && !isArchitectureObject(o) && !o.hidden && anyVisible({ ...m, ...L }, o)).map(o => ({

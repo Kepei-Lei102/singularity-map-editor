@@ -48,6 +48,7 @@ export function Sidebar() {
   const layers = [...new Set(w.maps.map((m) => m.layer))];
   const tools = ALL_TOOLS.filter(([t]) => toolsFor(ui).includes(t));
   const terrain = w.terrains.find((t) => t.id === ui.terrainId);
+  const material = (w.materials ?? []).find((m) => m.id === ui.materialId);
   const cur = w.maps.find((m) => m.id === ui.mapId);
 
   return (
@@ -172,7 +173,7 @@ export function Sidebar() {
           <div className="swatches">
             {w.terrains.map((t) => (
               <button key={t.id} className={`swatch ${ui.terrainId === t.id ? 'on' : ''}`}
-                onClick={() => setUI({ terrainId: t.id, tool: ui.tool === 'fill' ? 'fill' : 'paint' })}>
+                onClick={() => setUI({ terrainId: t.id, paintLayer: 'terrain', tool: ui.tool === 'fill' ? 'fill' : 'paint' })}>
                 <i style={{ background: t.color }} />{t.name}
               </button>
             ))}
@@ -191,6 +192,55 @@ export function Sidebar() {
                   d.maps.forEach((m) => { m.cells = m.cells.map((c) => (c === terrain.id ? '' : c)); });
                 });
               }}>删除这个地形</button>
+            </div>
+          )}
+        </Section>
+      )}
+
+      {edit && (
+        <Section title="材质层" extra={
+          <button className="small" onClick={() => {
+            const id = uid();
+            update((d) => { (d.materials ??= []).push({ id, name: '新材质', color: '#888888', friction: 0.5 }); });
+            setUI({ materialId: id, paintLayer: 'material', tool: 'paint' });
+          }}>＋</button>
+        }>
+          <div className="hint">地形决定通行和视线；材质只改表面。画笔/矩形/橡皮可以切到这一层，不影响地形。</div>
+          <div className="tools">
+            <button className={ui.paintLayer === 'terrain' ? 'tool on' : 'tool'} onClick={() => setUI({ paintLayer: 'terrain' })}>地形层</button>
+            <button className={ui.paintLayer === 'material' ? 'tool on' : 'tool'} onClick={() => setUI({ paintLayer: 'material' })}>材质层</button>
+          </div>
+          <div className="swatches">
+            {(w.materials ?? []).map((m) => (
+              <button key={m.id} className={`swatch ${ui.materialId === m.id && ui.paintLayer === 'material' ? 'on' : ''}`}
+                onClick={() => setUI({ materialId: m.id, paintLayer: 'material', tool: ui.tool === 'fill' ? 'fill' : 'paint' })}>
+                <i style={{ background: m.color }} />{m.name}
+              </button>
+            ))}
+          </div>
+          {material && (
+            <div className="card">
+              <Row label="名字"><Txt value={material.name} onChange={(v) => update((d) => { d.materials!.find((m) => m.id === material.id)!.name = v; }, { coalesce: 'mn' + material.id })} /></Row>
+              <Row label="颜色"><input type="color" value={material.color} onChange={(e) => update((d) => { d.materials!.find((m) => m.id === material.id)!.color = e.target.value; }, { coalesce: 'mc' + material.id })} /></Row>
+              <Row label="摩擦（预留）"><Num value={material.friction ?? 0.5} step={0.1} min={0} onChange={(v) => update((d) => { d.materials!.find((m) => m.id === material.id)!.friction = Math.min(10, Math.max(0, v)); })} /></Row>
+              <div className="hint">贴图、脚步声先留字段，还没接规则；材质层也不影响视野和通行。</div>
+              <button className="danger small" onClick={() => {
+                if (!confirm(`删除材质「${material.name}」？铺了它的格子和记忆会一起清掉。`)) return;
+                update((d) => {
+                  d.materials = (d.materials ?? []).filter((m) => m.id !== material.id);
+                  for (const m of d.maps) {
+                    for (const [k, v] of Object.entries(m.materialCells ?? {})) if (v === material.id) delete m.materialCells![+k];
+                    for (const [k, v] of Object.entries(m.materialSubCells ?? {})) if (v === material.id) delete m.materialSubCells![+k];
+                    const memories = [m.seen, ...Object.values(m.views).map((L) => L.seen)];
+                    for (const mem of memories) {
+                      for (const [k, v] of Object.entries(mem.materialCells ?? {})) if (v === material.id) delete mem.materialCells![+k];
+                      for (const [k, v] of Object.entries(mem.materialSubCells ?? {})) if (v === material.id) delete mem.materialSubCells![+k];
+                    }
+                  }
+                });
+                const next = (w.materials ?? []).find((m) => m.id !== material.id);
+                setUI({ materialId: next?.id ?? '', paintLayer: 'terrain' });
+              }}>删除这个材质</button>
             </div>
           )}
         </Section>

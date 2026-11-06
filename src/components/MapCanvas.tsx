@@ -1,7 +1,7 @@
 import { effectiveLayer } from '../scene/vision';
 import { objectEnabled } from '../core/objectData.js';
 import { architectureWalls, architectureDoors, isArchitectureObject, characterPathClear, furnitureSweepBlocked, isSubdivided, tokenPosition, objectRect, anchorFromPoint } from '../scene/architecture';
-import { addArchitectureDoor, addArchitectureWall, eraseArchitecture, moveMapToken, paintFog, paintTerrainCells, paintTerrainSubcells, subdivideRegion, toggleArchitectureDoor } from '../runtime/actions';
+import { addArchitectureDoor, addArchitectureWall, eraseArchitecture, moveMapToken, paintFog, paintMaterialCells, paintMaterialSubcells, paintTerrainCells, paintTerrainSubcells, subdivideRegion, toggleArchitectureDoor } from '../runtime/actions';
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { GameMap, World } from '../core/types';
 import { CS, cellLine, uid } from '../core/util';
@@ -183,14 +183,18 @@ export function MapCanvas({ world, map, mode, playerNumbers = false, follow, vie
     return out;
   };
 
-  /** 地形画笔统一入口：大格写 cells，小格写 subCells；d100/房间/迷雾仍按大格。 */
-  const paintTerrain = (cx: number, cy: number, fx: number, fy: number, value: number, tool: string, brush: number, fine: boolean, terrainId: string) => {
-    if (fine && (tool === 'paint' || tool === 'erase')) {
-      paintTerrainSubcells(map.id, brushSubcells(fx, fy, brush), tool === 'erase' ? '' : terrainId);
+  /** 画笔统一入口：按当前画笔层写地形或材质；d100/房间/迷雾仍按大格。 */
+  const paintTerrain = (cx: number, cy: number, fx: number, fy: number, value: number, tool: string, brush: number, fine: boolean, terrainId: string, materialId: string, layer: 'terrain' | 'material') => {
+    const painting = tool === 'paint' || tool === 'erase';
+    const erase = tool === 'erase';
+    if (fine && painting) {
+      if (layer === 'material') paintMaterialSubcells(map.id, brushSubcells(fx, fy, brush), erase ? null : materialId);
+      else paintTerrainSubcells(map.id, brushSubcells(fx, fy, brush), erase ? '' : terrainId);
       return;
     }
-    if (tool === 'paint' || tool === 'erase') {
-      paintTerrainCells(map.id, brushCells(cx, cy, brush), tool === 'erase' ? '' : terrainId);
+    if (painting) {
+      if (layer === 'material') paintMaterialCells(map.id, brushCells(cx, cy, brush), erase ? null : materialId);
+      else paintTerrainCells(map.id, brushCells(cx, cy, brush), erase ? '' : terrainId);
       return;
     }
     paintCells(brushCells(cx, cy, brush), value);
@@ -292,7 +296,7 @@ export function MapCanvas({ world, map, mode, playerNumbers = false, follow, vie
       const { gx, gy } = toCell(e);
       const fx = Math.floor(gx * 3), fy = Math.floor(gy * 3);
       drag.current = { k: 'paint', lx: cx, ly: cy, fx, fy, value };
-      paintTerrain(cx, cy, fx, fy, value, tool, s.brush, s.fine, s.terrainId);
+      paintTerrain(cx, cy, fx, fy, value, tool, s.brush, s.fine, s.terrainId, s.materialId, s.paintLayer);
       return;
     }
     if (tool === 'fill' || tool === 'object' || tool === 'zone' || tool === 'subdivide' || tool === 'unsubdivide') {
@@ -359,12 +363,13 @@ export function MapCanvas({ world, map, mode, playerNumbers = false, follow, vie
       const s = getUI();
       if (s.fine && (s.tool === 'paint' || s.tool === 'erase')) {
         if (fx === dr.fx && fy === dr.fy) return;
-        paintTerrainSubcells(map.id, cellLine(dr.fx, dr.fy, fx, fy).flatMap(([x, y]) => brushSubcells(x, y, s.brush)), s.tool === 'erase' ? '' : s.terrainId);
+        if (s.paintLayer === 'material') paintMaterialSubcells(map.id, cellLine(dr.fx, dr.fy, fx, fy).flatMap(([x, y]) => brushSubcells(x, y, s.brush)), s.tool === 'erase' ? null : s.materialId);
+        else paintTerrainSubcells(map.id, cellLine(dr.fx, dr.fy, fx, fy).flatMap(([x, y]) => brushSubcells(x, y, s.brush)), s.tool === 'erase' ? '' : s.terrainId);
         dr.fx = fx; dr.fy = fy;
         return;
       }
       if (cx === dr.lx && cy === dr.ly) return;
-      paintTerrain(cx, cy, fx, fy, dr.value, s.tool, s.brush, false, s.terrainId);
+      paintTerrain(cx, cy, fx, fy, dr.value, s.tool, s.brush, false, s.terrainId, s.materialId, s.paintLayer);
       dr.lx = cx; dr.ly = cy;
     } else if (dr.k === 'rect') {
       if (dr.fine && dr.fx0 !== undefined && dr.fy0 !== undefined) {
@@ -445,7 +450,7 @@ export function MapCanvas({ world, map, mode, playerNumbers = false, follow, vie
     }
     if (dr.k === 'rect' && preview) {
       const r = preview;
-      const { tool, terrainId } = getUI();
+      const { tool, terrainId, materialId, paintLayer } = getUI();
       if (tool === 'subdivide' || tool === 'unsubdivide') {
         const error = subdivideRegion(map.id, r, tool === 'unsubdivide');
         if (error) toast(error);
@@ -455,7 +460,12 @@ export function MapCanvas({ world, map, mode, playerNumbers = false, follow, vie
           const cells3: [number, number][] = [];
           for (let y = Math.min(dr.fy0, dr.fy1); y <= Math.max(dr.fy0, dr.fy1); y++)
             for (let x = Math.min(dr.fx0, dr.fx1); x <= Math.max(dr.fx0, dr.fx1); x++) cells3.push([x, y]);
-          paintTerrainSubcells(map.id, cells3, terrainId);
+          if (paintLayer === 'material') paintMaterialSubcells(map.id, cells3, materialId);
+          else paintTerrainSubcells(map.id, cells3, terrainId);
+        } else if (paintLayer === 'material') {
+          const cells: [number, number][] = [];
+          for (let y = r.y; y < r.y + r.h; y++) for (let x = r.x; x < r.x + r.w; x++) cells.push([x, y]);
+          paintMaterialCells(map.id, cells, materialId);
         } else {
           update((d) => {
             const m = findMap(d, map.id)!;

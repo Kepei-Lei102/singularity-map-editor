@@ -210,6 +210,8 @@ export function checkWorld(w, migrated = false) {
     }
     if (v.architecture !== undefined) fragments(v.architecture, `${where}.architecture`);
     if (v.subCells !== undefined) for (const [key, value] of Object.entries(obj(v.subCells, `${where}.subCells`))) { int(+key, `${where}.subCells key`, 0, n * 9 - 1); str(value, `${where}.subCells value`); }
+    if (v.materialCells !== undefined) for (const [key, value] of Object.entries(obj(v.materialCells, `${where}.materialCells`))) { int(+key, `${where}.materialCells key`, 0, n - 1); str(value, `${where}.materialCells value`); }
+    if (v.materialSubCells !== undefined) for (const [key, value] of Object.entries(obj(v.materialSubCells, `${where}.materialSubCells`))) { int(+key, `${where}.materialSubCells key`, 0, n * 9 - 1); str(value, `${where}.materialSubCells value`); }
   };
 
   obj(w, '工程');
@@ -220,6 +222,15 @@ export function checkWorld(w, migrated = false) {
     obj(t, at); id(t.id, `${at}.id`); str(t.name, `${at}.name`); str(t.color, `${at}.color`); bool(t.blocksMove, `${at}.blocksMove`); num(t.visionCoef, `${at}.visionCoef`, 0, 1000);
   });
   unique(w.terrains, 'terrains');
+  if (w.materials !== undefined) {
+    arr(w.materials, 'materials').forEach((m, i) => {
+      const at = `materials[${i}]`;
+      obj(m, at); id(m.id, `${at}.id`); str(m.name, `${at}.name`); str(m.color, `${at}.color`);
+      optStr(m.texture, `${at}.texture`); optStr(m.footstep, `${at}.footstep`);
+      if (m.friction !== undefined) num(m.friction, `${at}.friction`, 0, 10);
+    });
+    unique(w.materials, 'materials');
+  }
   if (!arr(w.maps, 'maps').length) fail('maps', '是空的（至少要有一张地图）');
   unique(w.maps, 'maps');
   w.maps.forEach((m, mi) => {
