@@ -2,6 +2,7 @@
 // 一个技能可以反复调用，ME 消耗按卡走；locked 由角色自己的已解锁列表决定。
 
 import type { CheckSpec } from './interaction';
+import type { PublicSkill } from '../core/types';
 
 export interface SkillDef {
   id: string; // 技能序号，例如 037-9-101
@@ -13,6 +14,13 @@ export interface SkillDef {
   desc: string; // 玩家说明（可公开）
   check?: CheckSpec; // 判定口径；没有就按动作卡
   actionId?: string; // 指向公共动作卡；现在是空，等 actions.json
+}
+
+/** 发给玩家窗口的公开说明：只有 id/名字/途径/组/序列/描述，检查口径与动作卡不进玩家端。 */
+export function publicSkillsOf(ids: readonly string[]): PublicSkill[] {
+  const wanted = new Set(ids);
+  return SKILL_LIBRARY.filter((s) => wanted.has(s.id))
+    .map((s) => ({ id: s.id, name: s.name, pathway: s.pathway, group: s.group, sequence: s.sequence, desc: s.desc }));
 }
 
 /** Ian 的 4 条（动作库解锁明细 037-9-*）。密档里还有 2 条，等拿到再补。 */

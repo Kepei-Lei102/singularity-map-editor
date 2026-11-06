@@ -3,6 +3,7 @@ import { openPlayerWindow } from '../runtime/sync';
 import { useState } from 'react';
 import { setUI, update, useWorld } from '../core/store';
 import { PATHWAY_SUGGESTIONS } from '../core/defaults';
+import { SKILL_LIBRARY } from '../rules/skills';
 import { uid } from '../core/util';
 import { Row, Section, Txt } from './fields';
 
@@ -60,6 +61,20 @@ export function PartyPanel() {
           <button className="small" onClick={() => openPlayerWindow(p.id)}>打开 {p.name} 的玩家窗口</button>
           <Row label="途径"><TagInput tags={p.tags} onChange={(t) => update((d) => { d.party.find((x) => x.id === p.id)!.tags = t; })} /></Row>
           <button className="small" onClick={() => setUI({ tool: 'token', tokenPcId: p.id })}>在地图上放棋子</button>
+          <details className="pc-skills">
+            <summary>已解锁技能 <span className="muted">{p.skills?.length ?? 0}</span></summary>
+            {SKILL_LIBRARY.map((s) => (
+              <label key={s.id} className="pc-skill">
+                <input type="checkbox" checked={p.skills?.includes(s.id) ?? false} onChange={(e) => update((d) => {
+                  const pc = d.party.find((x) => x.id === p.id)!; const set = new Set(pc.skills ?? []);
+                  if (e.target.checked) set.add(s.id); else set.delete(s.id);
+                  pc.skills = [...set];
+                })} />
+                【{s.name}】 <span className="muted">{s.pathway} · 序列 {s.sequence}</span>
+              </label>
+            ))}
+            <div className="hint">勾上的技能会出现在这个角色的玩家窗口「我的技能」里，只发公开说明。</div>
+          </details>
         </div>
       ))}
     </Section>

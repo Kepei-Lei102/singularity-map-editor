@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { listenAsPlayer, send } from '../runtime/sync';
-import type { Focus, SkillCast, World } from '../core/types';
+import type { Focus, PublicSkill, SkillCast, World } from '../core/types';
 import { TIER_LABEL } from '../core/types';
 import { MapCanvas } from './MapCanvas';
 import { MediaView } from './MediaPanel';
@@ -16,6 +16,7 @@ export function PlayerView() {
   const [focus, setFocus] = useState<Focus | null>(null);
   const [cast, setCast] = useState<SkillCast | null>(null);
   const [you, setYou] = useState<string | null>(null);
+  const [skills, setSkills] = useState<PublicSkill[]>([]);
 
   useEffect(() => {
     const off = listenAsPlayer((m) => {
@@ -24,6 +25,7 @@ export function PlayerView() {
         setFocus(m.focus ?? null);
         setCast(m.cast ?? null);
         setYou(m.you ?? null);
+        setSkills(m.skills ?? []);
       } else if (m.type === 'clear') { setWorld(null); setMedia(null); setFocus(null); setCast(null); }
       else if (m.type === 'play') setMedia({ mediaId: m.mediaId, label: m.label, mime: m.mime, blob: m.blob });
       else if (m.type === 'stop') setMedia(null);
@@ -54,6 +56,17 @@ export function PlayerView() {
             </div>
           ))}
         </div>
+      )}
+      {skills.length > 0 && (
+        <details className="player-skills">
+          <summary>我的技能 <span className="muted">{skills.length}</span></summary>
+          {skills.map((s) => (
+            <div key={s.id} className="player-skill">
+              <b>【{s.name}】</b> <span className="muted">{s.pathway} · 序列 {s.sequence}</span>
+              <div>{s.desc}</div>
+            </div>
+          ))}
+        </details>
       )}
       {judgment && <button className="player-judgment-toggle" onClick={() => setDismissed(dismissed === judgment.id ? null : judgment.id)}>正式判定 · {judgment.title}</button>}
       {judgment && dismissed !== judgment.id && <aside className="player-judgment">

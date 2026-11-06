@@ -82,7 +82,7 @@ export interface MapObject {
   media: MediaAttach[];
 }
 
-export interface RoomObjectSnapshot { id: Id; x: number; y: number; state: number; enabled?: boolean }
+export interface RoomObjectSnapshot { id: Id; x: number; y: number; state: number; enabled?: boolean; anchor?: Point }
 export interface RoomLayout { id: Id; name: string; description?: string; interactive?: boolean; objects: RoomObjectSnapshot[]; doors?: { id: Id; open: boolean }[] }
 
 /** 房间：按格子刷出来的命名区域。tags 预留给十二宫、八门等对应关系。 */
@@ -168,6 +168,9 @@ export interface GameMap {
 }
 
 /** 玩家记得的物件样子。回到灰区之前，物件怎么变玩家都不知道。 */
+/** 发给玩家窗口的技能说明：只有公开的那部分，私有实现不进玩家端数据。 */
+export interface PublicSkill { id: string; name: string; pathway: string; group: string; sequence: number; desc: string }
+
 export interface SeenObject {
   id: Id;
   name: string;
@@ -177,6 +180,7 @@ export interface SeenObject {
   y: number;
   w: number;
   h: number;
+  anchor?: Point;
   height: number;
   identity?: { party?: boolean; recipients?: Id[] };
   stateLabel: string | null; // 只有一个状态的物件不显示状态

@@ -51,7 +51,7 @@ export function collectRoomObjects(map: GameMap, room: Room): RoomObjectSnapshot
       for (let x = Math.max(0, bounds.x - (isArchitectureObject(o) ? 1 : 0)); x < Math.min(map.width, bounds.x + bounds.w); x++)
         if (map.roomCells[y * map.width + x] === room.id) return true;
     return false;
-  })())).map((o) => ({ id: o.id, x: o.x, y: o.y, state: o.state, enabled: o.enabled !== false }));
+  })())).map((o) => ({ id: o.id, x: o.x, y: o.y, state: o.state, enabled: o.enabled !== false, ...(o.anchor ? { anchor: { ...o.anchor } } : {}) }));
 }
 
 function roomSnapshotError(map: GameMap, room: Room, objects: RoomObjectSnapshot[]): string | null {
@@ -128,7 +128,11 @@ export function applyRoomLayout(mapId: string, roomId: string, layoutId: string)
   if (error) return error;
   update(d => {
     const map = findMap(d, mapId)!, room = map.rooms.find(r => r.id === roomId)!;
-    for (const snap of layout.objects) Object.assign(map.objects.find(o => o.id === snap.id)!, { x: snap.x, y: snap.y, state: snap.state, enabled: snap.enabled !== false });
+    for (const snap of layout.objects) {
+      const o = map.objects.find(o => o.id === snap.id)!;
+      Object.assign(o, { x: snap.x, y: snap.y, state: snap.state, enabled: snap.enabled !== false });
+      if (snap.anchor) o.anchor = { ...snap.anchor }; else delete o.anchor;
+    }
     room.activeLayoutId = layoutId;
     if (preparation) room.reset = { at: Date.now(), objects: layout.objects.map(s => ({ ...s })) };
     log(d, 'note', `「${room.name}」${layout.interactive ? '切换互动排布' : '应用排布'}「${layout.name}」`, mapId);
@@ -162,12 +166,13 @@ export function resetRoom(mapId: string, roomId: string) {
     for (const s of r.reset.objects) {
       const o = m.objects.find((x) => x.id === s.id);
       if (!o) continue;
-      const moved = o.x !== s.x || o.y !== s.y;
+      const moved = o.x !== s.x || o.y !== s.y || (o.anchor?.x ?? 0) !== (s.anchor?.x ?? 0) || (o.anchor?.y ?? 0) !== (s.anchor?.y ?? 0);
       const restated = o.state !== s.state;
       const toggled = (o.enabled !== false) !== (s.enabled !== false);
       if (!moved && !restated && !toggled) continue;
       o.enabled = s.enabled !== false;
       o.x = s.x; o.y = s.y;
+      if (s.anchor) o.anchor = { ...s.anchor }; else delete o.anchor;
       if (restated) { o.state = s.state; o.stateRev = (o.stateRev ?? 0) + 1; }
       n++;
     }

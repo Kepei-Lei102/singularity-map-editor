@@ -11,7 +11,7 @@ const root = fileURLToPath(new URL('..', import.meta.url));
 const temp = await mkdtemp(join(tmpdir(), 'ts-anchor-'));
 const bundle = join(temp, 'editor.cjs');
 await build({
-  stdin: { contents: `export * from './src/scene/architecture'; export * from './src/core/defaults'; export * from './src/core/schema.js'; export * from './src/runtime/actions';`, resolveDir: root },
+  stdin: { contents: `export * from './src/scene/architecture'; export * from './src/scene/memory'; export * from './src/core/defaults'; export * from './src/core/schema.js'; export * from './src/runtime/actions';`, resolveDir: root },
   outfile: bundle, bundle: true, platform: 'node', format: 'cjs', logLevel: 'silent',
 });
 const storage = () => { const data = new Map(); return { getItem: (k) => data.get(k) ?? null, setItem: (k, v) => data.set(k, v), removeItem: (k) => data.delete(k) }; };
@@ -64,6 +64,26 @@ test('锚点让物件能贴到 1/3 格：x=2.7 处挡住', () => {
   map.objects = [o];
   // 物件实际占 2.67..3.67；路径贴着 3.0 走会被扫到
   assert.equal(api.characterPathClear(world, map, { x: 3.1, y: 2.1 }, { x: 3.1, y: 2.9 }), false);
+});
+
+test('记忆快照带上锚点，位置变了才算变', () => {
+  const o = api.newObject('object', 3, 4, 1, 1);
+  o.anchor = { x: 2, y: 0 };
+  const snap = api.snapshot(o);
+  assert.deepEqual(snap.anchor, { x: 2, y: 0 });
+  const same = { ...snap };
+  assert.equal(api.sameSeen(snap, same), true);
+  same.x = 3.2;
+  assert.equal(api.sameSeen(snap, same), false);
+});
+
+test('点选命中按实际矩形，不是整格', () => {
+  const { world, map } = fixture();
+  const o = api.newObject('object', 3, 4, 1, 1);
+  o.anchor = { x: 2, y: 0 }; // 实际占 3.67..4.67
+  map.objects = [o];
+  assert.ok(api.itemsAt(world, map, 4, 4).some((h) => h.sel.id === o.id));
+  assert.ok(!api.itemsAt(world, map, 2, 4).some((h) => h.sel.id === o.id));
 });
 
 test('校验：锚点只能是 0/1/2，且不能把物件推出地图', () => {

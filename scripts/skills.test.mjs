@@ -141,3 +141,12 @@ test('不是同意阶段的回传不处理', () => {
   assert.equal(api.castOf().step, 'confirm');
   api.closeSkillCast();
 });
+
+test('发给玩家窗口的技能只有公开字段', () => {
+  const all = api.publicSkillsOf(['037-9-101', '999-不存在']);
+  assert.equal(all.length, 1);
+  assert.deepEqual(Object.keys(all[0]).sort(), ['desc', 'group', 'id', 'name', 'pathway', 'sequence']);
+  const mine = api.publicSkillsOf(['037-9-101', '037-9-102', '037-9-003', '037-9-201', '037-9-101']);
+  assert.equal(mine.length, 4); // 重复 id 不重复发
+  assert.ok(!('check' in mine[0]) && !('actionId' in mine[0]) && !('me' in mine[0]));
+});

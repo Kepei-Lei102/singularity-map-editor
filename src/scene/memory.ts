@@ -25,7 +25,7 @@ export const emptyLayer = emptyVision;
 
 export function snapshot(o: MapObject | Draft<MapObject>): SeenObject {
   return {
-    id: o.id, name: o.name, icon: o.icon, color: o.color, x: o.x, y: o.y, w: o.w, h: o.h, height: o.height,
+    id: o.id, name: o.name, icon: o.icon, color: o.color, x: o.x, y: o.y, w: o.w, h: o.h, anchor: o.anchor, height: o.height,
     identity: identityKnowledge(o),
     stateLabel: o.states.length > 1 ? o.states[o.state] ?? '' : null,
   };
@@ -33,6 +33,7 @@ export function snapshot(o: MapObject | Draft<MapObject>): SeenObject {
 
 export function sameSeen(a: SeenObject, b: SeenObject) {
   return a.name === b.name && a.icon === b.icon && a.color === b.color && a.x === b.x && a.y === b.y &&
+    (a.anchor?.x ?? 0) === (b.anchor?.x ?? 0) && (a.anchor?.y ?? 0) === (b.anchor?.y ?? 0) &&
     a.w === b.w && a.h === b.h && a.height === b.height && a.stateLabel === b.stateLabel && JSON.stringify(a.identity) === JSON.stringify(b.identity);
 }
 

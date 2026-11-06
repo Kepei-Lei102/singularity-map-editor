@@ -196,6 +196,7 @@ export function checkWorld(w, migrated = false) {
     const at = `${where}[${i}]`;
     obj(o, at); id(o.id, `${at}.id`); str(o.name, `${at}.name`); str(o.icon, `${at}.icon`); str(o.color, `${at}.color`);
     int(o.x, `${at}.x`); int(o.y, `${at}.y`); int(o.w, `${at}.w`, 1, MAX_SIDE); int(o.h, `${at}.h`, 1, MAX_SIDE); num(o.height, `${at}.height`, 0, 1000);
+    if (o.anchor !== undefined) { obj(o.anchor, `${at}.anchor`); int(o.anchor.x, `${at}.anchor.x`, 0, 2); int(o.anchor.y, `${at}.anchor.y`, 0, 2); }
     if (o.stateLabel !== null) str(o.stateLabel, `${at}.stateLabel`);
     identity(o.identity, `${at}.identity`);
   });
@@ -259,6 +260,7 @@ export function checkWorld(w, migrated = false) {
           arr(r.reset.objects, `${rs}.objects`).forEach((s, k) => {
             const sa = `${rs}.objects[${k}]`;
             obj(s, sa); id(s.id, `${sa}.id`); int(s.x, `${sa}.x`); int(s.y, `${sa}.y`); int(s.state, `${sa}.state`, 0);
+            if (s.anchor !== undefined) { obj(s.anchor, `${sa}.anchor`); int(s.anchor.x, `${sa}.anchor.x`, 0, 2); int(s.anchor.y, `${sa}.anchor.y`, 0, 2); }
           });
         }
       });
