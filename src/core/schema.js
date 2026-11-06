@@ -186,6 +186,48 @@ export function checkRoomObjects(map, snapshots) {
  * 检查整份工程，有问题就抛出一句能看懂的错误（带出错的位置）。
  * migrated = true：浏览器里迁移（补旧字段）之后再查一遍，这时旧字段都必须在（编辑器直接用它们）。
  */
+/**
+ * 旧版「取消细分」只删了记忆，没删地图上的子格覆盖（f6d9758 才补上删除）。
+ * 这种存档里会留下 subCells / materialSubCells / 子格迷雾，但父格已经不在 subdivisions 里；
+ * 导出前严格校验会报「子格地形只能落在细分过的格子里」。
+ *
+ * 取消细分本来就是要丢弃这一格的子格数据，所以迁移时把这些找不到父格的键丢掉；
+ * 只丢掉孤儿键，不动仍然有效的子格，也不改 subdivisions。
+ * 返回丢掉的数量，方便测试和以后做提示。
+ */
+export function repairOrphanSubcells(w) {
+  const maps = Array.isArray(w?.maps) ? w.maps : [];
+  let dropped = 0;
+  const drop = (data, width, height, subs) => {
+    if (!data || typeof data !== 'object') return;
+    const n = width * 3, max = width * height * 9;
+    for (const key of Object.keys(data)) {
+      const k = +key;
+      const parent = Number.isSafeInteger(k) && k >= 0 && k < max
+        ? Math.floor(Math.floor(k / n) / 3) * width + Math.floor((k % n) / 3)
+        : -1;
+      if (!subs.has(parent)) { delete data[key]; dropped++; }
+    }
+  };
+  for (const m of maps) {
+    if (!m || !Number.isInteger(m.width) || !Number.isInteger(m.height)) continue;
+    const subs = new Set(Array.isArray(m.subdivisions) ? m.subdivisions : []);
+    drop(m.subCells, m.width, m.height, subs);
+    drop(m.materialSubCells, m.width, m.height, subs);
+    drop(m.subFog, m.width, m.height, subs);
+    const layers = [m, ...Object.values(m.views && typeof m.views === 'object' ? m.views : {})];
+    for (const L of layers) {
+      if (!L || typeof L !== 'object') continue;
+      drop(L.subFog, m.width, m.height, subs);
+      const seen = L.seen;
+      if (seen && typeof seen === 'object') {
+        for (const k of ['subCells', 'materialSubCells', 'observed', 'subRevs', 'architectureRevs']) drop(seen[k], m.width, m.height, subs);
+      }
+    }
+  }
+  return dropped;
+}
+
 export function checkWorld(w, migrated = false) {
   const c = checker('工程文件有问题：');
   const { fail, obj, arr, str, optStr, bool, optBool, id, int, num, optNum, oneOf, unique, strings } = c;

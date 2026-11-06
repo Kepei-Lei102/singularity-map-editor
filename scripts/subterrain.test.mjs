@@ -140,3 +140,24 @@ test('玩家同步只带看得见的子格地形', () => {
   const pw = api.playerWorld(api.getWorld(), map.id);
   assert.ok(pw.terrains.some((t) => t.id === 'grass'));
 });
+
+test('旧版取消细分留下的孤儿子格会被清掉，导出不再报错', () => {
+  const world = api.emptyWorld();
+  const m = api.newMap('停车场1F', '现实', 1, 45, 32, 'floor', false);
+  m.objects = [];
+  const keep = 10 * 45 + 10;
+  m.subdivisions = [keep];
+  m.subCells = {
+    [api.subKey(m, 30, 30)]: 'grass', // 父格 (10,10)，还在细分列表里
+    [api.subKey(m, 0, 0)]: 'grass',   // 父格 (0,0)，旧版取消细分后残留
+  };
+  m.materialSubCells = { [api.subKey(m, 3, 3)]: 'wood' }; // 父格 (1,1)，同样残留
+  world.maps = [m];
+  assert.throws(() => api.checkWorld(world), /细分/);
+
+  assert.equal(api.repairOrphanSubcells(world), 2);
+  assert.equal(m.subCells[api.subKey(m, 0, 0)], undefined);
+  assert.equal(m.subCells[api.subKey(m, 30, 30)], 'grass');
+  assert.equal(m.materialSubCells[api.subKey(m, 3, 3)], undefined);
+  assert.doesNotThrow(() => api.checkWorld(world));
+});

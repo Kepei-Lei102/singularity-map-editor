@@ -3,7 +3,7 @@ import { terrainAtSubcell } from './terrain';
 import { materialAtCell, materialAtSubcell } from './material';
 import { objectEnabled } from '../core/objectData.js';
 import { clipArchitecture, isArchitectureObject, migrateArchitecture } from './architecture';
-import { repairWorld } from '../core/schema.js';
+import { repairOrphanSubcells, repairWorld } from '../core/schema.js';
 import { current, isDraft, type Draft } from 'immer';
 import type { GameMap, MapObject, SeenObject, VisionLayer, World } from '../core/types';
 import { linesToFlow } from '../rules/flow';
@@ -108,6 +108,7 @@ export function syncMemory(d: Draft<World>) {
 
 /** 旧存档（只有 0/1 迷雾）补上记忆字段。 */
 export function migrateWorld(w: World): World {
+  repairOrphanSubcells(w);
   for (const m of w.maps) {
     migrateArchitecture(m);
     if (!m.seen) m.seen = { cells: m.cells.map((c, i) => (m.fog[i] === 1 ? c : '')), objects: [] };

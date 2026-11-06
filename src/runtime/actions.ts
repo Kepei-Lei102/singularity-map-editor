@@ -21,7 +21,7 @@ import { TIER_LABEL } from '../core/types';
 import { download, uid } from '../core/util';
 import { syncMemory } from '../scene/memory';
 import { contentKey, getRaw, listStored, mediaChanged, putBlobs, storageKey } from './media';
-import { checkRoomObjects, checkWorld, repairWorld } from '../core/schema.js';
+import { checkRoomObjects, checkWorld, repairOrphanSubcells, repairWorld } from '../core/schema.js';
 import { allSlots, dropSlot, loadSlot, saveSlot } from '../core/persist';
 import { send } from './sync';
 import { migrateWorld } from '../scene/memory';
@@ -865,6 +865,7 @@ function parseWorld(text: string): World {
   let w: unknown;
   try { w = JSON.parse(text); } catch { throw new Error('world.json 不是有效的 JSON'); }
   repairWorld(w); // 旧版允许过的超范围数值先夹回来
+  repairOrphanSubcells(w); // 旧版取消细分留下的孤儿子格：丢掉，不然严格校验会拒绝导入
   checkWorld(w);
   migrateWorld(w);
   checkWorld(w, true); // 补完旧字段以后再严格查一遍，确保交给编辑器的是完整的工程
