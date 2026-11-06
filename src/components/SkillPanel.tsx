@@ -28,6 +28,12 @@ export function SkillPanel() {
   const [forceSkill, setForceSkill] = useState<SkillDef | null>(null);
   const [syncopeMin, setSyncopeMin] = useState(60);
   const actor = party.find((p) => p.id === actorId);
+
+  // 角色列表变化后（新加/删掉角色），旧选择可能已经不存在：落回第一个角色。
+  useEffect(() => {
+    if (!party.some((p) => p.id === actorId)) setActorId(party[0]?.id ?? '');
+  }, [actorId, party]);
+
   const unlocked = new Set(actor?.skills ?? []);
   const nowPathway = actor ? currentPathwayOf(actor) : null;
   const switchNote = (p: string) => (nowPathway && p !== nowPathway ? ' · 换途径 +1 ME' : '');
