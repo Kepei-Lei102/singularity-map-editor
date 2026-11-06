@@ -45,8 +45,8 @@ test('升级视图能看到未解锁的名字', () => {
 test('搜索命中名字、技能组、说明；锁定的不搜出来', () => {
   const unlocked = new Set(['037-9-101']);
   assert.equal(api.filterSkills(api.SKILL_LIBRARY, '冥想', unlocked).length, 1);
-  assert.equal(api.filterSkills(api.SKILL_LIBRARY, '战斗', unlocked).length, 0);      // 锁定的
-  assert.equal(api.filterSkills(api.SKILL_LIBRARY, '战斗', unlocked, { levelUp: true }).length, 1);
+  assert.equal(api.filterSkills(api.SKILL_LIBRARY, '战斗·兵器', unlocked).length, 0);      // 锁定的
+  assert.equal(api.filterSkills(api.SKILL_LIBRARY, '战斗·兵器', unlocked, { levelUp: true }).length, 1);
 });
 
 test('ME 不够时不能发动', () => {

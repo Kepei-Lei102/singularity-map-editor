@@ -3,12 +3,13 @@
 
 import type { CheckSpec } from './interaction';
 import type { PC, PublicSkill } from '../core/types';
+import { SKILL_DATA } from './skills-data';
 
 export interface SkillDef {
   id: string; // 技能序号，例如 037-9-101
   name: string; // 【冥想】
   pathway: string; // 金手指途径
-  group: string; // 技能组（借动作分类：医疗·调养）
+  group: string; // 技能组（UI 二级菜单；生成的数据借「作用」第一个标签，如 分析/控制/社交）
   sequence: number; // 序列
   me: number; // ME 消耗：技能动作默认 1
   desc: string; // 玩家说明（可公开）
@@ -40,12 +41,15 @@ export function castCost(pc: Pick<PC, 'pathway' | 'skills'>, skill: SkillDef): {
 }
 
 /** Ian 的 4 条（动作库解锁明细 037-9-*）。密档里还有 2 条，等拿到再补。 */
-export const SKILL_LIBRARY: SkillDef[] = [
+const IAN_SKILLS: SkillDef[] = [
   { id: '037-9-101', name: '冥想', pathway: '金手指途径', group: '医疗·调养', sequence: 9, me: 1, desc: '静坐收敛心神，把杂念清出去；恢复类的入口。' },
   { id: '037-9-102', name: '以慢制快', pathway: '金手指途径', group: '战斗·兵器', sequence: 9, me: 1, desc: '后发先至：让对方先动，再把它的节奏打断。' },
   { id: '037-9-003', name: '定式回响', pathway: '金手指途径', group: '技术·骇入', sequence: 9, me: 1, desc: '把见过的局面当成定式调出来，重复推演一遍。' },
   { id: '037-9-201', name: '长考', pathway: '金手指途径', group: '知识·技艺', sequence: 9, me: 1, desc: '花时间把整盘读完，换一次更稳的判断。' },
 ];
+
+/** 技能库 = 手录的 Ian 4 条 + 自动生成的四个职业序列9 50 条。 */
+export const SKILL_LIBRARY: SkillDef[] = [...IAN_SKILLS, ...SKILL_DATA];
 
 export interface SkillGroup {
   pathway: string;
