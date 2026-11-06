@@ -117,7 +117,16 @@ export function Sidebar() {
         {ui.tool === 'd100' && <div className="hint">D100 区域：恐怖副本等，用百分值检定。再刷一次可以擦掉。</div>}
         {ui.mode === 'edit' && <Check label="显示迷雾" value={ui.showFogInEdit} onChange={(v) => setUI({ showFogInEdit: v })} />}
         {ui.mode === 'edit' && <Check label="规则书视野" value={ui.visionAlgo === 'rulebook'} onChange={(v) => setVisionAlgo(v ? 'rulebook' : 'legacy')} />}
-        <Check label="显示0.25米子格线" value={ui.showSubgrid} onChange={(v) => setUI({ showSubgrid: v })} />
+        {ui.mode === 'edit' && (
+          <>
+            <Row label="画笔精度"><span className="inline">
+              <button className={ui.fine ? '' : 'on'} onClick={() => setUI({ fine: false })}>大格</button>
+              <button className={ui.fine ? 'on' : ''} onClick={() => setUI({ fine: true, showSubgrid: true })}>小格 1/3</button>
+            </span></Row>
+            <div className="hint">流程：用「细分为3×3」框选格子（会自动切到小格），放物件/触发区时落点按 1/3 格吸附并顺手细分落到的格子；放完点「大格」回到整格。</div>
+          </>
+        )}
+        <Check label="显示子格线" value={ui.showSubgrid} onChange={(v) => setUI({ showSubgrid: v })} />
         <Check label="显示坐标" value={ui.showRulers} onChange={(v) => setUI({ showRulers: v })} />
         <Check label="显示编号（和给 AI 的图一致）" value={ui.showNumbers} onChange={(v) => setUI({ showNumbers: v })} />
         {ui.tool.startsWith('fog') && cur && (

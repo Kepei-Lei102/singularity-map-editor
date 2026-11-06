@@ -241,6 +241,7 @@ export interface UIState {
   visionAlgo: 'legacy' | 'rulebook'; // 视野算法：规则书（默认）或老口径，留作对照用
   showNumbers: boolean;
   showRulers: boolean;
+  fine: boolean; // 小格画笔：落点按 1/3 格吸附，落点自动细分
   showSubgrid: boolean;
   toast: string | null;
   focus?: import('./types').Focus | null; // 统一暂停：战斗/技能/对话
@@ -271,6 +272,7 @@ let ui: UIState = {
   knowledgeTarget: '',
   tab: 'inspect',
   showFogInEdit: false,
+  fine: false,
   focus: null,
   cast: null,
   visionAlgo: 'rulebook',
