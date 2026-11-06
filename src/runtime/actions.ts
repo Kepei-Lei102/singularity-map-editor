@@ -796,7 +796,10 @@ class MissingMedia extends Error {}
  * 世界在开始时就固定下来，媒体按那一刻的存储名去读（文件不会被改，所以读到的一定是那个版本）。
  */
 async function buildProjectZip(allowMissing = false) {
-  const w = getWorld();
+  // 导出前再修一次：旧工程可能已经在内存里，加载时的迁移不一定跑过（比如 HMR 没刷新）。
+  const w = structuredClone(getWorld());
+  const dropped = repairOrphanSubcells(w);
+  if (dropped) toast(`导出前清理了 ${dropped} 个失效子格`);
   checkWorld(w);
   const zip = new JSZip();
   zip.file('world.json', JSON.stringify(w, null, 2));
@@ -828,7 +831,9 @@ export async function exportProject() {
 /** 只导出文字数据（world.json）：体积小、方便看 diff；媒体文件不跟着走，换电脑请用 zip。 */
 export function exportWorldJson() {
   if (getUI().trial) return toast('试玩中不能导出，先结束试玩');
-  const w = getWorld();
+  const w = structuredClone(getWorld());
+  const dropped = repairOrphanSubcells(w);
+  if (dropped) toast(`导出前清理了 ${dropped} 个失效子格`);
   try { checkWorld(w); } catch (e) { return toast('导出失败：' + (e as Error).message); }
   download(`${w.name || '世界'}.json`, JSON.stringify(w, null, 2), 'application/json');
   toast(w.media.length ? `已导出 JSON（不含 ${w.media.length} 个媒体文件；换电脑请用「导出成 zip」）` : '已导出 JSON');
