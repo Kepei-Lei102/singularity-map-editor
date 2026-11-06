@@ -3,8 +3,8 @@ import { identityKnown, playerSeen, UNKNOWN_OBJECT } from '../scene/identity';
 import { objectEnabled } from '../core/objectData.js';
 import { isArchitectureObject, clipArchitecture, fogAt, tokenPosition } from '../scene/architecture';
 import { anyVisible } from '../scene/memory';
-import type { Endpoint, GameMap, PlayerClue, VisionLayer, World, Focus, SkillCast, PublicSkill } from '../core/types';
-import { visibleMarks } from '../scene/perception';
+import type { DiceJudgment, Endpoint, GameMap, PlayerClue, VisionLayer, World, Focus, SkillCast, PublicSkill } from '../core/types';
+import { seesPoint, sightCosts, visibleMarks } from '../scene/perception';
 import { currentPathwayOf, publicSkillsOf } from '../rules/skills';
 import { numbering } from '../scene/render';
 import { getRealWorld, getWorld, getUI, saveNow, worldContext, toast } from '../core/store';
@@ -121,11 +121,28 @@ export function playerWorld(w: World, mapId: string | null = w.playerMapId, pcId
     party: pcId ? w.party.filter(p => p.id === pcId).map(p => ({ id: p.id, name: p.name, tags: [], color: p.color })) : [],
     terrains: w.terrains.filter((t) => usedTerrains.has(t.id)),
     flows: [], log: [], npcs: [], media: [],
-    judgments: valid && pcId ? (w.judgments ?? []).filter(j => j.recipients.includes(pcId)).map(j => ({ ...j, recipients: [pcId] })) : [],
+    ...(() => {
+      if (!valid || !pcId) return { judgments: [] };
+      const mine = (w.judgments ?? []).filter(j => j.recipients.includes(pcId));
+      const latest = mine[mine.length - 1];
+      const latestHidden = !!latest && !judgmentVisible(w, latest, pcId);
+      if (latestHidden) return { judgments: [], judgmentNotice: { id: latest!.id, at: latest!.at } };
+      return { judgments: mine.filter(j => judgmentVisible(w, j, pcId)).map(j => ({ ...j, recipients: [pcId] })), judgmentNotice: null };
+    })(),
     labels, clues, marks, connections,
     playerMapId: pm?.id ?? null,
     maps: pm ? [pm] : [],
   };
+}
+
+/** 判定是否在这个角色的视野里：自己发起的永远算；别的人看判定锚点。 */
+function judgmentVisible(w: World, j: DiceJudgment, pcId: string): boolean {
+  if (!j.place) return true;
+  if (j.subjectId === pcId) return true;
+  const m = w.maps.find((x) => x.id === j.place!.mapId);
+  const t = m?.tokens.find((x) => x.pcId === pcId);
+  if (!m || !t) return false;
+  return seesPoint(sightCosts(w, m), m, t, { x: j.place.x, y: j.place.y });
 }
 
 /** Only the bound role's live cells and memory leave the host. */

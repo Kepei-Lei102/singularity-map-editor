@@ -40,6 +40,7 @@ export function PlayerView() {
 
   const map = world?.maps.find((m) => m.id === world.playerMapId);
   const judgment = world?.judgments?.slice(-1)[0];
+  const judgmentNotice = world?.judgmentNotice;
   const clues = [...(world?.clues ?? [])].sort((a, b) => b.at - a.at); // 公开过的线索单独带来，物件看不见了也还在
 
   const held = focus?.kind === 'skill';
@@ -74,6 +75,7 @@ export function PlayerView() {
           ))}
         </details>
       )}
+      {judgmentNotice && !judgment && <div className="player-judgment-notice">发生了一次判定</div>}
       {judgment && <button className="player-judgment-toggle" onClick={() => setDismissed(dismissed === judgment.id ? null : judgment.id)}>正式判定 · {judgment.title}</button>}
       {judgment && dismissed !== judgment.id && <aside className="player-judgment">
         <button onClick={() => setDismissed(judgment.id)}>收起</button><h3>{judgment.title}</h3>

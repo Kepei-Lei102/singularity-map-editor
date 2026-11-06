@@ -412,14 +412,21 @@ export interface DiceJudgment {
   id: Id;
   title: string;
   ruling: string;
-  recipients: Id[]; // Explicit IDs; never follows later group changes.
+  recipients: Id[]; // 正式判定一律广播给全队；这个字段保留给旧数据
   at: number;
   session: number;
+  /** 判定落在哪个角色身上；用它棋子的位置做视野遮蔽的锚点。 */
+  subjectId?: Id | null;
+  /** 判定发生点（棋子坐标，实际值）；没有就不做遮蔽，全队看细节。 */
+  place?: { mapId: Id; x: number; y: number } | null;
   roll: { id: string; sides: 4 | 6 | 8 | 10 | 12 | 20 | 100; value: number; tens?: number | null; units?: number | null; material: 'wood' | 'plastic' | 'metal' | 'stone' | 'rubber'; persona: 'witness' | 'player'; algorithm?: string; seed: number; launch?: unknown };
 }
 
+export interface JudgmentNotice { id: Id; at: number }
 export interface World {
   judgments?: DiceJudgment[];
+  /** 只在玩家载荷里：最新一次判定不在他视野内，只给这个通知。 */
+  judgmentNotice?: JudgmentNotice | null;
   version: 1;
   name: string;
   terrains: Terrain[];

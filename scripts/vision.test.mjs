@@ -32,16 +32,16 @@ const fog = (id, x, kind = 'fogReveal', y = 1) => api.paintFog(map().id, [[x,y]]
 function freeze(id, x, y = 1) { fog(id,x,'fogHide',y); }
 const judgment = (recipients, id = 'physical-roll') => ({ title: '观察检定', ruling: '发现刻痕', recipients, roll: { id, sides: 100, value: 100, tens: 0, units: 0, material: 'metal', persona: 'witness', seed: 42 } });
 
-test('formal judgments preserve one physical result, recipient privacy and save validation', () => {
+test('formal judgments preserve one physical result, broadcast to the whole party and save validation', () => {
   const {w,m}=fixture(); install(w);
   const input=judgment(['a','a']), context=api.worldContext();
   assert.equal(api.publishJudgment(input,context),null);
-  assert.deepEqual(api.getWorld().judgments[0].recipients,['a']);
+  assert.deepEqual(api.getWorld().judgments[0].recipients,['a','b','c']);
   assert.equal(api.playerWorld(api.getWorld(),m.id,'a').judgments[0].roll.value,100);
-  assert.equal(api.playerWorld(api.getWorld(),m.id,'b').judgments.length,0);
+  assert.equal(api.playerWorld(api.getWorld(),m.id,'b').judgments[0].roll.value,100);
   assert.ok(api.publishJudgment(input,context));
   assert.ok(api.publishJudgment({...judgment(['a'],'bad'),roll:{...input.roll,id:'bad',units:1}},context));
-  assert.ok(api.publishJudgment(judgment(['missing'],'absent'),context));
+  assert.ok(api.publishJudgment({...judgment([],'absent'),subjectId:'missing'},context));
   assert.ok(api.publishJudgment(judgment(['a'],'stale'),'old-context'));
   assert.equal(api.getWorld().judgments.length,1);
   api.checkWorld(JSON.parse(JSON.stringify(api.getWorld())),true);
@@ -304,4 +304,26 @@ test('host and player refresh reconnect through saved binding and opener; player
   assert.equal(received.at(-1).world.viewerId,'a');
   assert.equal(broadcasts.some(m=>m.type==='world'||m.binding),false);
   playerOff();off();globalThis.window.opener=null;globalThis.location.href='http://localhost/';
+});
+
+test('判定不在视野内只给“发生了一次判定”，不泄露标题和骰点', () => {
+  const {w,m}=fixture(); install(w);
+  api.update((d) => {
+    const mm=d.maps[0];
+    mm.tokens=[
+      {id:'ta',pcId:'a',name:'A',color:'#fff',x:1,y:1},
+      {id:'tb',pcId:'b',name:'B',color:'#fff',x:1,y:4},
+      {id:'tc',pcId:'c',name:'C',color:'#fff',x:2,y:1},
+    ];
+    mm.cells[2*mm.width+1]='wall'; // a 和 b 之间隔一堵墙
+  });
+  const input={...judgment(['a','b','c'],'vision'),subjectId:'a',place:{mapId:m.id,x:1.5,y:1.5}};
+  assert.equal(api.publishJudgment(input,api.worldContext()),null);
+  const world=api.getWorld();
+  assert.equal(api.playerWorld(world,m.id,'a').judgments[0].roll.value,100); // 发起者自己
+  assert.equal(api.playerWorld(world,m.id,'c').judgments[0].roll.value,100); // 能看见 a
+  const hidden=api.playerWorld(world,m.id,'b');
+  assert.equal(hidden.judgments.length,0);
+  assert.equal(hidden.judgmentNotice.id,world.judgments[0].id);
+  api.checkWorld(JSON.parse(JSON.stringify(world)),true);
 });
