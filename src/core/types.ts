@@ -461,6 +461,8 @@ export interface SkillCast {
   pathwayTo?: string;
   /** 已经扣掉的 ME（取消时按这个数退）。 */
   charged?: number;
+  /** 强行发动：ME 不够也发，代价是晕厥（由见证者定多长）。 */
+  overdrawn?: boolean;
   id: string;
   actorPcId: string;
   skillId: string;

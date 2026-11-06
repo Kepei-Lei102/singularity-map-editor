@@ -18,13 +18,14 @@ export const castOf = (): SkillCast | null => (getUI().cast as SkillCast | null)
 /** 发动即扣：扣 ME，并把当前途径换过去。取消时按 charged 退。 */
 function charge(c: SkillCast) {
   const cost = c.meCost ?? 0;
+  let deducted = 0;
   update((d) => {
     const pc = d.party.find((p) => p.id === c.actorPcId);
     if (!pc) return;
-    if (cost > 0 && pc.me != null) pc.me = Math.max(0, pc.me - cost);
+    if (cost > 0 && pc.me != null) { deducted = Math.min(pc.me, cost); pc.me -= deducted; }
     if (c.pathwayTo) pc.pathway = c.pathwayTo;
   });
-  setCast({ ...c, charged: cost });
+  setCast({ ...c, charged: deducted }); // 只记真正扣掉的，强行发动扣到 0 时就退 0
 }
 function refund(c: SkillCast) {
   const back = c.charged ?? 0;
@@ -47,19 +48,20 @@ function setCast(next: SkillCast | null) {
 }
 
 /** 发起。玩家发起直接进确认；见证者代发起先等玩家同意（60 秒）。 */
-export function beginSkillCast(actorPcId: string, skillId: string, initiator: 'player' | 'gm'): string | null {
+export function beginSkillCast(actorPcId: string, skillId: string, initiator: 'player' | 'gm', force = false): string | null {
   if (!skillById(skillId)) return '没有这个技能';
   if (castOf()) return '已经有技能在发动中，先处理完';
   const pc = getWorld().party.find((p) => p.id === actorPcId);
   if (!pc) return '找不到这个角色';
   const skill = skillById(skillId)!;
   const { cost, from } = castCost(pc, skill);
-  if (pc.me != null && pc.me < cost) return `ME 不够：【${skill.name}】要 ${cost} ME，现在只有 ${pc.me}`;
+  const short = pc.me != null && pc.me < cost;
+  if (short && !force) return `ME 不够：【${skill.name}】要 ${cost} ME，现在只有 ${pc.me}（可以强行发动，代价是晕厥）`;
   const cast: SkillCast = {
     id: uid(), actorPcId, skillId, initiator,
     step: initiator === 'gm' ? 'approval' : 'confirm',
     expiresAt: initiator === 'gm' ? Date.now() + APPROVAL_TIMEOUT_MS : undefined,
-    meCost: cost, pathwayFrom: from ?? undefined, pathwayTo: skill.pathway,
+    meCost: cost, pathwayFrom: from ?? undefined, pathwayTo: skill.pathway, overdrawn: short || undefined,
   };
   setCast(cast);
   // 玩家自己发起：当场算发动，直接扣；见证者代发起要等玩家点头才扣。

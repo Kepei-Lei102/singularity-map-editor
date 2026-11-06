@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react';
-import { getWorld, useUI, useWorld } from '../core/store';
+import { getWorld, update, useUI, useWorld } from '../core/store';
 import { SKILL_LIBRARY, currentPathwayOf, filterSkills, groupSkills, type SkillDef } from '../rules/skills';
 import { objectEnabled } from '../core/objectData.js';
 import { approveSkillCast, beginSkillCast, cancelSkillCast, closeSkillCast, resolveSkillCast, timeoutSkillCast } from '../rules/skillCast';
+import { findMap } from '../runtime/actions';
 
 const d20 = () => {
   const buf = new Uint32Array(1);
@@ -24,6 +25,8 @@ export function SkillPanel() {
   const [levelUp, setLevelUp] = useState(false);
   const [target, setTarget] = useState('');
   const [msg, setMsg] = useState('');
+  const [forceSkill, setForceSkill] = useState<SkillDef | null>(null);
+  const [syncopeMin, setSyncopeMin] = useState(60);
   const actor = party.find((p) => p.id === actorId);
   const unlocked = new Set(actor?.skills ?? []);
   const nowPathway = actor ? currentPathwayOf(actor) : null;
@@ -36,9 +39,21 @@ export function SkillPanel() {
     return () => window.clearInterval(t);
   }, [cast?.step]);
 
-  const start = (skill: SkillDef) => {
-    const err = beginSkillCast(actorId, skill.id, initiator);
-    setMsg(err ?? '');
+  const start = (skill: SkillDef, force = false) => {
+    const err = beginSkillCast(actorId, skill.id, initiator, force);
+    if (err) { if (/ME 不够/.test(err)) setForceSkill(skill); setMsg(err); }
+    else { setMsg(''); setForceSkill(null); }
+  };
+
+  /** 强行发动的代价：在试玩里给这个角色挂晕厥状态。 */
+  const applySyncope = () => {
+    const t = ui.trial;
+    if (!t) { setMsg('不在试玩中：结束后请在场外手动记晕厥'); return; }
+    update((d) => {
+      const tok = findMap(d, t.mapId)?.tokens.find((k) => k.pcId === actorId);
+      if (!tok) return;
+      tok.status = t.combat ? { label: '晕厥', roundsLeft: Math.max(1, Math.ceil(syncopeMin / 5)) } : { label: '晕厥', endsAt: Date.now() + syncopeMin * 60000 };
+    });
   };
 
   const castView = () => {
@@ -65,6 +80,7 @@ export function SkillPanel() {
           {world.maps.find((m) => m.id === ui.mapId)?.objects.filter((o) => objectEnabled(world.maps.find((m) => m.id === ui.mapId)!, o)).map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
         </select></label>
         <div className="btns">
+          {cast.overdrawn && <p className="muted">强行发动：结算后晕厥 <input type="number" min={1} value={syncopeMin} onChange={(e) => setSyncopeMin(Math.max(1, +e.target.value || 60))} style={{ width: 64 }} /> 分钟（由见证者定）。</p>}
           <button onClick={() => { const e = resolveSkillCast(d20(), target || undefined); setMsg(e ?? ''); }}>掷骰并结算</button>
           <button onClick={() => { cancelSkillCast('当场取消'); setMsg(''); }}>取消</button>
         </div>
@@ -74,7 +90,8 @@ export function SkillPanel() {
       <div className="cast-box">
         <div className="cast-title">结果：{cast.note}（D20 {cast.roll}，合计 {cast.total}）</div>
         <div className="muted">这一步只是试点链路：技能还没接动作卡，效果表还没挂。</div>
-        <div className="btns"><button onClick={() => { closeSkillCast('技能发动结束'); setMsg(''); }}>结束</button></div>
+        {cast.overdrawn && <p className="muted">强行发动：晕厥 <input type="number" min={1} value={syncopeMin} onChange={(e) => setSyncopeMin(Math.max(1, +e.target.value || 60))} style={{ width: 64 }} /> 分钟（由见证者定）。</p>}
+        <div className="btns"><button onClick={() => { const over = cast.overdrawn; closeSkillCast('技能发动结束'); if (over) applySyncope(); setMsg(''); }}>结束</button></div>
       </div>
     );
   };
@@ -87,6 +104,16 @@ export function SkillPanel() {
     <section className="skill-panel">
       <h3>技能</h3>
       {castView()}
+      {!cast && forceSkill && (
+        <div className="cast-box">
+          <div className="cast-title">ME 不够：【{forceSkill.name}】</div>
+          <div className="muted">可以强行发动，代价是长时间晕厥（时长由见证者定）。</div>
+          <div className="btns">
+            <button onClick={() => start(forceSkill, true)}>强行发动</button>
+            <button onClick={() => { setForceSkill(null); setMsg(''); }}>算了</button>
+          </div>
+        </div>
+      )}
       {!cast && (
         <>
           <div className="skill-row">

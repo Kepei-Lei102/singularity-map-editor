@@ -186,3 +186,29 @@ test('见证者代发起：玩家点头时才扣 ME', () => {
   assert.equal(api.getWorld().party[0].me, 4);
   api.closeSkillCast();
 });
+
+test('ME 不够可以强行发动：扣到 0，标 overdrawn，取消退回', () => {
+  fixture();
+  api.update((d) => { const pc = d.party[0]; pc.me = 0; pc.meMax = 10; pc.pathway = '金手指途径'; });
+  assert.match(api.beginSkillCast('pc', '037-9-101', 'player') ?? '', /ME 不够/);
+  assert.equal(api.castOf(), null);
+  assert.equal(api.beginSkillCast('pc', '037-9-101', 'player', true), null);
+  const c = api.castOf();
+  assert.equal(c.overdrawn, true);
+  assert.equal(c.meCost, 1);
+  assert.equal(api.getWorld().party[0].me, 0);
+  api.cancelSkillCast('测完');
+  assert.equal(api.getWorld().party[0].me, 0);
+  assert.equal(api.castOf(), null);
+});
+
+test('见证者代发起也能强行发动：点头时才扣到 0', () => {
+  fixture();
+  api.update((d) => { const pc = d.party[0]; pc.me = 0; pc.pathway = '金手指途径'; });
+  assert.equal(api.beginSkillCast('pc', '037-9-101', 'gm', true), null);
+  assert.equal(api.castOf().overdrawn, true);
+  assert.equal(api.getWorld().party[0].me, 0);
+  api.approveSkillCast(true);
+  assert.equal(api.getWorld().party[0].me, 0);
+  api.closeSkillCast();
+});
