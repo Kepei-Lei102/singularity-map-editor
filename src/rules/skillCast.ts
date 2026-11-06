@@ -54,6 +54,7 @@ export function beginSkillCast(actorPcId: string, skillId: string, initiator: 'p
   const pc = getWorld().party.find((p) => p.id === actorPcId);
   if (!pc) return '找不到这个角色';
   const skill = skillById(skillId)!;
+  if (pc.me == null) return '这个角色还没填 ME，先把 ME 填上再发动技能（在队伍面板）';
   const { cost, from } = castCost(pc, skill);
   const short = pc.me != null && pc.me < cost;
   if (short && !force) return `ME 不够：【${skill.name}】要 ${cost} ME，现在只有 ${pc.me}（可以强行发动，代价是晕厥）`;

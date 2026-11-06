@@ -88,7 +88,8 @@ export function PartyPanel() {
             <Num value={p.me ?? 0} min={0} onChange={(v) => update((d) => { d.party.find((x) => x.id === p.id)!.me = Math.max(0, Number.isFinite(v) ? v : 0); })} /> /
             <Num value={p.meMax ?? 10} min={0} onChange={(v) => update((d) => { d.party.find((x) => x.id === p.id)!.meMax = Math.max(0, Number.isFinite(v) ? v : 0); })} />
           </span></Row>
-          <div className="hint">只能发动「当前途径」下的技能；换途径多付 1 ME。ME 留空就不扣也不拦。</div>
+          {p.me == null && <div className="hint">还没填 ME：这个角色暂时不能发动技能。</div>}
+          <div className="hint">只能发动「当前途径」下的技能；换途径多付 1 ME。</div>
           <details className="pc-skills">
             <summary>已解锁技能 <span className="muted">{p.skills?.length ?? 0}</span></summary>
             {SKILL_LIBRARY.map((s) => (

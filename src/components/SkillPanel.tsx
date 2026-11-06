@@ -126,6 +126,7 @@ export function SkillPanel() {
           <input placeholder="搜索技能（名字 / 组 / 说明）" value={q} onChange={(e) => setQ(e.target.value)} />
           <label className="muted"><input type="checkbox" checked={levelUp} onChange={(e) => setLevelUp(e.target.checked)} /> 升级视图（显示未解锁的名字）</label>
           {!actor?.skills?.length && <p className="muted">这个角色还没有已解锁的技能。技能数据随编辑器走，角色身上只记 id。</p>}
+          {actor && actor.me == null && <p className="muted">这个角色还没填 ME，技能暂时不能发动（去队伍面板填 ME 当前 / 上限）。</p>}
           {q && hits.length === 0 && <p className="muted">没找到。</p>}
           {q && hits.map((s) => (
             <button key={s.id} className="skill-item" onClick={() => start(s)}>

@@ -57,7 +57,7 @@ test('ME 不够时不能发动', () => {
 
 function fixture() {
   const world = api.emptyWorld();
-  world.party = [{ id: 'pc', name: 'Ian', color: '#fff', tags: [], skills: ['037-9-101', '037-9-102'] }];
+  world.party = [{ id: 'pc', name: 'Ian', color: '#fff', tags: [], skills: ['037-9-101', '037-9-102'], me: 10, meMax: 10 }];
   api.replaceWorld(world);
   api.setUI({ mapId: 'x', mode: 'edit' });
   return world;
@@ -211,4 +211,12 @@ test('见证者代发起也能强行发动：点头时才扣到 0', () => {
   api.approveSkillCast(true);
   assert.equal(api.getWorld().party[0].me, 0);
   api.closeSkillCast();
+});
+
+test('ME 没填就不能发动，强行也不行', () => {
+  fixture();
+  api.update((d) => { delete d.party[0].me; });
+  assert.match(api.beginSkillCast('pc', '037-9-101', 'player') ?? '', /还没填 ME/);
+  assert.match(api.beginSkillCast('pc', '037-9-101', 'gm', true) ?? '', /还没填 ME/);
+  assert.equal(api.castOf(), null);
 });
