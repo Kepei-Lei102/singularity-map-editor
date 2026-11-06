@@ -226,6 +226,10 @@ export function checkWorld(w, migrated = false) {
     const at = `地图「${typeof m?.name === 'string' ? m.name : mi}」`;
     obj(m, at); id(m.id, `${at}.id`); str(m.name, `${at}.name`); str(m.layer, `${at}.layer`); int(m.floor, `${at}.floor`, -1000, 1000); str(m.notes, `${at}.notes`);
     int(m.width, `${at}.width`, 1, MAX_SIDE); int(m.height, `${at}.height`, 1, MAX_SIDE);
+    if (m.cellCm !== undefined) {
+      const bad = !Number.isInteger(m.cellCm) || m.cellCm < 15 || m.cellCm > 1500 || !(75 % m.cellCm === 0 || m.cellCm % 75 === 0);
+      if (bad) fail(`${at}.cellCm`, `大格尺寸必须是 75 的整倍数或整因数（15–1500cm），现在是 ${JSON.stringify(m.cellCm)}`);
+    }
     const n = m.width * m.height;
     if (m.subdivisions !== undefined) arr(m.subdivisions, `${at}.subdivisions`);
     checkArchitecture(m);

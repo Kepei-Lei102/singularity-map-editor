@@ -147,6 +147,8 @@ export interface GameMap {
   floor: number;
   width: number;
   height: number;
+  /** 一大格多少厘米。默认 75；只影响尺度和贴墙精度，规则仍按格算。必须是 75 的整倍数或整因数。 */
+  cellCm?: number;
   cells: string[]; // terrain id，'' = 空
   d100: number[]; // 1 = D100 区域
   fog: number[]; // 0 = 没去过（黑），1 = 现在看得见，2 = 去过、现在看不见（灰，显示记忆）

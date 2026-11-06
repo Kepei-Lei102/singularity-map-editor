@@ -220,6 +220,13 @@ function MapInspector({ world, map, editable }: { world: World; map: GameMap; ed
             </span>
           </Row>
           <ReshapeRow world={world} map={map} />
+          <Row label="大格尺寸"><span className="inline">
+            <Num value={map.cellCm ?? 75} step={25} min={15} max={1500} onChange={(v) => up((m) => {
+              const n = Number.isFinite(v) ? Math.round(v) : 75;
+              m.cellCm = (75 % n === 0 || n % 75 === 0) && n >= 15 && n <= 1500 ? n : 75;
+            })} /> cm
+          </span></Row>
+          <div className="hint">默认 75cm。只影响尺度、贴墙精度和 1/3 小格的物理大小（现在 {(map.cellCm ?? 75) / 3}cm）；移动、射程等规则仍按格算。必须是 75 的整倍数或整因数。</div>
           <Row label="备注"><Area value={map.notes} onChange={(v) => up((m) => { m.notes = v; }, 'mapnotes' + map.id)} /></Row>
         </>
       ) : (

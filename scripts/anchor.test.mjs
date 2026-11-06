@@ -99,3 +99,12 @@ test('校验：锚点只能是 0/1/2，且不能把物件推出地图', () => {
   o.anchor = { x: 1, y: 0 }; o.x = 9; // 宽 1 格贴到右边界，再偏移就出图
   assert.throws(() => api.checkWorld(world), /推出地图/);
 });
+
+test('大格尺寸只能是 75 的整倍数或整因数', () => {
+  const { world, map } = fixture();
+  map.cellCm = 150; assert.doesNotThrow(() => api.checkWorld(world)); // 2 倍
+  map.cellCm = 25; assert.doesNotThrow(() => api.checkWorld(world));  // 因数
+  map.cellCm = 50; assert.throws(() => api.checkWorld(world), /75/);  // 50 既不是倍数也不是因数
+  map.cellCm = 20; assert.throws(() => api.checkWorld(world), /75/);
+  map.cellCm = 75; assert.doesNotThrow(() => api.checkWorld(world));
+});
