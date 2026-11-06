@@ -55,7 +55,6 @@ function Editor() {
   const ui = useUI();
   const [desk, setDesk] = useState<'dice' | 'ai' | 'skill' | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
-  const rhRef = useRef<HTMLInputElement>(null);
   const left = usePanel('left', 220);
   const right = usePanel('right', 360);
   const panels = useRef({ left, right });
@@ -153,15 +152,13 @@ function Editor() {
             {ui.diskTarget && <button onClick={saveToDisk} title={ui.diskTarget}>保存回文件（⌘S）</button>}
             <button onClick={exportProject}>导出成 zip（文字数据＋全部媒体）</button>
             <button onClick={exportWorldJson}>导出成 JSON（只文字数据，不含媒体）</button>
-            <button onClick={() => fileRef.current?.click()}>导入 zip / JSON…</button>
-            <button onClick={() => confirm('导入 Rabbithole 地图会替换当前内容。当前内容请先用「导出成 zip」留一份。继续？') && rhRef.current?.click()}>导入 Rabbithole 地图（zip / JSON，会替换当前内容）…</button>
+            <button onClick={() => confirm('导入会替换当前内容。当前内容请先用「导出成 zip」留一份。继续？') && fileRef.current?.click()}>导入 zip / JSON（工程或 Rabbithole 地图，会替换当前内容）…</button>
             <button onClick={() => startFreshWorld(emptyWorld(), '新建空白世界')}>新建空白世界</button>
             <button onClick={() => startFreshWorld(demoWorld(), '载入示例数据')}>载入示例</button>
             {hasBackup() && <button onClick={() => confirm('换回上一次导入前的内容？（现在的内容会存成备份，可以再换回来）') && restoreBackup()}>恢复导入前的内容</button>}
             <div className="menu-ver">奇点之后 · 地图编辑器 v{__APP_VERSION__}</div>
           </div>
         </details>
-        <input ref={rhRef} type="file" accept=".zip,.json" hidden onChange={(e) => { const f = e.target.files?.[0]; if (f) importAnyFile(f); e.target.value = ''; }} />
         <input ref={fileRef} type="file" accept=".zip,.json" hidden onChange={(e) => { const f = e.target.files?.[0]; if (f) importAnyFile(f); e.target.value = ''; }} />
       </header>
 
