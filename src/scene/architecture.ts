@@ -7,6 +7,18 @@ export const tokenPosition = (t: { x: number; y: number; subcell?: Point }): Poi
   ? { x: (t.subcell.x + 0.5) / 3, y: (t.subcell.y + 0.5) / 3 }
   : { x: t.x + 0.5, y: t.y + 0.5 };
 export const isSubdivided = (m: GameMap, x: number, y: number) => (m.subdivisions ?? []).includes(Math.floor(y) * m.width + Math.floor(x));
+
+/** 物件的实际占位矩形：x/y 是整格，anchor 是 1/3 格的偏移（0/1/2）。尺寸仍按整格。 */
+export const anchorOf = (o: { anchor?: Point }) => ({ x: o.anchor?.x ?? 0, y: o.anchor?.y ?? 0 });
+export const objectRect = (o: { x: number; y: number; w: number; h: number; anchor?: Point }) => {
+  const a = anchorOf(o);
+  return { x: o.x + a.x / 3, y: o.y + a.y / 3, w: o.w, h: o.h };
+};
+/** 指针位置（小数格坐标）落在哪一格里的第几个小格。 */
+export const anchorFromPoint = (p: Point): Point => {
+  const cx = Math.floor(p.x), cy = Math.floor(p.y);
+  return { x: Math.min(2, Math.max(0, Math.floor((p.x - cx) * 3 + 1e-8))), y: Math.min(2, Math.max(0, Math.floor((p.y - cy) * 3 + 1e-8))) };
+};
 export const subKey = (m: GameMap, x: number, y: number) => y * m.width * 3 + x;
 export function fogAt(m: GameMap, L: { fog: number[]; subFog?: Record<number, number> }, x: number, y: number) {
   if (isSubdivided(m, x, y)) return L.subFog?.[subKey(m, Math.floor(x * 3), Math.floor(y * 3))] ?? 0;
@@ -33,8 +45,9 @@ export function segmentHitsRect(a: Point, b: Point, r: { x: number; y: number; w
   return true;
 }
 export const architectureBlocksSight = (m: GameMap, a: Point, b: Point) => architectureGeometry(m).some(r => r.blocksSight && segmentHitsRect(a, b, r));
-export function furnitureSweepBlocked(m: GameMap, o: { x: number; y: number; w: number; h: number }, x: number, y: number) {
-  return architectureGeometry(m).some(r => r.blocksMove && segmentHitsRect({ x: o.x + o.w / 2, y: o.y + o.h / 2 }, { x: x + o.w / 2, y: y + o.h / 2 }, { x: r.x - o.w / 2 + 1e-8, y: r.y - o.h / 2 + 1e-8, w: r.w + o.w - 2e-8, h: r.h + o.h - 2e-8 }));
+export function furnitureSweepBlocked(m: GameMap, o: { x: number; y: number; w: number; h: number; anchor?: Point }, x: number, y: number) {
+  const q = objectRect(o), dx = x - o.x, dy = y - o.y;
+  return architectureGeometry(m).some(r => r.blocksMove && segmentHitsRect({ x: q.x + q.w / 2, y: q.y + q.h / 2 }, { x: q.x + dx + q.w / 2, y: q.y + dy + q.h / 2 }, { x: r.x - q.w / 2 + 1e-8, y: r.y - q.h / 2 + 1e-8, w: r.w + q.w - 2e-8, h: r.h + q.h - 2e-8 }));
 }
 /** 圆形人物沿整条线段扫掠。对轴对齐运动，矩形扩张+圆角精确距离。 */
 function circleSweep(a: Point, b: Point, r: { x: number; y: number; w: number; h: number }, radius: number) {
@@ -53,7 +66,7 @@ export function characterPathClear(w: World, m: GameMap, a: Point, b: Point, id?
       const t = w.terrains.find(t => t.id === m.cells[y * m.width + x]);
       if ((!t || t.blocksMove) && circleSweep(a, b, { x, y, w: 1, h: 1 }, radius)) return false;
     }
-  if (m.objects.some(o => o.enabled !== false && o.kind === 'object' && !isArchitectureObject(o) && (o.physical?.blocksMove ?? (o.blocksWhen ? o.blocksWhen.includes(o.state) : o.height >= 0.5)) && circleSweep(a, b, o, radius))) return false;
+  if (m.objects.some(o => o.enabled !== false && o.kind === 'object' && !isArchitectureObject(o) && (o.physical?.blocksMove ?? (o.blocksWhen ? o.blocksWhen.includes(o.state) : o.height >= 0.5)) && circleSweep(a, b, objectRect(o), radius))) return false;
   return !m.tokens.some(t => t.id !== id && circleSweep(a, b, { ...tokenPosition(t), w: 0, h: 0 }, radius * 2));
 }
 export function nextTokenStep(m: GameMap, t: Token, dx: number, dy: number) {
@@ -85,7 +98,7 @@ export function clipArchitecture(m: GameMap, L: { fog: number[]; subFog?: Record
 export function architectureTransitionError(before: GameMap, after: GameMap): string | null {
   const old = architectureGeometry(before).filter(r => r.blocksMove), next = architectureGeometry(after).filter(r => r.blocksMove);
   const added = next.filter(r => !old.some(b => b.x === r.x && b.y === r.y && b.w === r.w && b.h === r.h));
-  if (added.some(r => after.tokens.some(t => circleSweep(tokenPosition(t), tokenPosition(t), r, 1 / 3)) || after.objects.some(o => o.enabled !== false && !isArchitectureObject(o) && o.kind === 'object' && (o.physical?.blocksMove ?? (o.blocksWhen ? o.blocksWhen.includes(o.state) : o.height >= .5)) && o.x < r.x + r.w - 1e-8 && o.x + o.w > r.x + 1e-8 && o.y < r.y + r.h - 1e-8 && o.y + o.h > r.y + 1e-8))) return '门洞中有人或家具，不能关门';
+  if (added.some(r => after.tokens.some(t => circleSweep(tokenPosition(t), tokenPosition(t), r, 1 / 3)) || after.objects.some(o => { if (o.enabled === false || isArchitectureObject(o) || o.kind !== 'object' || !(o.physical?.blocksMove ?? (o.blocksWhen ? o.blocksWhen.includes(o.state) : o.height >= .5))) return false; const q = objectRect(o); return q.x < r.x + r.w - 1e-8 && q.x + q.w > r.x + 1e-8 && q.y < r.y + r.h - 1e-8 && q.y + q.h > r.y + 1e-8; }))) return '门洞中有人或家具，不能关门';
   return null;
 }
 export function objectStateError(map: GameMap, id: string, state: number): string | null {

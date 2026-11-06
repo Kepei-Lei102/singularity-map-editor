@@ -7,6 +7,7 @@ import type { Draft } from 'immer';
 import JSZip from 'jszip';
 import { getUI, getWorld, reachableWorlds, replaceWorld, setUI, toast, update, worldContext, type Selection } from '../core/store';
 import { blocksMovement, pcWithin, seesPoint, sightCosts, withVision } from '../scene/perception';
+import { objectRect } from '../scene/architecture';
 import { applyKnowledge, type KnowledgeEffect } from '../rules/interaction';
 import type { Flow, GameMap, LogEntry, MapObject, MediaAttach, Memory, Room, RoomObjectSnapshot, Tier, World } from '../core/types';
 import { newObject } from '../core/defaults';
@@ -410,7 +411,8 @@ export function itemsAt(w: World, m: GameMap, x: number, y: number): StackItem[]
     .forEach((t) => out.push({ sel: { type: 'token', mapId: m.id, id: t.id }, label: t.name, kind: '棋子' }));
   w.connections.filter((c) => [c.a, c.b].some((p) => p.mapId === m.id && p.x === x && p.y === y))
     .forEach((c) => out.push({ sel: { type: 'conn', id: c.id }, label: c.label || CONN_LABEL[c.kind], kind: '连接点' }));
-  const hits = m.objects.filter((o) => objectEnabled(m, o) && x >= o.x && x < o.x + o.w && y >= o.y && y < o.y + o.h);
+  // 物件可能按 1/3 格偏移，点在某格里只要和它的实际矩形相交就算点中
+  const hits = m.objects.filter((o) => objectEnabled(m, o) && objectRect(o).x < x + 1 && objectRect(o).x + o.w > x && objectRect(o).y < y + 1 && objectRect(o).y + o.h > y);
   hits.filter((o) => o.kind === 'object').sort((a, b) => b.height - a.height)
     .forEach((o) => out.push({ sel: { type: 'object', mapId: m.id, id: o.id }, label: (o.icon ? o.icon + ' ' : '') + o.name, kind: `物件 ${o.height}m` }));
   hits.filter((o) => o.kind === 'zone')

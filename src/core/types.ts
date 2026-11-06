@@ -55,6 +55,8 @@ export interface MapObject {
   y: number;
   w: number;
   h: number;
+  /** 位置吸附到 1/3 格：0/1/2，表示锚点在大格里的第几个小格。尺寸仍按整格。 */
+  anchor?: Point;
   height: number; // 米。2.5D：同层物件的高度
   color: string;
   icon: string;

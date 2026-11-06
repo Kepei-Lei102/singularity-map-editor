@@ -1,6 +1,6 @@
 import { effectiveLayer } from '../scene/vision';
 import { objectEnabled } from '../core/objectData.js';
-import { architectureWalls, architectureDoors, isArchitectureObject, characterPathClear, furnitureSweepBlocked, isSubdivided, tokenPosition } from '../scene/architecture';
+import { architectureWalls, architectureDoors, isArchitectureObject, characterPathClear, furnitureSweepBlocked, isSubdivided, tokenPosition, objectRect, anchorFromPoint } from '../scene/architecture';
 import { addArchitectureDoor, addArchitectureWall, eraseArchitecture, moveMapToken, paintFog, subdivideRegion, toggleArchitectureDoor } from '../runtime/actions';
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { GameMap, World } from '../core/types';
@@ -15,7 +15,7 @@ type Drag =
   | { k: 'wall'; ax: number; ay: number; bx: number; by: number }
   | { k: 'pan'; sx: number; sy: number; px: number; py: number }
   | { k: 'paint'; lx: number; ly: number; value: number }
-  | { k: 'rect'; x0: number; y0: number; x1: number; y1: number }
+  | { k: 'rect'; x0: number; y0: number; x1: number; y1: number; ax: number; ay: number }
   | { k: 'obj'; id: string; ox: number; oy: number; moved: boolean; next: Selection }
   | { k: 'tok'; id: string; fx: number; fy: number; moved: boolean; next: Selection }
   | { k: 'click'; next: Selection };
@@ -246,7 +246,8 @@ export function MapCanvas({ world, map, mode, playerNumbers = false, follow, vie
       } else if (ts.type === 'object' && (!isArchitectureObject(m.objects.find(o => o.id === ts.id)!) && (canEditMap(s) || slidingPuzzleForObject(m, ts.id)))) {
         const obj = m.objects.find((o) => o.id === ts.id)!;
         beginBatch();
-        drag.current = { k: 'obj', id: obj.id, ox: cx - obj.x, oy: cy - obj.y, moved: false, next };
+        const q = objectRect(obj), pp = toCell(e);
+        drag.current = { k: 'obj', id: obj.id, ox: pp.gx - q.x, oy: pp.gy - q.y, moved: false, next };
       } else drag.current = { k: 'click', next };
       return;
     }
@@ -260,7 +261,8 @@ export function MapCanvas({ world, map, mode, playerNumbers = false, follow, vie
       return;
     }
     if (tool === 'fill' || tool === 'object' || tool === 'zone' || tool === 'subdivide' || tool === 'unsubdivide') {
-      drag.current = { k: 'rect', x0: cx, y0: cy, x1: cx, y1: cy };
+      const a = anchorFromPoint({ x: toCell(e).gx, y: toCell(e).gy });
+      drag.current = { k: 'rect', x0: cx, y0: cy, x1: cx, y1: cy, ax: a.x, ay: a.y };
       setPreview({ x: cx, y: cy, w: 1, h: 1 });
       return;
     }
@@ -332,9 +334,14 @@ export function MapCanvas({ world, map, mode, playerNumbers = false, follow, vie
           dr.moved = true;
         }
       } else {
-        const nx = clampX(cx - dr.ox, o.w), ny = clampY(cy - dr.oy, o.h);
-        if (nx !== o.x || ny !== o.y) dr.moved = true;
-        if ((nx !== o.x || ny !== o.y) && (o.kind === 'zone' || !furnitureSweepBlocked(m, o, nx, ny))) update((d) => { const od = findMap(d, map.id)!.objects.find((x) => x.id === dr.id)!; od.x = nx; od.y = ny; });
+        const { gx, gy } = toCell(e);
+        const target = { x: gx - dr.ox, y: gy - dr.oy };
+      const nx = clampX(Math.floor(target.x), o.w), ny = clampY(Math.floor(target.y), o.h);
+      const ax = nx + o.w >= map.width ? 0 : Math.max(0, Math.min(2, Math.round((target.x - nx) * 3)));
+      const ay = ny + o.h >= map.height ? 0 : Math.max(0, Math.min(2, Math.round((target.y - ny) * 3)));
+      const prevAx = o.anchor?.x ?? 0, prevAy = o.anchor?.y ?? 0;
+      if (nx !== o.x || ny !== o.y || ax !== prevAx || ay !== prevAy) dr.moved = true;
+      if ((nx !== o.x || ny !== o.y || ax !== prevAx || ay !== prevAy) && (o.kind === 'zone' || !furnitureSweepBlocked(m, o, nx, ny))) update((d) => { const od = findMap(d, map.id)!.objects.find((x) => x.id === dr.id)!; od.x = nx; od.y = ny; if (ax || ay) od.anchor = { x: ax, y: ay }; else delete od.anchor; });
       }
     } else if (dr.k === 'tok') {
       const t = m.tokens.find((x) => x.id === dr.id);
@@ -388,6 +395,9 @@ export function MapCanvas({ world, map, mode, playerNumbers = false, follow, vie
         });
       } else {
         const o = newObject(tool === 'zone' ? 'zone' : 'object', r.x, r.y, r.w, r.h);
+        // 位置吸附到 1/3 格；贴到地图边时只能取 0，免得物件被推出地图
+        const ax = r.x + r.w >= map.width ? 0 : dr.ax, ay = r.y + r.h >= map.height ? 0 : dr.ay;
+        if (ax || ay) o.anchor = { x: ax, y: ay };
         update((d) => { findMap(d, map.id)!.objects.push(o); });
         setUI({ selection: { type: 'object', mapId: map.id, id: o.id }, tab: 'inspect', tool: 'select' });
       }

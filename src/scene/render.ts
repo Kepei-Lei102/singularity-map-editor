@@ -169,7 +169,8 @@ const tokenGlyph = (name: string) => {
 };
 
 function drawObject(ctx: CanvasRenderingContext2D, o: MapObject, player: boolean, zoom: number, scale: number, labelOnly = false, showLabel = true) {
-  const X = o.x * CS, Y = o.y * CS, W = o.w * CS, H = o.h * CS;
+  const ax = (o.anchor?.x ?? 0) / 3, ay = (o.anchor?.y ?? 0) / 3;
+  const X = (o.x + ax) * CS, Y = (o.y + ay) * CS, W = o.w * CS, H = o.h * CS;
   // 靠状态开合的物件（隔断、门）：此刻不挡路时只画虚线轮廓，表示板片收起了、人可以从这里过去。
   const ghost = !!o.blocksWhen && !o.blocksWhen.includes(o.state);
   if (!labelOnly) {
@@ -282,8 +283,8 @@ function drawTag(ctx: CanvasRenderingContext2D, o: MapObject, zoom: number) {
   const text = fitLabel(ctx, fullText, 240 / zoom);
   const tw = ctx.measureText(text).width;
   const pad = 5 / zoom;
-  const cx = (o.x + o.w / 2) * CS;
-  const bx = cx - tw / 2 - pad, by = o.y * CS - fs - pad * 3;
+  const cx = (o.x + (o.anchor?.x ?? 0) / 3 + o.w / 2) * CS;
+  const bx = cx - tw / 2 - pad, by = (o.y + (o.anchor?.y ?? 0) / 3) * CS - fs - pad * 3;
   ctx.fillStyle = 'rgba(18,18,24,0.92)';
   ctx.fillRect(bx, by, tw + pad * 2, fs + pad * 2);
   ctx.strokeStyle = '#ffd166';
@@ -344,7 +345,7 @@ function wrapLabel(ctx: CanvasRenderingContext2D, text: string, width: number, m
 }
 
 function drawZone(ctx: CanvasRenderingContext2D, o: MapObject, active: boolean, zoom: number) {
-  const X = o.x * CS, Y = o.y * CS, W = o.w * CS, H = o.h * CS;
+  const X = (o.x + (o.anchor?.x ?? 0) / 3) * CS, Y = (o.y + (o.anchor?.y ?? 0) / 3) * CS, W = o.w * CS, H = o.h * CS;
   ctx.save();
   ctx.strokeStyle = o.color;
   ctx.globalAlpha = active ? .9 : .35;

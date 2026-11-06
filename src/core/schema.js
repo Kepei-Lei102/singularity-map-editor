@@ -275,6 +275,12 @@ export function checkWorld(w, migrated = false) {
       if (!o.states.length) fail(`${oa}.states`, '是空的（至少要有一个状态）');
       int(o.state, `${oa}.state`, 0, o.states.length - 1);
       if (o.enabled !== undefined) bool(o.enabled, `${oa}.enabled`);
+      if (o.anchor !== undefined) {
+        obj(o.anchor, `${oa}.anchor`);
+        int(o.anchor.x, `${oa}.anchor.x`, 0, 2); int(o.anchor.y, `${oa}.anchor.y`, 0, 2);
+        // 锚点偏移不能把物件推出地图
+        if ((o.anchor.x && o.x + o.w >= m.width) || (o.anchor.y && o.y + o.h >= m.height)) fail(`${oa}.anchor`, '锚点偏移会把物件推出地图');
+      }
       identity(o.identity, `${oa}.identity`);
       if (o.blocksWhen !== undefined) arr(o.blocksWhen, `${oa}.blocksWhen`).forEach((v, k) => int(v, `${oa}.blocksWhen[${k}]`, 0, o.states.length - 1));
       if (o.geometry !== undefined) {

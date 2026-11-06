@@ -346,6 +346,14 @@ function ObjectInspector({ world, mapId, o, ui }: { world: World; mapId: string;
                 <Num value={o.h} min={1} max={MAX_SIDE} onChange={(v) => up((x) => { x.h = clampInt(v, 1, MAX_SIDE); })} />
               </span>}
             </Row>
+            {!architecture && !puzzle && <Row label="位置吸附（1/3 格）"><span className="inline">
+              <select value={o.anchor?.x ?? 0} onChange={e => up(x => { const v = +e.target.value; if (v || (x.anchor?.y ?? 0)) x.anchor = { x: v, y: x.anchor?.y ?? 0 }; else delete x.anchor; })}>
+                {[0, 1, 2].map(v => <option key={v} value={v} disabled={v > 0 && o.x + o.w >= mapW}>{v > 0 && o.x + o.w >= mapW ? `${v}（贴边）` : v}</option>)}
+              </select> /
+              <select value={o.anchor?.y ?? 0} onChange={e => up(x => { const v = +e.target.value; if (v || (x.anchor?.x ?? 0)) x.anchor = { x: x.anchor?.x ?? 0, y: v }; else delete x.anchor; })}>
+                {[0, 1, 2].map(v => <option key={v} value={v} disabled={v > 0 && o.y + o.h >= mapH}>{v > 0 && o.y + o.h >= mapH ? `${v}（贴边）` : v}</option>)}
+              </select>
+            </span></Row>}
             </>}
             {o.geometry && <><div className="kv">墙中心线 ({o.geometry.a.x},{o.geometry.a.y}) → ({o.geometry.b.x},{o.geometry.b.y}) · 单位250mm</div><Row label="材质"><select value={o.geometry.material} onChange={e => up(x => { x.geometry!.material = e.target.value as 'wall' | 'glass'; })}><option value="wall">实墙</option><option value="glass">玻璃</option></select></Row><Row label="厚度 mm"><Num value={o.geometry.thickness} min={1} max={750} onChange={v => up(x => { x.geometry!.thickness = Math.max(1, Math.min(750, v)); })} /></Row></>}
             {o.opening && <div className="kv">门洞 · 墙 {o.opening.wallId} · 偏移 {o.opening.offset * .25}m · 净宽 {o.opening.width * .25}m</div>}
