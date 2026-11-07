@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { setUI, useUI, useWorld } from '../core/store';
+import { pendingUtterances, resolveUtterance } from '../rules/dialogue';
 import { MARK_LIFE, findMap, giveMapKnowledge, setVisionMode } from '../runtime/actions';
 import { HEAR_RANGE } from '../scene/perception';
 import {
@@ -17,8 +18,13 @@ export function TrialHud() {
   const w = useWorld();
   const [stLabel, setStLabel] = useState('');
   const [stMin, setStMin] = useState(15);
+  /** 正在把哪句话接成动作，以及接成什么。 */
+  const [taking, setTaking] = useState<string | null>(null);
+  const [actLabel, setActLabel] = useState('');
+  const [actOutcome, setActOutcome] = useState('');
   const t = ui.trial;
   const m = t ? findMap(w, t.mapId) : undefined;
+  const waiting = pendingUtterances();
   const statuses = (t?.players ?? []).map((p) => {
     const tok = m?.tokens.find((k) => k.id === p.tokenId);
     return { p, st: tok?.corpse ? { label: '尸体', endsAt: undefined } : tok?.status };
@@ -135,6 +141,31 @@ export function TrialHud() {
             <span key={p.tokenId} className="badge warn">
               {p.name} · {st!.label} · {statusLeft(st!) ?? '已结束'} <a className="link" onClick={() => clearTrialStatus(p.tokenId)}>×</a>
             </span>
+          ))}
+        </div>
+      )}
+      {waiting.length > 0 && (
+        <div className="trial-says">
+          <div className="trial-says-head">玩家说的话 <span className="muted">（{waiting.length} 条还没接住）</span></div>
+          {waiting.map((u) => (
+            <div key={u.id} className="trial-say">
+              <div><b>{u.pcName}</b>{u.targetName && <span className="muted"> → {u.targetName}</span>}：「{u.text}」</div>
+              {taking === u.id ? (
+                <div className="trial-say-form">
+                  <input value={actLabel} placeholder="接成什么动作？比如「和 NPC 理论」「查看钟面」"
+                    onChange={(e) => setActLabel(e.target.value)} autoFocus />
+                  <input value={actOutcome} placeholder="结果（可不填；对话的效果直接判也行）"
+                    onChange={(e) => setActOutcome(e.target.value)} />
+                  <button className="small primary" disabled={!actLabel.trim()} onClick={() => {
+                    resolveUtterance(u.id, { label: actLabel, outcome: actOutcome });
+                    setTaking(null); setActLabel(''); setActOutcome('');
+                  }}>接住</button>
+                  <button className="small" onClick={() => { setTaking(null); setActLabel(''); setActOutcome(''); }}>算了</button>
+                </div>
+              ) : (
+                <button className="small" onClick={() => { setTaking(u.id); setActLabel(''); setActOutcome(''); }}>接成动作…</button>
+              )}
+            </div>
           ))}
         </div>
       )}

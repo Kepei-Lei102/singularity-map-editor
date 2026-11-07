@@ -426,3 +426,19 @@ label.check.off { opacity: 0.45; }
   padding: 1px 8px; border-radius: 999px; background: #d9534f; color: #fff; font-size: 12px; font-weight: 700;
 }
 @keyframes player-notice-in { from { transform: translateY(10px); opacity: 0; } to { transform: none; opacity: 1; } }
+
+/* ---------- 说话：玩家端 ---------- */
+.player-talk-log { max-height: 34vh; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; }
+.player-say { padding: 7px 10px; border-radius: 9px; background: rgba(255, 255, 255, 0.05); border: 1px solid #33333d; font-size: 13px; }
+.player-say.mine { border-color: var(--accent); background: rgba(110, 160, 255, 0.10); }
+.player-say-res { margin-top: 5px; font-size: 12px; color: var(--accent); }
+.player-talk-in { display: flex; flex-direction: column; gap: 6px; margin-top: 10px; }
+.player-talk-in textarea { min-height: 62px; resize: vertical; }
+.player-say-err { margin-top: 6px; font-size: 12px; color: var(--danger); }
+
+/* ---------- 说话：见证者端 ---------- */
+.trial-says { border-top: 1px solid #3a3a44; padding-top: 8px; margin-top: 6px; display: flex; flex-direction: column; gap: 7px; max-height: 26vh; overflow-y: auto; }
+.trial-says-head { font-size: 12px; font-weight: 700; letter-spacing: 0.04em; }
+.trial-say { padding: 7px 10px; border-radius: 8px; background: rgba(255, 255, 255, 0.05); border: 1px solid #3a3a44; font-size: 13px; }
+.trial-say-form { display: flex; flex-direction: column; gap: 5px; margin-top: 6px; }
+.trial-say-form input { font-size: 13px; }

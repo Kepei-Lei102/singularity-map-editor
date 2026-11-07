@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react';
 import { listenAsPlayer, reportJudgmentRoll, send } from '../runtime/sync';
-import type { CombatNotice, Focus, PendingJudgment, PublicSkill, SkillCast, World } from '../core/types';
+import type { CombatNotice, Focus, PendingJudgment, PublicSkill, SkillCast, Utterance, World } from '../core/types';
 import { TIER_LABEL } from '../core/types';
 import { MapCanvas } from './MapCanvas';
+import { UTTERANCE_MAX } from '../rules/dialogue';
 import { MediaView } from './MediaPanel';
 import { DiceTray } from './DiceTray';
 import { hpOf } from '../rules/combat';
@@ -24,9 +25,13 @@ export function PlayerView() {
   const [pending, setPending] = useState<PendingJudgment | null>(null);
   const [rolled, setRolled] = useState<{ sides: number; value: number } | null>(null);
   /** 底部抽屉：一次只开一个。 */
-  const [drawer, setDrawer] = useState<'clues' | 'skills' | 'notes' | null>(null);
+  const [drawer, setDrawer] = useState<'clues' | 'skills' | 'notes' | 'talk' | null>(null);
   /** 笔记只存在这个浏览器里，不发给主持人。 */
   const [notes, setNotes] = useState(() => { try { return localStorage.getItem('ts-player-notes') ?? ''; } catch { return ''; } });
+  /** 对话抽屉里正在打的那句话，和说给谁。 */
+  const [draft, setDraft] = useState('');
+  const [sayTo, setSayTo] = useState<string>('');
+  const [sayErr, setSayErr] = useState<string | null>(null);
   /** 最近一次跟我有关的攻击：从底部弹一条，几秒后自己收。 */
   const [notice, setNotice] = useState<CombatNotice | null>(null);
   useEffect(() => {
@@ -60,6 +65,8 @@ export function PlayerView() {
   }, []);
 
   const map = world?.maps.find((m) => m.id === world.playerMapId);
+  const says: Utterance[] = world?.utterances ?? [];
+  const me = world?.party[0];
   const judgment = world?.judgments?.slice(-1)[0];
   const judgmentNotice = world?.judgmentNotice;
   const clues = [...(world?.clues ?? [])].sort((a, b) => b.at - a.at); // 公开过的线索单独带来，物件看不见了也还在
@@ -74,7 +81,6 @@ export function PlayerView() {
 
       {/* 底部状态条：自己的人、自己的血、自己的 ME。这一条始终在。 */}
       {map && (() => {
-        const me = world!.party[0];
         const { hp, max } = hpOf(me ?? {});
         return <div className="player-status">
           {avatar ? <img className="player-status-avatar" src={avatar} alt="" /> : <i className="dot" style={{ background: me?.color ?? '#fff' }} />}
@@ -109,6 +115,9 @@ export function PlayerView() {
         <button className={`player-dock-btn ${drawer === 'skills' ? 'on' : ''}`} onClick={() => setDrawer(drawer === 'skills' ? null : 'skills')} title="技能">
           <span className="player-dock-icon">◇</span>{skills.length > 0 && <span className="player-dock-badge">{skills.length}</span>}
         </button>
+        <button className={`player-dock-btn ${drawer === 'talk' ? 'on' : ''}`} onClick={() => setDrawer(drawer === 'talk' ? null : 'talk')} title="说话">
+          <span className="player-dock-icon">💬</span>
+        </button>
         <button className={`player-dock-btn ${drawer === 'notes' ? 'on' : ''}`} onClick={() => setDrawer(drawer === 'notes' ? null : 'notes')} title="笔记">
           <span className="player-dock-icon">✎</span>
         </button>
@@ -117,7 +126,7 @@ export function PlayerView() {
       {drawer && (
         <aside className={`player-drawer ${drawer}`}>
           <div className="player-drawer-head">
-            <b>{drawer === 'clues' ? '线索' : drawer === 'skills' ? '我的技能' : '我的笔记'}</b>
+            <b>{drawer === 'clues' ? '线索' : drawer === 'skills' ? '我的技能' : drawer === 'talk' ? '说话' : '我的笔记'}</b>
             {drawer === 'skills' && pathway && <span className="muted">当前途径：{pathway}</span>}
             <span className="spacer" />
             <button className="small" onClick={() => setDrawer(null)}>收起</button>
@@ -140,6 +149,38 @@ export function PlayerView() {
                   <div>{sk.desc}</div>
                 </div>
               )))}
+            {drawer === 'talk' && <>
+              <div className="player-talk-log">
+                {says.length === 0 && <div className="muted">还没说过话。想干什么就直说——「我去跟这家伙评评理」也算。</div>}
+                {says.slice(-30).map((u) => (
+                  <div key={u.id} className={`player-say ${u.pcName === (me?.name ?? '') ? 'mine' : ''}`}>
+                    <b>{u.pcName}</b>{u.targetName && <span className="muted"> → {u.targetName}</span>}
+                    <div>{u.text}</div>
+                    {u.resolution && <div className="player-say-res">见证者接成了「{u.resolution.label}」{u.resolution.outcome ? ` · ${u.resolution.outcome}` : ''}</div>}
+                  </div>
+                ))}
+              </div>
+              <div className="player-talk-in">
+                <select value={sayTo} onChange={(e) => setSayTo(e.target.value)}>
+                  <option value="">说给所有人</option>
+                  {(map?.tokens ?? []).filter((x) => !x.corpse && x.status?.label !== '昏厥' && x.pcId !== you).map((x) => <option key={x.id} value={x.id}>{x.name}</option>)}
+                </select>
+                <textarea value={draft} maxLength={UTTERANCE_MAX} placeholder="想说什么就说什么。说完见证者会接住它。"
+                  onChange={(e) => { setDraft(e.target.value); setSayErr(null); }} />
+                <button className="small primary" disabled={!draft.trim()} onClick={() => {
+                  const tok = map?.tokens.find((x) => x.pcId === you);
+                  if (!you || !tok || !map) { setSayErr('还没拿到你的角色'); return; }
+                  const text = draft.trim();
+                  if (!text) return;
+                  if (text.length > UTTERANCE_MAX) { setSayErr(`一次最多说 ${UTTERANCE_MAX} 个字`); return; }
+                  // 玩家窗口不自己写 world：那份是见证者推过来的只读副本，
+                  // 在这里 update 只会改本地影子，主持人根本不知道。只发消息，等它推回来。
+                  send({ type: 'say', text, targetTokenId: sayTo || null });
+                  setDraft(''); setSayTo(''); setSayErr(null);
+                }}>说</button>
+              </div>
+              {sayErr && <div className="player-say-err">{sayErr}</div>}
+            </>}
             {drawer === 'notes' && <textarea className="player-notes" value={notes} placeholder="记下你想记的：谁说过什么、哪里去过、要办什么事。只存在这台电脑上，不发给主持人。"
               onChange={(e) => saveNotes(e.target.value)} />}
           </div>

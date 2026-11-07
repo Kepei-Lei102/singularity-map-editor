@@ -512,6 +512,8 @@ export interface World {
   pendingJudgment?: PendingJudgment | null;
   /** 只在玩家载荷里：最近一次跟他有关的攻击。 */
   combatNotice?: CombatNotice | null;
+  /** 这一场这个角色说过的所有话，按时间正序。 */
+  utterances?: Utterance[] | null;
   version: 1;
   name: string;
   terrains: Terrain[];
@@ -569,4 +571,36 @@ export interface SkillCast {
   total?: number;
   success?: boolean | null;
   note?: string;
+}
+
+/**
+ * 玩家说的一句话。
+ *
+ * 这里刻意不给「动作类型」下拉框：玩家想干什么就说什么（「我要去跟那傻子评评理」），
+ * 由见证者（以后加上本地模型）去理解它对应哪个动作。限制在枚举上会先把想象力削掉。
+ */
+export interface Utterance {
+  id: Id;
+  pcId: Id;
+  pcName: string;
+  /** 玩家原话，不改一个字。 */
+  text: string;
+  /** 说给谁听；不填就是对着场上所有人。 */
+  targetTokenId?: Id | null;
+  targetName?: string | null;
+  mapId: Id;
+  at: number;
+  session: number;
+  /**
+   * 见证者把它落成了什么动作。空着就是「还没接住」。
+   * actionId 对应动作库编号；roll 是随后那次判定的骰点。
+   */
+  resolution?: {
+    actionId?: string;
+    label: string;
+    roll?: number | null;
+    outcome?: string | null;
+    by: 'witness' | 'ai';
+    at: number;
+  } | null;
 }
