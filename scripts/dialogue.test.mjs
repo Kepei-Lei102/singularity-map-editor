@@ -11,14 +11,15 @@ const root = fileURLToPath(new URL('..', import.meta.url));
 const temp = await mkdtemp(join(tmpdir(), 'ts-dialogue-'));
 const bundle = join(temp, 'editor.cjs');
 await build({
-  stdin: { contents: `export * from './src/rules/dialogue'; export * from './src/rules/combat'; export * from './src/core/defaults'; export * from './src/core/schema.js'; export * from './src/runtime/trial'; export * from './src/core/store'; export * from './src/runtime/actions';`, resolveDir: root },
+  stdin: { contents: `export * from './src/rules/dialogue'; export * from './src/rules/combat'; export * from './src/core/defaults'; export * from './src/core/schema.js'; export * from './src/runtime/trial'; export * from './src/core/store'; export * from './src/runtime/actions'; export * from './src/runtime/sync';`, resolveDir: root },
   outfile: bundle, bundle: true, platform: 'node', format: 'cjs', logLevel: 'silent',
 });
 const storage = () => { const data = new Map(); return { getItem: (k) => data.get(k) ?? null, setItem: (k, v) => data.set(k, v), removeItem: (k) => data.delete(k) }; };
 globalThis.localStorage = storage();
 globalThis.sessionStorage = storage();
 globalThis.location = { search: '', origin: 'http://localhost' };
-globalThis.window = { setTimeout: () => 0, open: () => ({ closed: false, postMessage() {} }) };
+globalThis.window = { setTimeout: () => 0, clearTimeout: () => {}, setInterval: () => 0, clearInterval: () => {}, open: () => ({ closed: false, postMessage() {} }) };
+globalThis.document = { addEventListener() {}, removeEventListener() {} };
 globalThis.BroadcastChannel = class { postMessage() {} };
 globalThis.crypto ??= (await import('node:crypto')).webcrypto;
 const api = createRequire(import.meta.url)(bundle);
@@ -113,4 +114,43 @@ test('能说给谁：同图活人，不含死人', () => {
   assert.deepEqual(api.speakTargets().map((x) => x.name), ['阿甲', '阿乙', '看门人']);
   api.update((d) => { d.maps[0].tokens.find((t) => t.id === 'tb').corpse = true; });
   assert.ok(!api.speakTargets().some((x) => x.name === '阿乙'), '尸体不在说话对象里');
+});
+
+test('NPC 被挪走之后：在视野里的人看得见，看不见的人看不到', async () => {
+  // 这条测的是 playerWorld 的裁剪：移动之后棋子会不会漏给看不见的人
+  const w = api.emptyWorld();
+  const m = api.newMap('走廊', '现实', 1, 20, 10, 'floor', false);
+  m.objects = [];
+  const attrs = { 力量: 30, 敏捷: 30, 意志: 30, 观察: 30, 智慧: 30, 魅力: 30 };
+  w.party = [
+    { id: 'a', name: '近的人', color: '#fff', tags: [], attributes: attrs },
+    { id: 'b', name: '远的人', color: '#0f0', tags: [], attributes: attrs },
+  ];
+  m.tokens = [
+    { id: 'ta', pcId: 'a', name: '近的人', color: '#fff', x: 2, y: 2 },
+    { id: 'tb', pcId: 'b', name: '远的人', color: '#0f0', x: 18, y: 8 },
+    { id: 'npc', name: '活板门守卫', color: '#c33', x: 3, y: 2 },
+  ];
+  // 各自独立视野
+  w.visionMode = 'individual';
+  m.fog = m.fog.map(() => 0);
+  w.maps = [m];
+  api.replaceWorld(w);
+  // 守卫挪到 4,2（主持人把棋子拖过去）
+  assert.equal(api.moveMapToken(m.id, 'npc', { x: 4, y: 2 }), null);
+  // 视野层必须在移动之后再写：moveMapToken 会重算视野，
+  // 先写会被覆盖掉。真实场景里也是「人走过去了，视野才更新」。
+  api.update((d) => {
+    const dm = d.maps[0];
+    const blank = dm.fog.map(() => 0);
+    dm.views = {
+      a: { fog: dm.fog.map((_, i) => (i % dm.width) <= 5 && Math.floor(i / dm.width) <= 4 ? 1 : 0), seen: { cells: blank.slice(), objects: [] } },
+      b: { fog: blank.slice(), seen: { cells: blank.slice(), objects: [] } },
+    };
+  });
+
+  const near = api.playerWorld(api.getWorld(), m.id, 'a');
+  const far = api.playerWorld(api.getWorld(), m.id, 'b');
+  assert.ok(near.maps[0].tokens.some((t) => t.id === 'npc'), '近的人看得见挪动后的守卫');
+  assert.ok(!far.maps[0].tokens.some((t) => t.id === 'npc'), '远的人在视野外，不该看到守卫');
 });
