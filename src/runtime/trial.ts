@@ -11,7 +11,7 @@ import { characterPathClear, furnitureSweepBlocked, nextTokenStep, setTokenPosit
 import { terrainBlocksPoint, terrainBlocksRect } from '../scene/terrain';
 import { slidingPuzzleForObject } from '../scene/sliding';
 import { viewerOf, visiblePoint } from '../scene/sight';
-import { ATTACK_RANGE, attackTargets, describeAttack, hpOf, rollAttack, type AttackTarget, type Roller } from '../rules/combat';
+import { ATTACK_RANGE, attackTargets, hpOf, rollAttack, type AttackTarget, type Roller } from '../rules/combat';
 
 // 试玩：放白板玩家进去，用 WASD 走，体验视野。退出时一切恢复原样（沙盒）。
 // 默认是非战斗：不限步数；打开"战斗模式"才是每回合 5 格。
@@ -257,6 +257,7 @@ export function trialAttack(targetTokenId: string, opts: { roll?: number; roller
   const target = m?.tokens.find((x) => x.id === targetTokenId);
   if (!m || !attacker || !target) return '找不到攻击者或目标';
   if (attacker.id === target.id) return '不能打自己';
+  if (target.status?.label === '濒死') return `${target.name} 已经濒死了`;
   const dist = Math.abs(attacker.x - target.x) + Math.abs(attacker.y - target.y);
   if (dist > ATTACK_RANGE) return `超出攻击距离（${dist} 格 > ${ATTACK_RANGE}）`;
   const pc = w.party.find((p) => p.id === pl.pcId);
@@ -265,22 +266,41 @@ export function trialAttack(targetTokenId: string, opts: { roll?: number; roller
   // 骰点默认现掷；测试可以注入 roll（D100 点数）和 roller（伤害骰）。
   const roll = opts.roll ?? 1 + Math.floor(Math.random() * 100);
   const r = rollAttack(roll, 8, opts.roller);
-  const notes: string[] = [describeAttack(pl.name, target.name, r)];
+  // 伤害这种大事单独给一张卡片（event），底部小字只留一句不起眼的补充。
+  let hpBefore: number | null = null, hpAfter: number | null = null, hpMax: number | null = null, dying = false;
+  let note = '';
   update((d) => {
     const dm = findMap(d, t.mapId)!;
     const dt = dm.tokens.find((x) => x.id === targetTokenId)!;
-    if (dt.pcId) {
-      const p = d.party.find((x) => x.id === dt.pcId)!;
-      const { hp, max } = hpOf(p);
-      const next = Math.max(0, hp - r.damage);
-      p.hp = next;
-      p.hpMax ??= max;
-      notes.push(`${dt.name} HP ${hp}→${next}/${max}`);
-      if (next <= 0 && dt.status?.label !== '濒死') { dt.status = { label: '濒死', roundsLeft: 3 }; notes.push(`${dt.name} 濒死`); }
-    } else notes.push(`${dt.name} 是 NPC，HP 不设上限，伤害记在裁定里`);
+    if (!dt.pcId) { note = `${dt.name} 没有角色卡，HP 不设上限；伤害记在裁定里`; return; }
+    const p = d.party.find((x) => x.id === dt.pcId);
+    if (!p) { note = `${dt.name} 的角色卡不在队伍里`; return; }
+    const { hp, max } = hpOf(p);
+    const next = Math.max(0, hp - r.damage);
+    hpBefore = hp; hpAfter = next; hpMax = max;
+    p.hp = next;
+    p.hpMax ??= max;
+    if (next <= 0 && dt.status?.label !== '濒死') { dt.status = { label: '濒死', roundsLeft: 3 }; dying = true; }
+    else dying = dt.status?.label === '濒死';
   });
-  setTr({ acted: true, msg: notes.join('；') });
+  setTr({
+    acted: true,
+    msg: '',
+    event: {
+      kind: r.hit ? 'hit' : 'miss',
+      attackerPcId: pl.pcId, attackerName: pl.name,
+      targetPcId: target.pcId, targetName: target.name,
+      roll: r.roll, crit: r.crit, damage: r.damage,
+      hpBefore, hpAfter, hpMax, dying, note, at: Date.now(),
+    },
+  });
   return null;
+}
+
+/** 关掉大事卡片。 */
+export function clearTrialEvent() {
+  const t = tr();
+  if (t?.event) setTr({ event: null });
 }
 
 /** 进出战斗：暂时不能行动的状态在"真实时间"和"回合"之间换算（1 回合 = 5 分钟）。 */

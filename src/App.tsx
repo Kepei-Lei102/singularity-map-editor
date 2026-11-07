@@ -22,6 +22,7 @@ import { PlayerView } from './components/PlayerView';
 import { Splitter, usePanel } from './components/Splitter';
 import { endTrial, startTrial, switchTrialPlayer, toggleMarkMode, trialClick, trialEndTurn, trialMove } from './runtime/trial';
 import { TrialHud } from './components/TrialHud';
+import { TrialEventCard } from './components/TrialEventCard';
 
 const MODES: { mode: Mode; label: string; tab: Tab }[] = [
   { mode: 'edit', label: '编辑地图', tab: 'inspect' },
@@ -173,6 +174,7 @@ function Editor() {
               const cur = tr?.players[tr.current];
               return <MapCanvas world={world} map={map} mode={ui.mode} follow={cur?.tokenId} onCellClick={tr?.markMode ? trialClick : undefined} cursor={tr?.markMode ? 'crosshair' : undefined} />;
             })()}
+            <TrialEventCard />
             <TrialHud />
             <div className="map-badge">{map.layer} · F{map.floor} · {map.name}　<span className="muted">{map.width}×{map.height}</span></div>
             <button className="fit-btn" title="把整张图缩放到可见范围" onClick={() => setUI((st) => { const v = { ...st.views }; delete v[map.id]; return { views: v }; })}>⤢ 适配</button>

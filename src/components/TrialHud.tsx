@@ -81,7 +81,7 @@ export function TrialHud() {
         <div className="trial-row">
           <span className="muted">攻击</span>
           {(() => {
-            const targets = trialAttackTargets().filter((x) => x.inRange && x.visible);
+            const targets = trialAttackTargets().filter((x) => x.canHit);
             if (!targets.length) return <span className="muted">攻击距离内没有看得见的目标</span>;
             return targets.map((x) => (
               <button key={x.tokenId} className="small" disabled={!actionsLeft(t)}
@@ -104,6 +104,7 @@ export function TrialHud() {
         </div>
       )}
       <div className="muted small-text">在主持人窗口用 WASD 移动 · Tab 或角色按钮换人 · G 放标记 · Esc 退出；独立玩家窗口同步视角（退出后恢复原样）</div>
+      {/* 攻击/伤害已经单独在 TrialEventCard 里，这里的 msg 只放转向、推不动这类小提示 */}
       {t.msg && <div className="trial-msg">{t.msg}</div>}
     </div>
   );

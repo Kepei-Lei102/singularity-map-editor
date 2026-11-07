@@ -335,3 +335,30 @@ button.ai { color: #e6c2ff; border-color: #6b4f8c; }
 .player-hold .btns { display: flex; gap: 10px; }
 
 .player-judgment-notice { position: fixed; left: 16px; bottom: 16px; z-index: 25; background: #1b1c22; color: #e8e4da; border: 1px solid #555166; border-radius: 10px; padding: 10px 14px; box-shadow: 0 8px 30px #0008; }
+
+/* 试玩大事卡片：攻击、伤害、濒死单独占一块，不和下面的操作行挤在一起 */
+.trial-event {
+  position: absolute; left: 50%; top: 18px; transform: translateX(-50%); z-index: 6;
+  min-width: 280px; max-width: min(460px, calc(100% - 24px));
+  background: rgba(20, 14, 12, 0.96); border: 1px solid #c0392b; border-radius: 12px;
+  padding: 12px 16px; box-shadow: 0 10px 30px rgba(0, 0, 0, 0.55);
+  display: flex; flex-direction: column; gap: 8px; animation: trial-event-in 140ms ease-out;
+}
+.trial-event.miss { border-color: #5b6470; background: rgba(16, 18, 22, 0.96); }
+@keyframes trial-event-in { from { opacity: 0; transform: translate(-50%, -8px); } to { opacity: 1; transform: translate(-50%, 0); } }
+.trial-event-head { display: flex; align-items: center; gap: 8px; font-size: 15px; font-weight: 600; }
+.trial-event-arrow { color: var(--muted); font-weight: 400; }
+.trial-event-dice { display: flex; align-items: baseline; gap: 10px; font-size: 22px; font-weight: 700; letter-spacing: 0.5px; }
+.dice-hit { color: #9fe0a3; }
+.dice-miss { color: #8b95a3; }
+.dice-crit { font-size: 13px; font-weight: 600; color: #ffd166; }
+.dice-miss-tag { font-size: 13px; font-weight: 400; color: #8b95a3; }
+.trial-event-damage { display: flex; align-items: baseline; gap: 10px; }
+.damage-num { font-size: 30px; font-weight: 800; color: #ff6b5b; line-height: 1; }
+.damage-label { font-size: 13px; color: var(--muted); }
+.hp-bar { margin-left: auto; font-size: 15px; color: #d8d3c6; }
+.hp-bar .dead { color: #ff4d4d; }
+.dying-tag { font-size: 12px; font-weight: 700; color: #ff4d4d; border: 1px solid #ff4d4d; border-radius: 6px; padding: 1px 6px; }
+.trial-event-note { font-size: 12px; color: var(--muted); }
+.trial-event-foot { font-size: 11px; color: var(--muted); border-top: 1px solid rgba(255, 255, 255, 0.08); padding-top: 6px; }
+.trial-event-foot a { cursor: pointer; text-decoration: underline; color: var(--accent); margin-left: 8px; }

@@ -125,3 +125,56 @@ test('试玩里攻击：扣行动点、扣目标 HP、濒死标状态', async ()
   api.trialEndTurn();
   assert.equal(api.actionsLeft(api.getUI().trial), 1);
 });
+
+test('目标是濒死就不能再打', () => {
+  const w = api.emptyWorld();
+  const m = api.newMap('战斗', '现实', 1, 10, 10, 'floor', false);
+  m.objects = [];
+  w.party = [
+    { id: 'a', name: '攻击者', color: '#fff', tags: [], attributes: { 力量: 30, 敏捷: 30, 意志: 30, 观察: 30, 智慧: 30, 魅力: 30 } },
+    { id: 'b', name: '目标', color: '#f00', tags: [], attributes: { 力量: 30, 敏捷: 30, 意志: 30, 观察: 30, 智慧: 30, 魅力: 30 }, hp: 0 },
+  ];
+  m.tokens = [
+    { id: 'ta', pcId: 'a', name: '攻击者', color: '#fff', x: 2, y: 2 },
+    { id: 'tb', pcId: 'b', name: '目标', color: '#f00', x: 3, y: 2, status: { label: '濒死', roundsLeft: 3 } },
+  ];
+  m.fog = m.fog.map(() => 1);
+  w.maps = [m];
+  api.replaceWorld(w);
+  api.startTrial();
+  api.setUI({ trial: { mapId: m.id, players: [{ tokenId: 'ta', pcId: 'a', name: '攻击者' }], current: 0, combat: true, moved: {}, turn: 1, msg: '', markSymbol: '!', markText: '', markMode: false } });
+  assert.match(api.trialAttack('tb', { roll: 50, roller: () => 1 }) ?? '', /濒死/);
+  const targets = api.trialAttackTargets();
+  assert.equal(targets.find((t) => t.tokenId === 'tb').canHit, false);
+});
+
+test('攻击后给出事件卡片所需的数据', () => {
+  const w = api.emptyWorld();
+  const m = api.newMap('战斗', '现实', 1, 10, 10, 'floor', false);
+  m.objects = [];
+  const attrs = { 力量: 30, 敏捷: 30, 意志: 30, 观察: 30, 智慧: 30, 魅力: 30 };
+  w.party = [
+    { id: 'a', name: '攻击者', color: '#fff', tags: [], attributes: attrs },
+    { id: 'b', name: '目标', color: '#f00', tags: [], attributes: attrs },
+  ];
+  m.tokens = [
+    { id: 'ta', pcId: 'a', name: '攻击者', color: '#fff', x: 2, y: 2 },
+    { id: 'tb', pcId: 'b', name: '目标', color: '#f00', x: 3, y: 2 },
+  ];
+  m.fog = m.fog.map(() => 1);
+  w.maps = [m];
+  api.replaceWorld(w);
+  api.startTrial();
+  api.setUI({ trial: { mapId: m.id, players: [{ tokenId: 'ta', pcId: 'a', name: '攻击者' }], current: 0, combat: true, moved: {}, turn: 1, msg: '', markSymbol: '!', markText: '', markMode: false } });
+  api.trialAttack('tb', { roll: 100, roller: () => 2 });
+  const ev = api.getUI().trial.event;
+  assert.equal(ev.kind, 'hit');
+  assert.equal(ev.crit, true);
+  assert.equal(ev.roll, 100);
+  assert.equal(ev.damage, 8); // 2 × 4
+  assert.equal(ev.hpBefore, 6);
+  assert.equal(ev.hpAfter, 0);
+  assert.equal(ev.dying, true);
+  assert.equal(ev.targetName, '目标');
+  assert.equal(api.getUI().trial.msg, '');
+});

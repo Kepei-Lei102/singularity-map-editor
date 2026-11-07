@@ -187,7 +187,8 @@ export function attackTargets(
       const visible = visibility(t);
       const pc = t.pcId ? world.party.find((p) => p.id === t.pcId) : undefined;
       const hp = t.pcId ? (pc ? hpOf(pc).hp : null) : null;
-      const check = canTarget(world, map, attacker, t, visible, opts.range);
+      const dying = t.status?.label === '濒死';
+      const check = dying ? { ok: false, reason: '目标已经濒死' } : canTarget(world, map, attacker, t, visible, opts.range);
       return {
         tokenId: t.id, name: t.name, isPc: !!t.pcId,
         distance: tokenDistance(attacker, t),

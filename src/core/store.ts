@@ -229,6 +229,23 @@ export interface UIState {
     moved: Record<string, number>;
     turned?: Record<string, boolean>; // 本回合已经原地转身过的棋子（缠斗限制用）
     acted?: boolean; // 这一回合的行动点已经用掉（攻击/技能）
+    /** 刚发生的大事（攻击、伤害、濒死）：单独一张大卡片显示，不塞进底部小字。 */
+    event?: {
+      kind: 'hit' | 'miss';
+      attackerPcId: string | null;
+      attackerName: string;
+      targetPcId: string | null;
+      targetName: string;
+      roll: number; // D100，100 表示 00
+      crit: boolean; // 特大成功
+      damage: number;
+      hpBefore: number | null;
+      hpAfter: number | null;
+      hpMax: number | null;
+      dying: boolean;
+      note?: string;
+      at: number;
+    } | null;
     turn: number;
     msg: string;
     markSymbol: string;
