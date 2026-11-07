@@ -17,18 +17,30 @@ await build({
 const api = createRequire(import.meta.url)(bundle);
 after(() => rm(temp, { recursive: true, force: true }));
 
+// 全部 16 条途径的序列 9，一次抄全。前缀就是途径编号。
 const PROFESSIONS = [
-  { pathway: '想象途径', prof: '动漫鉴赏家', prefix: '014', count: 12 },
-  { pathway: '童话途径', prof: 'TRPG冒险家', prefix: '009', count: 13 },
   { pathway: '控场途径', prof: '游戏鉴赏家', prefix: '001', count: 12 },
+  { pathway: '传说途径', prof: '琴师', prefix: '002', count: 12 },
+  { pathway: '未来途径', prof: '工程师', prefix: '003', count: 12 },
+  { pathway: '神经网络途径', prof: '优秀提问官', prefix: '004', count: 12 },
   { pathway: '太阳途径', prof: 'AI心理师', prefix: '005', count: 13 },
+  { pathway: '赛博朋克途径', prof: '小说家', prefix: '006', count: 12 },
+  { pathway: '勇士途径', prof: '运动博主', prefix: '007', count: 12 },
+  { pathway: '玩家途径', prof: '具身游戏大师', prefix: '008', count: 12 },
+  { pathway: '童话途径', prof: 'TRPG冒险家', prefix: '009', count: 13 },
+  { pathway: '骑士途径', prof: '历史学家', prefix: '010', count: 12 },
   { pathway: '生命途径', prof: '医生', prefix: '011', count: 12 },
+  { pathway: '学徒途径', prof: '学习家', prefix: '012', count: 12 },
+  { pathway: '疗愈途径', prof: '自由厨师', prefix: '013', count: 12 },
+  { pathway: '想象途径', prof: '动漫鉴赏家', prefix: '014', count: 12 },
+  { pathway: 'DIY途径【线下】', prof: '书画家', prefix: '015', count: 12 },
+  { pathway: '连接途径', prof: '猎头', prefix: '016', count: 12 },
 ];
 
-test('五个职业、序列9、共 62 条', () => {
-  assert.equal(api.SKILL_DATA.length, 62);
-  assert.equal(api.SKILL_LIBRARY.length, 66); // 62 + Ian 的 4 条
-  assert.equal(new Set(api.SKILL_DATA.map((s) => s.id)).size, 62);
+test('十六条途径、序列9、共 194 条', () => {
+  assert.equal(api.SKILL_DATA.length, 194);
+  assert.equal(api.SKILL_LIBRARY.length, 198); // 194 + Ian 的 4 条
+  assert.equal(new Set(api.SKILL_DATA.map((s) => s.id)).size, 194);
   for (const p of PROFESSIONS) {
     const list = api.SKILL_DATA.filter((s) => s.pathway === p.pathway);
     assert.equal(list.length, p.count, p.prof);
@@ -61,7 +73,8 @@ test('发给玩家窗口的公开技能不带私有字段', () => {
 });
 
 test('按 id 查得到，未解锁的不进普通分组', () => {
-  assert.equal(api.skillById('005-9-201')?.name, '针对威吓');
+  // 名字以源表为准：EA 版这里是「威吓」，旧工作簿里是「针对威吓」，已随源表更新。
+  assert.equal(api.skillById('005-9-201')?.name, '威吓');
   const unlocked = new Set(['037-9-101']);
   const groups = api.groupSkills(api.SKILL_LIBRARY, unlocked);
   assert.equal(groups.length, 1);
