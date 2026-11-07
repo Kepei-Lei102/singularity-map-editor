@@ -229,6 +229,8 @@ export interface UIState {
     moved: Record<string, number>;
     turned?: Record<string, boolean>; // 本回合已经原地转身过的棋子（缠斗限制用）
     acted?: boolean; // 这一回合的行动点已经用掉（攻击/技能）
+    /** 借机攻击提示：这一步触发了，等主持人决定打不打。 */
+    opportunity?: { moverTokenId: string; enemies: string[]; from: { x: number; y: number }; to: { x: number; y: number } } | null;
     /** 刚发生的大事（攻击、伤害、濒死）：单独一张大卡片显示，不塞进底部小字。 */
     event?: {
       kind: 'hit' | 'miss';

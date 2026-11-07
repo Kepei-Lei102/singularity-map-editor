@@ -22,12 +22,13 @@ const PROFESSIONS = [
   { pathway: '童话途径', prof: 'TRPG冒险家', prefix: '009', count: 13 },
   { pathway: '控场途径', prof: '游戏鉴赏家', prefix: '001', count: 12 },
   { pathway: '太阳途径', prof: 'AI心理师', prefix: '005', count: 13 },
+  { pathway: '生命途径', prof: '医生', prefix: '011', count: 12 },
 ];
 
-test('四个职业、序列9、共 50 条', () => {
-  assert.equal(api.SKILL_DATA.length, 50);
-  assert.equal(api.SKILL_LIBRARY.length, 54); // 50 + Ian 的 4 条
-  assert.equal(new Set(api.SKILL_DATA.map((s) => s.id)).size, 50);
+test('五个职业、序列9、共 62 条', () => {
+  assert.equal(api.SKILL_DATA.length, 62);
+  assert.equal(api.SKILL_LIBRARY.length, 66); // 62 + Ian 的 4 条
+  assert.equal(new Set(api.SKILL_DATA.map((s) => s.id)).size, 62);
   for (const p of PROFESSIONS) {
     const list = api.SKILL_DATA.filter((s) => s.pathway === p.pathway);
     assert.equal(list.length, p.count, p.prof);
@@ -66,5 +67,5 @@ test('按 id 查得到，未解锁的不进普通分组', () => {
   assert.equal(groups.length, 1);
   assert.equal(groups[0].pathway, '金手指途径');
   const all = api.groupSkills(api.SKILL_LIBRARY, unlocked, { levelUp: true });
-  assert.equal(all.flatMap((g) => g.groups).flatMap((g) => g.skills).length, 54);
+  assert.equal(all.flatMap((g) => g.groups).flatMap((g) => g.skills).length, api.SKILL_LIBRARY.length);
 });

@@ -135,6 +135,13 @@ export interface Token {
   status?: TokenStatus;
   facing?: Facing; // 不填＝全向
   stance?: Stance; // 不填＝站
+  /** 这一轮已经借机攻击过；轮到它自己行动时重新亮起。 */
+  opportunityUsed?: boolean;
+  /** 棋子自己的 hp/hpMax（NPC 用；玩家角色的血在角色卡上）。 */
+  hp?: number;
+  hpMax?: number;
+  /** 钝器把人打晕：昏厥中，不能行动。 */
+  down?: boolean;
 }
 
 /** 抽象滑块棋盘：位置均为地图绝对格坐标；goal 对应目标块的左上角。只平移，不要求人物站到推动侧。 */

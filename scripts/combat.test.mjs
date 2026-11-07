@@ -178,3 +178,88 @@ test('攻击后给出事件卡片所需的数据', () => {
   assert.equal(ev.targetName, '目标');
   assert.equal(api.getUI().trial.msg, '');
 });
+
+test('借机攻击只在贴身脱离时触发（乙口径）', () => {
+  const enemy = { id: 'e1', x: 5, y: 5 };
+  // 原本贴身（2 格），往外挪到 3 格 → 触发，敌人算进去
+  const a = api.opportunityTriggers({ x: 5, y: 6 }, { x: 5, y: 8 }, [enemy]);
+  assert.equal(a.leaving, true);
+  assert.deepEqual(a.enemies, ['e1']);
+  // 远端进出（远到 8 格外，再走进 4 格）→ 不触发，因为起点就不贴身
+  const b = api.opportunityTriggers({ x: 5, y: 12 }, { x: 5, y: 9 }, [enemy]);
+  assert.equal(b.leaving, false);
+  // 原地不动 / 往里走 → 不触发
+  assert.equal(api.opportunityTriggers({ x: 5, y: 2 }, { x: 5, y: 3 }, [enemy]).leaving, false);
+  // 贴身后依然贴身（2 格挪到 1 格）→ 不触发
+  assert.equal(api.opportunityTriggers({ x: 6, y: 6 }, { x: 5, y: 6 }, [enemy]).leaving, false);
+});
+
+test('贴身范围内一次只能挪 1 格', () => {
+  const enemy = { x: 5, y: 5 };
+  assert.equal(api.stepLimitNear({ x: 5, y: 6 }, [enemy]), 1);
+  assert.equal(api.stepLimitNear({ x: 5, y: 7 }, [enemy]), 1);
+  assert.equal(api.stepLimitNear({ x: 5, y: 9 }, [enemy]), Number.POSITIVE_INFINITY);
+});
+
+test('借机攻击每个人回合外只能一次', () => {
+  const w = api.emptyWorld();
+  const m = api.newMap('借机', '现实', 1, 12, 12, 'floor', false);
+  m.objects = [];
+  m.fog = m.fog.map(() => 1);
+  const attrs = { 力量: 30, 敏捷: 30, 意志: 30, 观察: 30, 智慧: 30, 魅力: 30 };
+  w.party = [
+    { id: 'a', name: '走的人', color: '#fff', tags: [], attributes: attrs },
+    { id: 'b', name: '敌人', color: '#f00', tags: [], attributes: attrs },
+  ];
+  m.tokens = [
+    { id: 'ta', pcId: 'a', name: '走的人', color: '#fff', x: 2, y: 2 },
+    { id: 'tb', pcId: 'b', name: '敌人', color: '#f00', x: 2, y: 4 },
+  ];
+  w.maps = [m];
+  api.replaceWorld(w);
+  api.startTrial();
+  api.setUI({ trial: { mapId: m.id, players: [{ tokenId: 'ta', pcId: 'a', name: '走的人' }], current: 0, combat: true, moved: {}, turn: 1, msg: '', markSymbol: '!', markText: '', markMode: false } });
+  // 敌人原本在 2 格（贴身）。战斗里第一次按方向只转向，所以先转北再走两格脱离。
+  api.trialMove(0, -1); // 转向北
+  api.trialMove(0, -1); // 距离 2 → 3，脱离
+  const opp = api.getUI().trial.opportunity;
+  assert.ok(opp && opp.enemies.includes('tb'), '应该触发借机');
+  api.trialOpportunityAttack();
+  assert.equal(api.findMap(api.getWorld(), m.id).tokens.find((k) => k.id === 'tb').opportunityUsed, true);
+  assert.equal(api.getUI().trial.opportunity, null);
+});
+
+test('救治：解锁急救技能才能做，D100 投 1 失败', () => {
+  const w = api.emptyWorld();
+  const m = api.newMap('救治', '现实', 1, 10, 10, 'floor', false);
+  m.objects = [];
+  m.fog = m.fog.map(() => 1);
+  const attrs = { 力量: 30, 敏捷: 30, 意志: 30, 观察: 30, 智慧: 30, 魅力: 30 };
+  w.party = [
+    { id: 'a', name: '医生', color: '#fff', tags: [], attributes: attrs, skills: ['011-9-102'] },
+    { id: 'b', name: '伤员', color: '#f00', tags: [], attributes: attrs, hp: 0 },
+  ];
+  m.tokens = [
+    { id: 'ta', pcId: 'a', name: '医生', color: '#fff', x: 2, y: 2 },
+    { id: 'tb', pcId: 'b', name: '伤员', color: '#f00', x: 2, y: 3, status: { label: '濒死', roundsLeft: 3 } },
+  ];
+  w.maps = [m];
+  api.replaceWorld(w);
+  api.startTrial();
+  api.setUI({ trial: { mapId: m.id, players: [{ tokenId: 'ta', pcId: 'a', name: '医生' }], current: 0, combat: true, moved: {}, turn: 1, msg: '', markSymbol: '!', markText: '', markMode: false } });
+  // 投 1 失败（结果写在 HUD 的 msg 里）
+  assert.equal(api.trialRescue('tb', { roll: 1 }), null);
+  assert.match(api.getUI().trial.msg, /失败/);
+  api.setUI({ trial: { ...api.getUI().trial, acted: false } });
+  assert.equal(api.trialRescue('tb', { roll: 60 }), null);
+  assert.match(api.getUI().trial.msg, /成功/);
+  const tb = api.findMap(api.getWorld(), m.id).tokens.find((k) => k.id === 'tb');
+  assert.equal(tb.status, undefined);
+  assert.equal(api.getWorld().party.find((p) => p.id === 'b').hp, 1);
+});
+
+test('没解锁急救技能的人不能救治', () => {
+  assert.equal(api.canRescue([]), false);
+  assert.equal(api.canRescue(['001-9-001']), false);
+  assert.equal(api.canRescue(['011-9-102']), true);
+});

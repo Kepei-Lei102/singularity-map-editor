@@ -24,6 +24,7 @@ TARGETS = [
     {'prof': 'TRPG冒险家', 'pathway': '童话途径', 'file': SOURCE / '已完成/9-TRPG冒险家途径 2026.4.3.xlsx'},
     {'prof': '游戏鉴赏家', 'pathway': '控场途径', 'file': SOURCE / '已完成/1-游戏鉴赏家 控场途径 2026.10.10.xlsx'},
     {'prof': 'AI心理师', 'pathway': '太阳途径', 'file': SOURCE / '已完成/5-AI心理师（待升级） 2026.10.8.xlsx'},
+    {'prof': '医生', 'pathway': '生命途径', 'file': SOURCE / '已完成/11-医生-生命途径（待升级） 2026.10.9.xlsx'},
 ]
 
 LABELS = ['技能序号', '技能名', '扮演向', '关键词', '作用', '效果', '动作解锁', '属性增强', '判定',

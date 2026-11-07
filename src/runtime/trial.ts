@@ -11,12 +11,14 @@ import { characterPathClear, furnitureSweepBlocked, nextTokenStep, setTokenPosit
 import { terrainBlocksPoint, terrainBlocksRect } from '../scene/terrain';
 import { slidingPuzzleForObject } from '../scene/sliding';
 import { viewerOf, visiblePoint } from '../scene/sight';
-import { ATTACK_RANGE, attackTargets, hpOf, rollAttack, type AttackTarget, type Roller } from '../rules/combat';
+import { ATTACK_RANGE, ENGAGE_RANGE, RESCUED_HP, attackTargets, canRescue, hpOf, opportunityTriggers, rollAttack, rollRescue, stepLimitNear, type AttackTarget, type Roller } from '../rules/combat';
 
 // 试玩：放白板玩家进去，用 WASD 走，体验视野。退出时一切恢复原样（沙盒）。
 // 默认是非战斗：不限步数；打开"战斗模式"才是每回合 5 格。
 
 export const MOVE_PER_TURN = 5;
+/** 小数格坐标 → 落在哪一格。 */
+const landingOf = (p: { x: number; y: number }) => ({ x: Math.floor(p.x), y: Math.floor(p.y) });
 /** 缠斗：身边这一格内有别人，转身就受限（这回合只能转一次）。 */
 export const ENGAGED_RANGE = 1;
 
@@ -153,6 +155,7 @@ export function switchTrialPlayer(i?: number) {
   if (!t || !t.players.length) return;
   const current = i ?? (t.current + 1) % t.players.length;
   setTr({ current, msg: '' });
+  refreshOpportunity(t.players[current].tokenId);
   selectTrialViewer(t.players[current].pcId);
 }
 
@@ -192,6 +195,9 @@ export function trialMove(dx: number, dy: number) {
   const used = t.moved[pl.tokenId] ?? 0;
   const step = nextTokenStep(m, tok, dx, dy);
   if (t.combat && used + step.cost > MOVE_PER_TURN * 3) return setTr({ msg: '这回合的移动力用完了，按空格结束回合' });
+  // 贴身缠斗：在敌人周围 2 格内，一次移动只能挪 1 格。
+  if (t.combat && stepLimitNear(landingOf(step.a), m.tokens.filter((k) => k.id !== tok.id)) === 1 && step.cost > 3)
+    return setTr({ msg: '贴身缠斗：一次只能挪 1 格' });
   const nx = Math.floor(step.b.x), ny = Math.floor(step.b.y);
   // 棋盘块由检查器抽象操控，不能用普通推箱绕过边界、碰撞和门状态规则。
   const puzzleBlock = m.objects.find((o) => objectEnabled(m, o) && slidingPuzzleForObject(m, o.id) && insideRect(o, nx, ny));
@@ -212,13 +218,26 @@ export function trialMove(dx: number, dy: number) {
   }
   const now = getWorld(), m2 = findMap(now, t.mapId);
   if (!m2) return setTr({ msg: '走不过去' });
+  // 战斗模式：玩家可以互相路过，但不能停在同一个格子上。
+  const landing = { x: Math.floor(step.b.x), y: Math.floor(step.b.y) };
+  const occupied = t.combat && m2.tokens.find((k) => k.id !== tok.id && Math.floor(tokenPosition(k).x) === landing.x && Math.floor(tokenPosition(k).y) === landing.y);
+  if (occupied) return setTr({ msg: `${occupied.name} 在这里，不能停在同一个格子上` });
   if (!characterPathClear(now, m2, step.a, step.b, tok.id)) return setTr({ msg: '人物或墙体挡住了路径' });
+  // 借机攻击：只认贴身脱离（原本 1–2 格内，这一步往外挪）。弹提示，不自动打。
+  const others = m2.tokens.filter((k) => k.id !== tok.id);
+  const opp = t.combat ? opportunityTriggers(landingOf(step.a), landingOf(step.b), others) : null;
   update((d) => {
     const dt = findMap(d, t.mapId)!.tokens.find((x) => x.id === pl.tokenId)!;
     setTokenPosition(findMap(d, t.mapId)!, dt, step.b);
     dt.facing = dir; // 自由行动：朝向跟着移动；战斗中这时朝向已经等于 dir
   });
-  setTr({ moved: { ...t.moved, [pl.tokenId]: used + step.cost }, msg: '' });
+  setTr({
+    moved: { ...t.moved, [pl.tokenId]: used + step.cost },
+    msg: '',
+    opportunity: opp?.leaving && opp.enemies.length
+      ? { moverTokenId: tok.id, enemies: opp.enemies, from: opp.from, to: opp.to }
+      : null,
+  });
   checkEnterTriggers(t.mapId, pl.tokenId, step.a.x, step.a.y); // 和正式带团一样：走进触发区就播，范围里的线索自动浮现（试玩结束都会复原）
   autoReveal(t.mapId);
 }
@@ -235,7 +254,11 @@ export function trialEndTurn() {
       if (k.status.roundsLeft <= 0) delete k.status;
     }
   });
-  setTr({ moved: {}, turned: {}, turn: t.turn + 1, acted: false, msg: '' });
+  // 自己行动完（结束回合）后，借机攻击重新亮起：每个人新一轮都能再借机一次。
+  update((d) => {
+    for (const k of findMap(d, t.mapId)?.tokens ?? []) delete k.opportunityUsed;
+  });
+  setTr({ moved: {}, turned: {}, turn: t.turn + 1, acted: false, opportunity: null, msg: '' });
 }
 
 /** 这一回合还有几点行动点：每回合 1 点，攻击/主动技能花掉就算用完。 */
@@ -389,4 +412,96 @@ export function trialAttackTargets(): AttackTarget[] {
   const pc = w.party.find((p) => p.id === pl.pcId);
   const eye = viewerOf(attacker, { sex: pc?.sex, heightCm: pc?.heightCm });
   return attackTargets(w, m, attacker, (k) => visiblePoint(w, m, eye, tokenPosition(k)));
+}
+
+/** 借机攻击：那一步触发后，主持人点「打」才会结算。 */
+export function trialOpportunityAttack(): string | null {
+  const t = tr();
+  const o = t?.opportunity;
+  if (!t || !o) return '没有待结算的借机攻击';
+  const w = getWorld();
+  const m = findMap(w, t.mapId);
+  if (!m) return '地图不见了';
+  const mover = m.tokens.find((k) => k.id === o.moverTokenId);
+  if (!mover) return '被攻击的棋子不在了';
+  const hits: string[] = [];
+  update((d) => {
+    const dm = findMap(d, t.mapId)!;
+    for (const enemyId of o.enemies) {
+      const e = dm.tokens.find((k) => k.id === enemyId);
+      if (!e || e.opportunityUsed) continue;
+      e.opportunityUsed = true;
+      // 没有技能就是纯幸运骰 D100；这一击也走同一套命中规则（只有大失败落空）。
+      const roll = 1 + Math.floor(Math.random() * 100);
+      const r = rollAttack(roll, 8);
+      const mv = dm.tokens.find((k) => k.id === mover.id)!;
+      let noted = '';
+      if (r.hit && mv.pcId) {
+        const p = d.party?.find((x) => x.id === mv.pcId);
+        if (p) {
+          const { hp, max } = hpOf(p);
+          const next = Math.max(0, hp - r.damage);
+          p.hp = next; p.hpMax ??= max;
+          noted = ` HP ${hp}→${next}/${max}`;
+        }
+      }
+      hits.push(`${e.name} 借机攻击 ${mv.name}：D100=${r.roll === 100 ? '00' : r.roll}${r.crit ? '（特大成功 ×4）' : ''}${r.hit ? `，伤害 ${r.damage}` : '，大失败落空'}${noted}`);
+    }
+  });
+  setTr({ opportunity: null, msg: hits.join('；') });
+  return null;
+}
+
+/** 不打：跳过这次借机。 */
+export function trialSkipOpportunity() {
+  const t = tr();
+  if (t?.opportunity) setTr({ opportunity: null });
+}
+
+/** 轮到谁行动时，它的借机攻击重新亮起。 */
+export function refreshOpportunity(tokenId: string) {
+  update((d) => {
+    const m = findMap(d, getUI().trial?.mapId ?? '');
+    const k = m?.tokens.find((x) => x.id === tokenId);
+    if (k) delete k.opportunityUsed;
+  });
+}
+
+/** 救治：把濒死/昏厥的人拉起来。敏捷 D100，投 1 没救回来。要解锁急救类技能才能做。 */
+export function trialRescue(targetTokenId: string, opts: { roll?: number } = {}): string | null {
+  const t = tr();
+  const pl = t?.players[t.current];
+  if (!t || !pl) return '没有正在试玩的角色';
+  if (!t.combat) return '先打开战斗模式';
+  if (t.acted) return '这回合的行动点已经用掉了，按空格结束回合';
+  const w = getWorld();
+  const m = findMap(w, t.mapId);
+  const rescuer = m?.tokens.find((x) => x.id === pl.tokenId);
+  const target = m?.tokens.find((x) => x.id === targetTokenId);
+  if (!m || !rescuer || !target) return '找不到角色或目标';
+  const dist = Math.abs(rescuer.x - target.x) + Math.abs(rescuer.y - target.y);
+  if (dist > ENGAGE_RANGE) return `救治要贴身（${dist} 格 > ${ENGAGE_RANGE}）`;
+  if (target.status?.label !== '濒死' && !target.down) return `${target.name} 不需要救治`;
+  const pc = w.party.find((p) => p.id === pl.pcId);
+  if (!canRescue(pc?.skills ?? [])) return '没有解锁急救 / 救治类技能，做不了急救（动作库 #119 救治）';
+  const roll = opts.roll ?? 1 + Math.floor(Math.random() * 100);
+  const r = rollRescue(roll);
+  if (!r.success) {
+    setTr({ acted: true, msg: `救治失败（D100=${roll === 100 ? '00' : roll}）：${target.name} 还是没醒过来` });
+    return null;
+  }
+  update((d) => {
+    const dm = findMap(d, t.mapId)!;
+    const dt = dm.tokens.find((x) => x.id === targetTokenId)!;
+    delete dt.status;
+    delete dt.down;
+    if (dt.pcId) {
+      const p = d.party.find((x) => x.id === dt.pcId);
+      if (p) { p.hp = Math.max(p.hp ?? 0, RESCUED_HP); }
+    } else {
+      dt.hp = Math.max(dt.hp ?? 0, RESCUED_HP);
+    }
+  });
+  setTr({ acted: true, msg: `救治成功（D100=${roll === 100 ? '00' : roll}${r.crit ? '，特大成功' : ''}）：${target.name} 被拉起来了，1 HP` });
+  return null;
 }

@@ -4,7 +4,7 @@ import { MARK_LIFE, findMap, giveMapKnowledge, setVisionMode } from '../runtime/
 import { HEAR_RANGE } from '../scene/perception';
 import {
   MOVE_PER_TURN, actionsLeft, addTrialPlayer, clearTrialStatus, endTrial, setTrialStatus, statusLeft, switchTrialPlayer,
-  toggleCombat, toggleMarkMode, trialAttack, trialAttackTargets,
+  toggleCombat, toggleMarkMode, trialAttack, trialAttackTargets, trialRescue, trialOpportunityAttack, trialSkipOpportunity,
 } from '../runtime/trial';
 
 const SYMBOLS = ['!', '?', '★', '✕', '→'];
@@ -92,6 +92,27 @@ export function TrialHud() {
             ));
           })()}
           <span className="muted">D100；伤害 1D8；00＝特大成功 ×4；投 1 没打中</span>
+          {(() => {
+            const down = m?.tokens.filter((k) => k.id !== cur?.tokenId && (k.status?.label === '濒死' || k.down)) ?? [];
+            if (!down.length) return null;
+            return <span className="inline">
+              <span className="muted">救治</span>
+              {down.map((k) => (
+                <button key={k.id} className="small" disabled={!actionsLeft(t)} title="敏捷 D100，投 1 没救回来；要解锁急救类技能"
+                  onClick={() => { if (confirm(`救治 ${k.name}？（敏捷 D100）`)) trialRescue(k.id); }}>
+                  {k.name}
+                </button>
+              ))}
+            </span>;
+          })()}
+        </div>
+      )}
+      {t.opportunity && (
+        <div className="trial-row trial-opportunity">
+          <span className="badge warn">借机攻击！</span>
+          <span className="muted">{m?.tokens.filter((k) => t.opportunity!.enemies.includes(k.id)).map((k) => k.name).join('、')} 可以顺势打一下</span>
+          <button className="small" onClick={trialOpportunityAttack}>打</button>
+          <button className="small" onClick={trialSkipOpportunity}>不打</button>
         </div>
       )}
       {statuses.length > 0 && (

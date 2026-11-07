@@ -198,3 +198,73 @@ export function attackTargets(
     })
     .sort((a, b) => a.distance - b.distance);
 }
+
+// ---------- 借机攻击 ----------
+
+/** 贴身范围：这个距离内往外挪会招来借机攻击（1–2 格）。 */
+export const ENGAGE_RANGE = 2;
+/** 一个棋子在别人回合里最多借机一次；轮到自己时重新亮起。 */
+export function canOpportunityAttack(t: { opportunityUsed?: boolean }): boolean {
+  return !t.opportunityUsed;
+}
+
+export interface OpportunityCheck {
+  /** 从哪个位置往外挪。 */
+  from: { x: number; y: number };
+  to: { x: number; y: number };
+  /** 这一步之后距离变远了吗。 */
+  leaving: boolean;
+  /** 原本贴着的敌人 id。 */
+  enemies: string[];
+}
+
+/**
+ * 借机攻击的触发口径（作者 2026-11-07 澄清）：只认「贴身脱离」。
+ * 已经贴在敌人身边（1–2 格），往外挪的那一步触发；在 8 格远端进出不管。
+ * 规则书原文「进入敌方周围 8 格有逃避惩罚」不再按范围边界算。
+ */
+export function opportunityTriggers(from: { x: number; y: number }, to: { x: number; y: number }, enemies: { id: string; x: number; y: number }[]): OpportunityCheck {
+  const before = enemies.filter((e) => tokenDistance(from, e) <= ENGAGE_RANGE);
+  const staying = before.filter((e) => tokenDistance(to, e) <= ENGAGE_RANGE);
+  return {
+    from, to,
+    leaving: before.length > 0 && staying.length < before.length,
+    enemies: before.filter((e) => !staying.includes(e)).map((e) => e.id),
+  };
+}
+
+/** 移动限制：在敌人周围 ENGAGE_RANGE 格内，一次只能挪 1 格。 */
+export function stepLimitNear(from: { x: number; y: number }, enemies: { x: number; y: number }[]): number {
+  return enemies.some((e) => tokenDistance(from, e) <= ENGAGE_RANGE) ? 1 : Number.POSITIVE_INFINITY;
+}
+
+// ---------- 救治 ----------
+
+/** 救治是动作库 #119「救治」（医疗·调养，敏捷单属性），而不是任何技能都能用的。 */
+export const RESCUE_ACTION = '救治';
+/** 技能 / 动作里算是「急救或救治」的那几条：有其中之一才做得了救治。 */
+export const RESCUE_GRANTS = ['011-9-102', '011-9-002', '011-9-201', '011-9-204', '009-9-104'] as const;
+
+export interface RescueCheck {
+  /** 这次救治成功了吗（敏捷 D100，大失败算失败）。 */
+  roll: number;
+  success: boolean;
+  crit: boolean;
+}
+
+/**
+ * 救治判定：敏捷 D100。规则书里没有专门的 DC（攻击以外不看 DC），
+ * 所以照攻击口径走：投 1 是大失败（没救回来），投 00 是特大成功，其余算成功拉起。
+ */
+export function rollRescue(roll: number): RescueCheck {
+  const ext = tierOfRoll('d100', roll, undefined, { attack: true });
+  return { roll, success: ext.tier !== 'fumble', crit: ext.tier === 'crit' };
+}
+
+/** 这个人能不能救治别人：解锁了急救/救治相关技能才行。 */
+export function canRescue(unlocked: readonly string[]): boolean {
+  return RESCUE_GRANTS.some((id) => unlocked.includes(id));
+}
+
+/** 救治之后的人回到 1 HP，濒死/昏厥解除（"至少活过来"）。 */
+export const RESCUED_HP = 1;
