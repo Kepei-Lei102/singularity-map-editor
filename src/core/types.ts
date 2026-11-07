@@ -110,6 +110,7 @@ export interface Room {
 
 /** 暂时不能行动（晕厥、泡温泉……）：自由行动时按真实时间倒数，战斗中换算成回合（1 回合 = 5 分钟）。 */
 export interface TokenStatus {
+  /** 机制类状态（濒死、流血……）放在 combat.ts，这里仍然是给玩家看的文字状态。 */
   label: string;
   endsAt?: number; // 自由行动：真实时间（毫秒）
   roundsLeft?: number; // 战斗中：还剩几回合
@@ -277,6 +278,11 @@ export interface PC {
   meMax?: number;
   /** 头像：编辑器里压成 96×96 的小图，data URL 存在工程里，跟着工程走。 */
   avatar?: string;
+  /** 六维总属性（力量/敏捷/意志/观察/智慧/魅力）。判定按 ÷5 取区值；没填就不参与战斗结算。 */
+  attributes?: Record<string, number>;
+  /** 当前 / 上限 HP。不填就按公式算上限，当前视为满。 */
+  hp?: number;
+  hpMax?: number;
 }
 
 export interface Effect {

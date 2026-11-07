@@ -10,6 +10,8 @@ import { blocksMovement, ROUND_MINUTES } from '../scene/perception';
 import { characterPathClear, furnitureSweepBlocked, nextTokenStep, setTokenPosition, tokenPosition } from '../scene/architecture';
 import { terrainBlocksPoint, terrainBlocksRect } from '../scene/terrain';
 import { slidingPuzzleForObject } from '../scene/sliding';
+import { viewerOf, visiblePoint } from '../scene/sight';
+import { ATTACK_RANGE, attackTargets, describeAttack, hpOf, rollAttack, type AttackTarget, type Roller } from '../rules/combat';
 
 // 试玩：放白板玩家进去，用 WASD 走，体验视野。退出时一切恢复原样（沙盒）。
 // 默认是非战斗：不限步数；打开"战斗模式"才是每回合 5 格。
@@ -233,7 +235,52 @@ export function trialEndTurn() {
       if (k.status.roundsLeft <= 0) delete k.status;
     }
   });
-  setTr({ moved: {}, turned: {}, turn: t.turn + 1, msg: '' });
+  setTr({ moved: {}, turned: {}, turn: t.turn + 1, acted: false, msg: '' });
+}
+
+/** 这一回合还有几点行动点：每回合 1 点，攻击/主动技能花掉就算用完。 */
+export const actionsLeft = (t: Trial | null | undefined): number => {
+  if (!t?.combat) return 1;
+  return t.acted ? 0 : 1;
+};
+
+/** 攻击当前目标：D100，只有大失败才落空，00 = 特大成功伤害 ×4；伤害默认 1D8。 */
+export function trialAttack(targetTokenId: string, opts: { roll?: number; roller?: Roller } = {}): string | null {
+  const t = tr();
+  const pl = t?.players[t.current];
+  if (!t || !pl) return '没有正在试玩的角色';
+  if (!t.combat) return '先打开战斗模式再攻击';
+  if (t.acted) return '这回合的行动点已经用掉了，按空格结束回合';
+  const w = getWorld();
+  const m = findMap(w, t.mapId);
+  const attacker = m?.tokens.find((x) => x.id === pl.tokenId);
+  const target = m?.tokens.find((x) => x.id === targetTokenId);
+  if (!m || !attacker || !target) return '找不到攻击者或目标';
+  if (attacker.id === target.id) return '不能打自己';
+  const dist = Math.abs(attacker.x - target.x) + Math.abs(attacker.y - target.y);
+  if (dist > ATTACK_RANGE) return `超出攻击距离（${dist} 格 > ${ATTACK_RANGE}）`;
+  const pc = w.party.find((p) => p.id === pl.pcId);
+  const eye = viewerOf(attacker, { sex: pc?.sex, heightCm: pc?.heightCm });
+  if (!visiblePoint(w, m, eye, tokenPosition(target))) return '看不见目标，不能攻击';
+  // 骰点默认现掷；测试可以注入 roll（D100 点数）和 roller（伤害骰）。
+  const roll = opts.roll ?? 1 + Math.floor(Math.random() * 100);
+  const r = rollAttack(roll, 8, opts.roller);
+  const notes: string[] = [describeAttack(pl.name, target.name, r)];
+  update((d) => {
+    const dm = findMap(d, t.mapId)!;
+    const dt = dm.tokens.find((x) => x.id === targetTokenId)!;
+    if (dt.pcId) {
+      const p = d.party.find((x) => x.id === dt.pcId)!;
+      const { hp, max } = hpOf(p);
+      const next = Math.max(0, hp - r.damage);
+      p.hp = next;
+      p.hpMax ??= max;
+      notes.push(`${dt.name} HP ${hp}→${next}/${max}`);
+      if (next <= 0 && dt.status?.label !== '濒死') { dt.status = { label: '濒死', roundsLeft: 3 }; notes.push(`${dt.name} 濒死`); }
+    } else notes.push(`${dt.name} 是 NPC，HP 不设上限，伤害记在裁定里`);
+  });
+  setTr({ acted: true, msg: notes.join('；') });
+  return null;
 }
 
 /** 进出战斗：暂时不能行动的状态在"真实时间"和"回合"之间换算（1 回合 = 5 分钟）。 */
@@ -249,7 +296,7 @@ export function toggleCombat() {
       if (!toCombat && st.roundsLeft !== undefined) { st.endsAt = now + st.roundsLeft * ROUND_MINUTES * 60000; delete st.roundsLeft; }
     }
   });
-  setTr({ combat: toCombat, moved: {}, turn: 1, msg: '' });
+  setTr({ combat: toCombat, moved: {}, acted: false, turn: 1, msg: '' });
 }
 
 /** 让当前角色暂时不能行动（晕厥、泡温泉……），时长按分钟给；战斗中自动换算成回合。 */
@@ -308,4 +355,18 @@ export function trialPlaceMark(x: number, y: number) {
   if (!fog?.[y * m.width + x]) return setTr({ msg: '没去过的地方标不了' });
   addMark(t.mapId, pl.pcId, x, y, t.markSymbol, t.markText.trim());
   setTr({ msg: '' });
+}
+
+/** 战斗面板：当前角色看得见、能打的棋子。 */
+export function trialAttackTargets(): AttackTarget[] {
+  const t = tr();
+  const pl = t?.players[t.current];
+  if (!t || !pl) return [];
+  const w = getWorld();
+  const m = findMap(w, t.mapId);
+  const attacker = m?.tokens.find((x) => x.id === pl.tokenId);
+  if (!m || !attacker) return [];
+  const pc = w.party.find((p) => p.id === pl.pcId);
+  const eye = viewerOf(attacker, { sex: pc?.sex, heightCm: pc?.heightCm });
+  return attackTargets(w, m, attacker, (k) => visiblePoint(w, m, eye, tokenPosition(k)));
 }

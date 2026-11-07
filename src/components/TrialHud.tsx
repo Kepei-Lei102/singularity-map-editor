@@ -3,8 +3,8 @@ import { setUI, useUI, useWorld } from '../core/store';
 import { MARK_LIFE, findMap, giveMapKnowledge, setVisionMode } from '../runtime/actions';
 import { HEAR_RANGE } from '../scene/perception';
 import {
-  MOVE_PER_TURN, addTrialPlayer, clearTrialStatus, endTrial, setTrialStatus, statusLeft, switchTrialPlayer,
-  toggleCombat, toggleMarkMode,
+  MOVE_PER_TURN, actionsLeft, addTrialPlayer, clearTrialStatus, endTrial, setTrialStatus, statusLeft, switchTrialPlayer,
+  toggleCombat, toggleMarkMode, trialAttack, trialAttackTargets,
 } from '../runtime/trial';
 
 const SYMBOLS = ['!', '?', '★', '✕', '→'];
@@ -48,7 +48,7 @@ export function TrialHud() {
       <div className="trial-row">
         <label className="check"><input type="checkbox" checked={t.combat} onChange={toggleCombat} /> 战斗模式</label>
         {t.combat
-          ? <span>第 {t.turn} 回合 · {cur?.name} 已走 {used}/{MOVE_PER_TURN * 3} 子步（3 子步＝1 格，空格结束这一回合）</span>
+          ? <span>第 {t.turn} 回合 · 行动点 {actionsLeft(t)}/1 · {cur?.name} 已走 {used}/{MOVE_PER_TURN * 3} 子步（3 子步＝1 格，空格结束这一回合）</span>
           : <span className="muted">自由行动：不限步数</span>}
         <span className="spacer" />
         <span className="muted">视野</span>
@@ -77,6 +77,23 @@ export function TrialHud() {
         <span className="muted">分钟</span>
         <button className="small" disabled={!stLabel.trim()} onClick={() => setTrialStatus(stLabel.trim(), stMin)}>开始</button>
       </div>
+      {t.combat && (
+        <div className="trial-row">
+          <span className="muted">攻击</span>
+          {(() => {
+            const targets = trialAttackTargets().filter((x) => x.inRange && x.visible);
+            if (!targets.length) return <span className="muted">攻击距离内没有看得见的目标</span>;
+            return targets.map((x) => (
+              <button key={x.tokenId} className="small" disabled={!actionsLeft(t)}
+                title={`${x.distance} 格${x.hp === null ? '' : ` · HP ${x.hp}`}`}
+                onClick={() => { if (confirm(`攻击 ${x.name}？（D100，只有大失败才落空）`)) trialAttack(x.tokenId); }}>
+                {x.name}{x.hp === null ? '' : ` · HP ${x.hp}`}
+              </button>
+            ));
+          })()}
+          <span className="muted">D100；伤害 1D8；00＝特大成功 ×4；投 1 没打中</span>
+        </div>
+      )}
       {statuses.length > 0 && (
         <div className="trial-row">
           {statuses.map(({ p, st }) => (

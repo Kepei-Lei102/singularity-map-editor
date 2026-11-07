@@ -228,6 +228,7 @@ export interface UIState {
     combat: boolean; // 战斗模式：每回合 5 格；不开就是不限步数
     moved: Record<string, number>;
     turned?: Record<string, boolean>; // 本回合已经原地转身过的棋子（缠斗限制用）
+    acted?: boolean; // 这一回合的行动点已经用掉（攻击/技能）
     turn: number;
     msg: string;
     markSymbol: string;

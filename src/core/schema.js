@@ -491,6 +491,12 @@ export function checkWorld(w, migrated = false) {
     if (p.meMax !== undefined) num(p.meMax, `party[${i}].meMax`, 0);
     if (p.pathway !== undefined) optStr(p.pathway, `party[${i}].pathway`);
     for (const skill of p.skills ?? []) optStr(skill, `party[${i}].skills`);
+    if (p.attributes !== undefined) {
+      obj(p.attributes, `party[${i}].attributes`);
+      for (const [k, v] of Object.entries(p.attributes)) num(v, `party[${i}].attributes.${k}`, 0, 1000);
+    }
+    if (p.hp !== undefined) num(p.hp, `party[${i}].hp`, 0);
+    if (p.hpMax !== undefined) num(p.hpMax, `party[${i}].hpMax`, 0);
   });
   unique(w.party, 'party');
   if (w.judgments !== undefined) {

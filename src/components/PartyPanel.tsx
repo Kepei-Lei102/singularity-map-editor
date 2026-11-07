@@ -4,6 +4,7 @@ import { useState } from 'react';
 import { setUI, update, useWorld } from '../core/store';
 import { PATHWAY_SUGGESTIONS } from '../core/defaults';
 import { SKILL_LIBRARY, currentPathwayOf } from '../rules/skills';
+import { ATTRS, hpOf, hpMaxOf } from '../rules/combat';
 import { uid } from '../core/util';
 import { Num, Row, Section, Txt } from './fields';
 
@@ -89,6 +90,24 @@ export function PartyPanel() {
             <Num value={p.meMax ?? 10} min={0} onChange={(v) => update((d) => { d.party.find((x) => x.id === p.id)!.meMax = Math.max(0, Number.isFinite(v) ? v : 0); })} />
           </span></Row>
           {p.me == null && <div className="hint">还没填 ME：这个角色暂时不能发动技能。</div>}
+          <details className="pc-skills">
+            <summary>六维与 HP <span className="muted">{(() => { const h = hpOf(p); return h.max ? `${h.hp}/${h.max}` : '未填'; })()}</span></summary>
+            {ATTRS.map((a) => (
+              <Row key={a} label={a}><span className="inline">
+                <Num value={p.attributes?.[a] ?? 0} min={0} onChange={(v) => update((d) => {
+                  const pc = d.party.find((x) => x.id === p.id)!;
+                  pc.attributes ??= {};
+                  pc.attributes[a] = Math.max(0, Number.isFinite(v) ? v : 0);
+                })} />
+                <span className="muted">区值 {Math.floor((p.attributes?.[a] ?? 0) / 5)}</span>
+              </span></Row>
+            ))}
+            <Row label="HP"><span className="inline">
+              <Num value={p.hp ?? hpOf(p).hp} min={0} onChange={(v) => update((d) => { d.party.find((x) => x.id === p.id)!.hp = Math.max(0, Number.isFinite(v) ? v : 0); })} /> /
+              <Num value={p.hpMax ?? hpMaxOf(p.attributes)} min={0} onChange={(v) => update((d) => { d.party.find((x) => x.id === p.id)!.hpMax = Math.max(0, Number.isFinite(v) ? v : 0); })} />
+            </span></Row>
+            <div className="hint">HP 上限默认按「0.4 魅 + 0.3 力 + 0.2 敏 + 0.1 志」的区值算（规则书）；填了 HP 上限就按你填的。攻击扣血只改当前 HP。</div>
+          </details>
           <div className="hint">只能发动「当前途径」下的技能；换途径多付 1 ME。</div>
           <details className="pc-skills">
             <summary>已解锁技能 <span className="muted">{p.skills?.length ?? 0}</span></summary>
