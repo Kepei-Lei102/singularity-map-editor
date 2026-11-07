@@ -501,6 +501,7 @@ export function checkWorld(w, migrated = false) {
     }
     if (p.hp !== undefined) num(p.hp, `party[${i}].hp`, 0);
     if (p.hpMax !== undefined) num(p.hpMax, `party[${i}].hpMax`, 0);
+    if (p.sharp !== undefined) optBool(p.sharp, `party[${i}].sharp`);
   });
   unique(w.party, 'party');
   if (w.judgments !== undefined) {

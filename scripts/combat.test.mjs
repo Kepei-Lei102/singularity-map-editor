@@ -174,7 +174,7 @@ test('攻击后给出事件卡片所需的数据', () => {
   assert.equal(ev.damage, 8); // 2 × 4
   assert.equal(ev.hpBefore, 6);
   assert.equal(ev.hpAfter, 0);
-  assert.equal(ev.dying, true);
+  assert.equal(ev.downed, 'down'); // 这一击是钝器：打倒成昏厥，不是撕卡
   assert.equal(ev.targetName, '目标');
   assert.equal(api.getUI().trial.msg, '');
 });
@@ -262,4 +262,99 @@ test('没解锁急救技能的人不能救治', () => {
   assert.equal(api.canRescue([]), false);
   assert.equal(api.canRescue(['001-9-001']), false);
   assert.equal(api.canRescue(['011-9-102']), true);
+});
+
+test('钝器打倒 → 昏厥；锐器打倒 → 濒死', () => {
+  assert.equal(api.downedBy(false), 'down');
+  assert.equal(api.downedBy(true), 'dying');
+  assert.equal(api.downedLabel('down'), '昏厥');
+  assert.equal(api.downedLabel('dying'), '濒死');
+  assert.equal(api.DYING_ROUNDS, 3);
+});
+
+test('没有锐器的角色勾不了锐器', () => {
+  assert.equal(api.canUseSharp({ sharp: true }), true);
+  assert.equal(api.canUseSharp({ sharp: false }), false);
+  assert.equal(api.canUseSharp({}), false);
+  assert.equal(api.canUseSharp(null), false);
+});
+
+test('钝器把 HP 打到 0 是昏厥，锐器是濒死', () => {
+  const run = (sharp) => {
+    const w = api.emptyWorld();
+    const m = api.newMap('打', '现实', 1, 10, 10, 'floor', false);
+    m.objects = []; m.fog = m.fog.map(() => 1);
+    const attrs = { 力量: 30, 敏捷: 30, 意志: 30, 观察: 30, 智慧: 30, 魅力: 30 };
+    w.party = [
+      { id: 'a', name: '打手', color: '#fff', tags: [], attributes: attrs, sharp: true },
+      { id: 'b', name: '挨打的', color: '#f00', tags: [], attributes: attrs, hp: 1, hpMax: 6 },
+    ];
+    m.tokens = [
+      { id: 'ta', pcId: 'a', name: '打手', color: '#fff', x: 2, y: 2 },
+      { id: 'tb', pcId: 'b', name: '挨打的', color: '#f00', x: 2, y: 3 },
+    ];
+    w.maps = [m];
+    api.replaceWorld(w);
+    api.startTrial();
+    api.setUI({ trial: { mapId: m.id, players: [{ tokenId: 'ta', pcId: 'a', name: '打手' }], current: 0, combat: true, moved: {}, turn: 1, msg: '', markSymbol: '!', markText: '', markMode: false } });
+    assert.equal(api.trialAttack('tb', { roll: 50, roller: () => 3, sharp }), null);
+    const tb = api.findMap(api.getWorld(), m.id).tokens.find((k) => k.id === 'tb');
+    return { downed: api.getUI().trial.event.downed, status: tb.status?.label ?? null, down: tb.down ?? false, hp: api.getWorld().party.find(p => p.id === 'b').hp };
+  };
+  const blunt = run(false);
+  assert.equal(blunt.downed, 'down');
+  assert.equal(blunt.status, null);
+  assert.equal(blunt.down, true);
+  assert.equal(blunt.hp, 0);
+  const sharp = run(true);
+  assert.equal(sharp.downed, 'dying');
+  assert.equal(sharp.status, '濒死');
+  assert.equal(sharp.down, false);
+});
+
+test('身上没锐器的角色勾了锐器会被拦', () => {
+  const w = api.emptyWorld();
+  const m = api.newMap('打', '现实', 1, 10, 10, 'floor', false);
+  m.objects = []; m.fog = m.fog.map(() => 1);
+  const attrs = { 力量: 30, 敏捷: 30, 意志: 30, 观察: 30, 智慧: 30, 魅力: 30 };
+  w.party = [{ id: 'a', name: '拳手', color: '#fff', tags: [], attributes: attrs }, { id: 'b', name: '靶子', color: '#f00', tags: [], attributes: attrs }];
+  m.tokens = [{ id: 'ta', pcId: 'a', name: '拳手', color: '#fff', x: 2, y: 2 }, { id: 'tb', pcId: 'b', name: '靶子', color: '#f00', x: 2, y: 3 }];
+  w.maps = [m]; api.replaceWorld(w); api.startTrial();
+  api.setUI({ trial: { mapId: m.id, players: [{ tokenId: 'ta', pcId: 'a', name: '拳手' }], current: 0, combat: true, moved: {}, turn: 1, msg: '', markSymbol: '!', markText: '', markMode: false } });
+  assert.match(api.trialAttack('tb', { roll: 50, sharp: true }) ?? '', /没有锐器/);
+});
+
+test('NPC 棋子填了 hpMax 就会扣血', () => {
+  const w = api.emptyWorld();
+  const m = api.newMap('打', '现实', 1, 12, 12, 'floor', false);
+  m.objects = []; m.fog = m.fog.map(() => 1);
+  const attrs = { 力量: 30, 敏捷: 30, 意志: 30, 观察: 30, 智慧: 30, 魅力: 30 };
+  w.party = [{ id: 'a', name: '打手', color: '#fff', tags: [], attributes: attrs }];
+  m.tokens = [
+    { id: 'ta', pcId: 'a', name: '打手', color: '#fff', x: 2, y: 2 },
+    { id: 'robot', pcId: null, name: '机器人', color: '#888', x: 2, y: 3, hp: 80, hpMax: 80 },
+  ];
+  w.maps = [m]; api.replaceWorld(w); api.startTrial();
+  api.setUI({ trial: { mapId: m.id, players: [{ tokenId: 'ta', pcId: 'a', name: '打手' }], current: 0, combat: true, moved: {}, turn: 1, msg: '', markSymbol: '!', markText: '', markMode: false } });
+  assert.equal(api.trialAttack('robot', { roll: 30, roller: () => 5 }), null);
+  const ev = api.getUI().trial.event;
+  assert.equal(ev.hpBefore, 80);
+  assert.equal(ev.hpAfter, 75);
+  assert.equal(ev.hpMax, 80);
+  assert.equal(api.findMap(api.getWorld(), m.id).tokens.find(k => k.id === 'robot').hp, 75);
+});
+
+test('NPC 没填血条就不扣，只提示记在裁定里', () => {
+  const w = api.emptyWorld();
+  const m = api.newMap('打', '现实', 1, 12, 12, 'floor', false);
+  m.objects = []; m.fog = m.fog.map(() => 1);
+  const attrs = { 力量: 30, 敏捷: 30, 意志: 30, 观察: 30, 智慧: 30, 魅力: 30 };
+  w.party = [{ id: 'a', name: '打手', color: '#fff', tags: [], attributes: attrs }];
+  m.tokens = [{ id: 'ta', pcId: 'a', name: '打手', color: '#fff', x: 2, y: 2 }, { id: 'npc', pcId: null, name: '路人', color: '#888', x: 2, y: 3 }];
+  w.maps = [m]; api.replaceWorld(w); api.startTrial();
+  api.setUI({ trial: { mapId: m.id, players: [{ tokenId: 'ta', pcId: 'a', name: '打手' }], current: 0, combat: true, moved: {}, turn: 1, msg: '', markSymbol: '!', markText: '', markMode: false } });
+  assert.equal(api.trialAttack('npc', { roll: 30, roller: () => 5 }), null);
+  const ev = api.getUI().trial.event;
+  assert.equal(ev.hpBefore, null);
+  assert.match(ev.note ?? '', /没有血条/);
 });

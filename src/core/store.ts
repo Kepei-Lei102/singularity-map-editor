@@ -229,6 +229,8 @@ export interface UIState {
     moved: Record<string, number>;
     turned?: Record<string, boolean>; // 本回合已经原地转身过的棋子（缠斗限制用）
     acted?: boolean; // 这一回合的行动点已经用掉（攻击/技能）
+    /** 这次攻击用锐器（默认钝器）。只有身上带锐器的角色才勾得动。 */
+    sharpAttack?: boolean;
     /** 借机攻击提示：这一步触发了，等主持人决定打不打。 */
     opportunity?: { moverTokenId: string; enemies: string[]; from: { x: number; y: number }; to: { x: number; y: number } } | null;
     /** 刚发生的大事（攻击、伤害、濒死）：单独一张大卡片显示，不塞进底部小字。 */
@@ -244,7 +246,8 @@ export interface UIState {
       hpBefore: number | null;
       hpAfter: number | null;
       hpMax: number | null;
-      dying: boolean;
+      /** 倒地走向：钝器打晕是「昏厥」，锐器是「濒死」。 */
+      downed?: 'down' | 'dying' | null;
       note?: string;
       at: number;
     } | null;

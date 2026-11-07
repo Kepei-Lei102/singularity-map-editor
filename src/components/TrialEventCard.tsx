@@ -41,7 +41,8 @@ export function TrialEventCard() {
               {ev.hpMax ? <span className="muted"> / {ev.hpMax}</span> : null}
             </span>
           )}
-          {ev.dying && <span className="dying-tag">濒死</span>}
+          {ev.downed === 'dying' && <span className="dying-tag">濒死</span>}
+          {ev.downed === 'down' && <span className="down-tag">昏厥</span>}
         </div>
       ) : null}
       {ev.note && <div className="trial-event-note">{ev.note}</div>}

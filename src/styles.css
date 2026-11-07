@@ -364,3 +364,5 @@ button.ai { color: #e6c2ff; border-color: #6b4f8c; }
 .trial-event-foot { font-size: 11px; color: var(--muted); border-top: 1px solid rgba(255, 255, 255, 0.08); padding-top: 6px; }
 .trial-event-foot a { cursor: pointer; text-decoration: underline; color: var(--accent); margin-left: 8px; }
 .trial-opportunity { background: rgba(192, 57, 43, 0.14); border: 1px solid #c0392b; border-radius: 8px; padding: 6px 8px; }
+.down-tag { display: inline-block; padding: 1px 8px; border-radius: 10px; border: 1px solid #ff9f43; color: #ff9f43; font-size: 12px; }
+label.check.off { opacity: 0.45; }

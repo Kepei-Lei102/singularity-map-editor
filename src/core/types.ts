@@ -290,6 +290,11 @@ export interface PC {
   /** 当前 / 上限 HP。不填就按公式算上限，当前视为满。 */
   hp?: number;
   hpMax?: number;
+  /**
+   * 带着锐器。只有勾了才对「锐器」攻击给出可选项；
+   * 钝器把人打晕是「昏厥」，锐器才是「濒死」。
+   */
+  sharp?: boolean;
 }
 
 export interface Effect {

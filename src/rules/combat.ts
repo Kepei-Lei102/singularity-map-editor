@@ -268,3 +268,32 @@ export function canRescue(unlocked: readonly string[]): boolean {
 
 /** 救治之后的人回到 1 HP，濒死/昏厥解除（"至少活过来"）。 */
 export const RESCUED_HP = 1;
+
+// ---------- 昏厥 / 濒死（钝器 vs 锐器） ----------
+
+/**
+ * HP 归零之后的走向（作者口径）：
+ * - 钝器（拳头、棍子）：晕过去，躺在原地等战斗结束，不撕卡；
+ * - 锐器：真的濒死，3 回合内没人救治就撕卡。
+ */
+export type Downed = 'down' | 'dying';
+
+export function downedBy(sharp: boolean): Downed {
+  return sharp ? 'dying' : 'down';
+}
+
+/** 锐器濒死给几回合抢救时间。 */
+export const DYING_ROUNDS = 3;
+
+/** HP 归零时的状态标签。 */
+export function downedLabel(kind: Downed): string {
+  return kind === 'dying' ? '濒死' : '昏厥';
+}
+
+/**
+ * 攻击能不能勾「锐器」：攻击者身上带锐器才给这个选项。
+ * 不带锐器的人默认用钝器，勾不了。
+ */
+export function canUseSharp(attacker: { sharp?: boolean } | null | undefined): boolean {
+  return !!attacker?.sharp;
+}

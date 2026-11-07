@@ -11,7 +11,7 @@ import { characterPathClear, furnitureSweepBlocked, nextTokenStep, setTokenPosit
 import { terrainBlocksPoint, terrainBlocksRect } from '../scene/terrain';
 import { slidingPuzzleForObject } from '../scene/sliding';
 import { viewerOf, visiblePoint } from '../scene/sight';
-import { ATTACK_RANGE, ENGAGE_RANGE, RESCUED_HP, attackTargets, canRescue, hpOf, opportunityTriggers, rollAttack, rollRescue, stepLimitNear, type AttackTarget, type Roller } from '../rules/combat';
+import { ATTACK_RANGE, DYING_ROUNDS, ENGAGE_RANGE, RESCUED_HP, attackTargets, canRescue, canUseSharp, downedBy, downedLabel, hpOf, opportunityTriggers, rollAttack, rollRescue, stepLimitNear, type AttackTarget, type Downed, type Roller } from '../rules/combat';
 
 // 试玩：放白板玩家进去，用 WASD 走，体验视野。退出时一切恢复原样（沙盒）。
 // 默认是非战斗：不限步数；打开"战斗模式"才是每回合 5 格。
@@ -268,7 +268,7 @@ export const actionsLeft = (t: Trial | null | undefined): number => {
 };
 
 /** 攻击当前目标：D100，只有大失败才落空，00 = 特大成功伤害 ×4；伤害默认 1D8。 */
-export function trialAttack(targetTokenId: string, opts: { roll?: number; roller?: Roller } = {}): string | null {
+export function trialAttack(targetTokenId: string, opts: { roll?: number; roller?: Roller; sharp?: boolean } = {}): string | null {
   const t = tr();
   const pl = t?.players[t.current];
   if (!t || !pl) return '没有正在试玩的角色';
@@ -284,27 +284,37 @@ export function trialAttack(targetTokenId: string, opts: { roll?: number; roller
   const dist = Math.abs(attacker.x - target.x) + Math.abs(attacker.y - target.y);
   if (dist > ATTACK_RANGE) return `超出攻击距离（${dist} 格 > ${ATTACK_RANGE}）`;
   const pc = w.party.find((p) => p.id === pl.pcId);
+  // 钝器默认；锐器要攻击者身上带着才行，不带的人勾不了。
+  const sharp = !!opts.sharp;
+  if (sharp && !canUseSharp(pc)) return `${pl.name} 身上没有锐器，只能用钝器`;
   const eye = viewerOf(attacker, { sex: pc?.sex, heightCm: pc?.heightCm });
   if (!visiblePoint(w, m, eye, tokenPosition(target))) return '看不见目标，不能攻击';
   // 骰点默认现掷；测试可以注入 roll（D100 点数）和 roller（伤害骰）。
   const roll = opts.roll ?? 1 + Math.floor(Math.random() * 100);
   const r = rollAttack(roll, 8, opts.roller);
   // 伤害这种大事单独给一张卡片（event），底部小字只留一句不起眼的补充。
-  let hpBefore: number | null = null, hpAfter: number | null = null, hpMax: number | null = null, dying = false;
+  let hpBefore: number | null = null, hpAfter: number | null = null, hpMax: number | null = null;
+  let downed: Downed | null = null;
   let note = '';
+  const kind = downedBy(sharp);
   update((d) => {
     const dm = findMap(d, t.mapId)!;
     const dt = dm.tokens.find((x) => x.id === targetTokenId)!;
-    if (!dt.pcId) { note = `${dt.name} 没有角色卡，HP 不设上限；伤害记在裁定里`; return; }
-    const p = d.party.find((x) => x.id === dt.pcId);
-    if (!p) { note = `${dt.name} 的角色卡不在队伍里`; return; }
-    const { hp, max } = hpOf(p);
-    const next = Math.max(0, hp - r.damage);
-    hpBefore = hp; hpAfter = next; hpMax = max;
-    p.hp = next;
-    p.hpMax ??= max;
-    if (next <= 0 && dt.status?.label !== '濒死') { dt.status = { label: '濒死', roundsLeft: 3 }; dying = true; }
-    else dying = dt.status?.label === '濒死';
+    // NPC：棋子上填了 hp/hpMax 就按它扣；没填就当作没有血条，伤害只进裁定。
+    const tokenHP = (dt.hpMax ?? 0) > 0 ? { hp: dt.hp ?? dt.hpMax!, max: dt.hpMax! } : null;
+    const p = dt.pcId ? d.party.find((x) => x.id === dt.pcId) : null;
+    const pool = p ? hpOf(p) : tokenHP;
+    if (!pool) { note = `${dt.name} 没有血条（角色卡和棋子都没填 HP）；伤害记在裁定里`; return; }
+    const next = Math.max(0, pool.hp - r.damage);
+    hpBefore = pool.hp; hpAfter = next; hpMax = pool.max;
+    if (p) { p.hp = next; p.hpMax ??= pool.max; }
+    else { dt.hp = next; }
+    const already = dt.status?.label === '濒死' ? 'dying' : dt.down ? 'down' : null;
+    if (next <= 0) {
+      downed = already ?? kind;
+      if (downed === 'dying') dt.status = { label: downedLabel('dying'), roundsLeft: DYING_ROUNDS };
+      else { delete dt.status; dt.down = true; }
+    } else downed = already;
   });
   setTr({
     acted: true,
@@ -314,7 +324,7 @@ export function trialAttack(targetTokenId: string, opts: { roll?: number; roller
       attackerPcId: pl.pcId, attackerName: pl.name,
       targetPcId: target.pcId, targetName: target.name,
       roll: r.roll, crit: r.crit, damage: r.damage,
-      hpBefore, hpAfter, hpMax, dying, note, at: Date.now(),
+      hpBefore, hpAfter, hpMax, downed, note, at: Date.now(),
     },
   });
   return null;

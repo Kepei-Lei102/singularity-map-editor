@@ -81,15 +81,25 @@ export function TrialHud() {
         <div className="trial-row">
           <span className="muted">攻击</span>
           {(() => {
+            const sharp = !!w.party.find((p) => p.id === cur?.pcId)?.sharp;
+            const bluntMode = !(t.sharpAttack ?? false);
             const targets = trialAttackTargets().filter((x) => x.canHit);
-            if (!targets.length) return <span className="muted">攻击距离内没有看得见的目标</span>;
-            return targets.map((x) => (
-              <button key={x.tokenId} className="small" disabled={!actionsLeft(t)}
-                title={`${x.distance} 格${x.hp === null ? '' : ` · HP ${x.hp}`}`}
-                onClick={() => { if (confirm(`攻击 ${x.name}？（D100，只有大失败才落空）`)) trialAttack(x.tokenId); }}>
-                {x.name}{x.hp === null ? '' : ` · HP ${x.hp}`}
-              </button>
-            ));
+            const label = (x: typeof targets[number]) => `${x.name}${x.hp === null ? '' : ` · HP ${x.hp}`}`;
+            return <>
+              {!targets.length && <span className="muted">攻击距离内没有看得见的目标</span>}
+              {targets.map((x) => (
+                <button key={x.tokenId} className="small" disabled={!actionsLeft(t)}
+                  title={`${x.distance} 格${x.hp === null ? '' : ` · HP ${x.hp}`}；${bluntMode ? '钝器：打倒成昏厥' : '锐器：打倒成濒死'}`}
+                  onClick={() => { if (confirm(`用${bluntMode ? '钝器' : '锐器'}攻击 ${x.name}？（D100，只有大失败才落空；${bluntMode ? '打到 0 是昏厥' : '打到 0 是濒死'}）`)) trialAttack(x.tokenId, { sharp: !bluntMode }); }}>
+                  {label(x)}
+                </button>
+              ))}
+              {/* 钝器默认；只有身上带锐器的角色才给这个勾选 */}
+              <label className={`check ${sharp ? '' : 'off'}`} title={sharp ? '勾上就是用锐器：打倒的人进入濒死' : '这个角色身上没有锐器，只能用钝器'}>
+                <input type="checkbox" disabled={!sharp || !targets.length} checked={sharp && !bluntMode}
+                  onChange={(e) => set({ sharpAttack: e.target.checked })} /> 锐器
+              </label>
+            </>;
           })()}
           <span className="muted">D100；伤害 1D8；00＝特大成功 ×4；投 1 没打中</span>
           {(() => {

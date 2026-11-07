@@ -106,7 +106,10 @@ export function PartyPanel() {
               <Num value={p.hp ?? hpOf(p).hp} min={0} onChange={(v) => update((d) => { d.party.find((x) => x.id === p.id)!.hp = Math.max(0, Number.isFinite(v) ? v : 0); })} /> /
               <Num value={p.hpMax ?? hpMaxOf(p.attributes)} min={0} onChange={(v) => update((d) => { d.party.find((x) => x.id === p.id)!.hpMax = Math.max(0, Number.isFinite(v) ? v : 0); })} />
             </span></Row>
+            <Row label="携带锐器"><label className="check"><input type="checkbox" checked={!!p.sharp}
+              onChange={(e) => update((d) => { const x = d.party.find((q) => q.id === p.id)!; if (e.target.checked) x.sharp = true; else delete x.sharp; })} /> 有刀 / 利器</label></Row>
             <div className="hint">HP 上限默认按「0.4 魅 + 0.3 力 + 0.2 敏 + 0.1 志」的区值算（规则书）；填了 HP 上限就按你填的。攻击扣血只改当前 HP。</div>
+            <div className="hint">勾了「携带锐器」，战斗里攻击时才能勾「锐器」。钝器把人打倒是<b>昏厥</b>（战斗结束自动醒），锐器打倒是<b>濒死</b>（3 回合内要救治）。</div>
           </details>
           <div className="hint">只能发动「当前途径」下的技能；换途径多付 1 ME。</div>
           <details className="pc-skills">
