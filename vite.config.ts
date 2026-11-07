@@ -27,8 +27,9 @@ export default defineConfig(({ mode }) => {
       __APP_VERSION__: JSON.stringify(pkg.version),
       ...(role ? {
         'import.meta.env.VITE_APP_ROLE': JSON.stringify(role),
-        'import.meta.env.VITE_HOST_ORIGIN': JSON.stringify(env.VITE_HOST_ORIGIN || 'http://localhost:5178'),
-        'import.meta.env.VITE_PLAYER_ORIGIN': JSON.stringify(env.VITE_PLAYER_ORIGIN || 'http://localhost:5179'),
+        // 只配了玩家端地址才钉住；只起一个 dev server 时同源开窗口，别跳到没监听的端口
+        'import.meta.env.VITE_HOST_ORIGIN': JSON.stringify(env.VITE_HOST_ORIGIN || ''),
+        'import.meta.env.VITE_PLAYER_ORIGIN': JSON.stringify(env.VITE_PLAYER_ORIGIN || ''),
       } : {}),
     },
   };
