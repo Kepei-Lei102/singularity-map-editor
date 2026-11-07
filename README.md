@@ -133,7 +133,7 @@ node scripts/tsmap.mjs pack 工程文件夹 工程.tsmap.zip
 
 在主持人端顶栏「打开玩家窗口…」选择角色，就会打开5179的绑定窗口。两个窗口须位于同一浏览器，玩家窗口由主持人窗口打开；单独输入5179会显示连接说明。角色数据通过带来源校验的 `postMessage` 发送，世界只发裁剪后的内容，私密辨识不会发送给其他角色；双方刷新后可重连。这是本机双窗口测试和展示，尚不是跨电脑联网服务。点击「试玩」会另开绑定白板角色的玩家窗口，创作者窗口保留完整地图与检查器。WASD、Tab 和标记操作仍在主持人窗口进行；切换试玩角色时，测试玩家窗口随之切换。测试窗口只接收沙盒，正式玩家窗口继续接收试玩前的真实世界。结束试玩会清空测试窗口并恢复世界；试玩绑定不跨主持人刷新保存。若浏览器拦截弹窗，允许该站点弹窗后点「打开试玩玩家端」。
 
-分别运行可用 `npm run dev:host` / `npm run dev:player`。`npm run build:split` 生成 `dist-host/` 和 `dist-player/` 两份静态产物，分别用 `npm run preview:host` / `npm run preview:player` 本地检查。自定义部署地址需在构建前设置 `VITE_HOST_ORIGIN` 与 `VITE_PLAYER_ORIGIN`；开发端口可用 `HOST_PORT` / `PLAYER_PORT`，对应的来源地址也须一致。沿用单HTML发放时仍用 `npm run build:single`，保留原有同源玩家窗口。
+分别运行可用 `npm run dev:host` / `npm run dev:player`。**只起 `dev:host`（5178）时，玩家窗口自动同源打开**（`http://localhost:5178/?view=player&…`），不会再去 5179——之前写死玩家端口，只跑一个 server 就会跳到没人监听的地址、窗口卡死。要分开用就两个都起，或设 `VITE_PLAYER_ORIGIN`。`npm run build:split` 生成 `dist-host/` 和 `dist-player/` 两份静态产物，分别用 `npm run preview:host` / `npm run preview:player` 本地检查。自定义部署地址需在构建前设置 `VITE_HOST_ORIGIN` 与 `VITE_PLAYER_ORIGIN`；开发端口可用 `HOST_PORT` / `PLAYER_PORT`，对应的来源地址也须一致。沿用单HTML发放时仍用 `npm run build:single`，保留原有同源玩家窗口。
 
 ## 物件辨识
 

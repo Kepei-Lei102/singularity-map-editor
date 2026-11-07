@@ -109,6 +109,7 @@ export function PlayerView() {
         <div className="arm" onClick={() => setArmed(true)}>
           <div>点一下这里开始</div>
           <div className="muted">（浏览器要先点一下才允许自动播放声音）</div>
+          {!map && <div className="muted">现在还没有地图：等创作者 / 见证者在编辑器里「推送当前地图」。</div>}
         </div>
       )}
     </div>

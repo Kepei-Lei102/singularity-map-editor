@@ -1,4 +1,4 @@
-import { hostOrigin, playerOrigin, messageTarget, isPlayerEntry } from '../core/deployment';
+import { hostOriginForPlayer, playerWindowBase, playerWindowOrigin, messageTarget, isPlayerEntry } from '../core/deployment';
 import { identityKnown, playerSeen, UNKNOWN_OBJECT } from '../scene/identity';
 import { objectEnabled } from '../core/objectData.js';
 import { isArchitectureObject, clipArchitecture, fogAt, tokenPosition } from '../scene/architecture';
@@ -51,7 +51,7 @@ export function openPlayerWindow(pcId?: string, trial = false) {
   const w = trial ? getWorld() : getRealWorld(), id = pcId ?? w.party[0]?.id;
   if (!id || !w.party.some(p => p.id === id)) return;
   const binding = rand();
-  const base = playerOrigin() === location.origin ? '' : `${playerOrigin()}/`;
+  const base = playerWindowBase();
   const win = window.open(`${base}?view=player&session=${SESSION}&binding=${binding}`, `ts-player-${binding}`, 'width=1280,height=800');
   if (win) { players.set(binding, { win, pcId: id, context: projectContext(), ...(trial ? { trialContext: worldContext() } : {}) }); saveBindings(); }
   else toast(`玩家窗口被浏览器拦截，请允许此站点弹出窗口，再点「${trial ? '打开试玩玩家端' : '打开玩家窗口…'}」`);
@@ -192,8 +192,8 @@ onProjectReplaced(() => {
   players.clear(); saveBindings();
 });
 
-// Each deployment pins the other endpoint; file:// standalone keeps its legacy fallback.
-const target = () => messageTarget(playerOrigin());
+// Each deployment pins the other endpoint; 开发时没配就发当前页面的来源（同源窗口）。
+const target = () => messageTarget(playerWindowOrigin());
 
 let quietUntil = 0; // 编辑器刚启动、还在确认会话标识没撞车时，先不往外推
 
@@ -228,7 +228,7 @@ export function send(body: SyncBody, to?: string) {
   }
   const out = msg(body);
   if (body.type === 'hello') {
-    if (window.opener && !window.opener.closed) window.opener.postMessage(out, messageTarget(hostOrigin()));
+    if (window.opener && !window.opener.closed) window.opener.postMessage(out, messageTarget(hostOriginForPlayer()));
     return;
   }
   if (body.type === 'alive') for (const p of players.values()) {
@@ -242,7 +242,7 @@ export function listen(fn: (m: SyncMsg, source: MessageEventSource | null) => vo
   const seen = new Set<string>();
   const handle = (e: MessageEvent) => {
     if (!isMsg(e.data) || seen.has(e.data.seq)) return;
-    const expected = player ? hostOrigin() : e.data.type === 'hello' ? playerOrigin() : location.origin;
+    const expected = player ? hostOriginForPlayer() : e.data.type === 'hello' ? playerWindowOrigin() : location.origin;
     if (e.origin && e.origin !== expected) return;
     // Cross-origin windows never participate in host session-collision negotiation.
     if (!player && e.data.type !== 'hello' && e.source) return;
