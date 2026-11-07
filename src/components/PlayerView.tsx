@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { listenAsPlayer, reportJudgmentRoll, send } from '../runtime/sync';
-import type { Focus, PendingJudgment, PublicSkill, SkillCast, World } from '../core/types';
+import type { CombatNotice, Focus, PendingJudgment, PublicSkill, SkillCast, World } from '../core/types';
 import { TIER_LABEL } from '../core/types';
 import { MapCanvas } from './MapCanvas';
 import { MediaView } from './MediaPanel';
@@ -27,6 +27,13 @@ export function PlayerView() {
   const [drawer, setDrawer] = useState<'clues' | 'skills' | 'notes' | null>(null);
   /** 笔记只存在这个浏览器里，不发给主持人。 */
   const [notes, setNotes] = useState(() => { try { return localStorage.getItem('ts-player-notes') ?? ''; } catch { return ''; } });
+  /** 最近一次跟我有关的攻击：从底部弹一条，几秒后自己收。 */
+  const [notice, setNotice] = useState<CombatNotice | null>(null);
+  useEffect(() => {
+    if (!notice) return;
+    const t = window.setTimeout(() => setNotice(null), 6000);
+    return () => window.clearTimeout(t);
+  }, [notice]);
   const saveNotes = (v: string) => { setNotes(v); try { localStorage.setItem('ts-player-notes', v); } catch { /* 存不了也不影响看 */ } };
 
   useEffect(() => {
@@ -39,6 +46,7 @@ export function PlayerView() {
         setSkills(m.skills ?? []);
         setPathway(m.pathway ?? null);
         setAvatar(m.avatar ?? null);
+        if (m.world.combatNotice) setNotice((cur) => (cur?.id === m.world.combatNotice!.id ? cur : m.world.combatNotice!));
         // 世界推送里也带一份自己的待掷判定：刷新后不丢
         if (m.world.pendingJudgment) setPending((cur) => (cur?.id === m.world.pendingJudgment!.id ? cur : m.world.pendingJudgment!));
       } else if (m.type === 'judge-request') { setPending(m.judgment); setRolled(null); }
@@ -80,6 +88,18 @@ export function PlayerView() {
           <button className="player-nums" onClick={() => setNums(!nums)}>{nums ? '隐藏编号' : '显示编号'}</button>
         </div>;
       })()}
+
+      {/* 跟我有关的攻击：状态条上方弹一条，几秒后自己收。 */}
+      {map && notice && (
+        <div className={`player-notice ${notice.kind === 'hit' ? 'hit' : 'miss'} ${notice.downed ? 'downed' : ''}`} onClick={() => setNotice(null)}>
+          <b>{notice.role === 'attacker' ? `你打 ${notice.targetName}` : `${notice.attackerName} 打你`}</b>
+          {notice.kind === 'miss'
+            ? <span>没打中</span>
+            : <span>命中，掉了 {notice.damage} 点血{notice.hpAfter !== null && notice.hpMax ? ` → ${notice.hpAfter} / ${notice.hpMax}` : ''}</span>}
+          {notice.downed === 'dying' && <span className="tag">濒死</span>}
+          {notice.downed === 'down' && <span className="tag">昏厥</span>}
+        </div>
+      )}
 
       {/* 右上角两个小图标：点了才从底部升起抽屉。 */}
       {map && <div className="player-dock">

@@ -459,6 +459,30 @@ export interface PendingJudgment {
   standIn?: boolean;
 }
 
+/**
+ * 试玩里发生的一次攻击，推给「跟他有关」的玩家看。
+ * 只带结果，不带骰子内部：玩家看见的是「谁打谁、命中没、掉了多少血」。
+ */
+export interface CombatNotice {
+  id: Id;
+  at: number;
+  kind: 'hit' | 'miss';
+  attackerName: string;
+  attackerPcId: string | null;
+  targetName: string;
+  targetPcId: string | null;
+  roll: number;
+  crit: boolean;
+  damage: number;
+  hpBefore: number | null;
+  hpAfter: number | null;
+  hpMax: number | null;
+  downed?: 'down' | 'dying' | null;
+  note?: string;
+  /** 我是打人的那个，还是挨打的那个。玩家端据此换措辞。 */
+  role: 'attacker' | 'target' | 'bystander';
+}
+
 export interface DiceJudgment {
   id: Id;
   title: string;
@@ -480,6 +504,8 @@ export interface World {
   judgmentNotice?: JudgmentNotice | null;
   /** 只在玩家载荷里：落在自己身上、等自己掷的判定。别人的判定不会发过来。 */
   pendingJudgment?: PendingJudgment | null;
+  /** 只在玩家载荷里：最近一次跟他有关的攻击。 */
+  combatNotice?: CombatNotice | null;
   version: 1;
   name: string;
   terrains: Terrain[];

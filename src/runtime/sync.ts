@@ -3,7 +3,7 @@ import { identityKnown, playerSeen, UNKNOWN_OBJECT } from '../scene/identity';
 import { objectEnabled } from '../core/objectData.js';
 import { isArchitectureObject, clipArchitecture, fogAt, tokenPosition } from '../scene/architecture';
 import { anyVisible } from '../scene/memory';
-import type { DiceJudgment, Endpoint, GameMap, PendingJudgment, PlayerClue, VisionLayer, World, Focus, SkillCast, PublicSkill } from '../core/types';
+import type { CombatNotice, DiceJudgment, Endpoint, GameMap, PendingJudgment, PlayerClue, VisionLayer, World, Focus, SkillCast, PublicSkill } from '../core/types';
 import { visibleMarks } from '../scene/perception';
 import { viewerOf, visiblePoint } from '../scene/sight';
 import { currentPathwayOf, publicSkillsOf } from '../rules/skills';
@@ -50,6 +50,37 @@ try {
 function saveBindings() {
   try { sessionStorage.setItem(bindingsKey(), JSON.stringify(Object.fromEntries([...players].filter(([, p]) => !p.trialContext).map(([key, p]) => [key, p.pcId])))); } catch { /* unavailable */ }
 }
+/**
+ * 试玩里刚发生的攻击，推给跟他有关的玩家。
+ * 打人的和挨打的都要知道；旁人只在同一张图、视野内才给提示 —— 这里先只推给当事人，
+ * 免得把「谁在哪个角落打谁」漏出去。
+ */
+function combatNoticeFor(pcId: string): CombatNotice | null {
+  const ev = getUI().trial?.event;
+  if (!ev) return null;
+  const asAttacker = ev.attackerPcId === pcId;
+  const asTarget = ev.targetPcId === pcId;
+  if (!asAttacker && !asTarget) return null;
+  return {
+    id: `${ev.at}-${ev.attackerName}-${ev.targetName}`,
+    at: ev.at,
+    kind: ev.kind,
+    attackerName: ev.attackerName,
+    attackerPcId: ev.attackerPcId,
+    targetName: ev.targetName,
+    targetPcId: ev.targetPcId,
+    roll: ev.roll,
+    crit: ev.crit,
+    damage: ev.damage,
+    hpBefore: ev.hpBefore,
+    hpAfter: ev.hpAfter,
+    hpMax: ev.hpMax,
+    downed: ev.downed ?? null,
+    note: ev.note,
+    role: asAttacker ? 'attacker' : 'target',
+  };
+}
+
 /** 只把「落在你身上」的待掷判定发给这个玩家；别人的判定他一概不知道。 */
 function pendingFor(pcId: string): PendingJudgment | null {
   const p = getUI().pendingJudgment;
@@ -227,7 +258,7 @@ export function send(body: SyncBody, to?: string) {
       const out: SyncBody = !valid
         ? { type: 'clear' }
         : body.type === 'world'
-          ? { type: 'world', world: { ...playerWorld(w, mapId, p.pcId), pendingJudgment: pendingFor(p.pcId) } as World, focus: getUI().focus ?? null, cast: getUI().cast ?? null, you: p.pcId, skills: publicSkillsOf(w.party.find((pc) => pc.id === p.pcId)?.skills ?? []),
+          ? { type: 'world', world: { ...playerWorld(w, mapId, p.pcId), pendingJudgment: pendingFor(p.pcId), combatNotice: combatNoticeFor(p.pcId) } as World, focus: getUI().focus ?? null, cast: getUI().cast ?? null, you: p.pcId, skills: publicSkillsOf(w.party.find((pc) => pc.id === p.pcId)?.skills ?? []),
             pathway: currentPathwayOf(w.party.find((pc) => pc.id === p.pcId) ?? { skills: [] }),
             avatar: w.party.find((pc) => pc.id === p.pcId)?.avatar ?? null }
           : body;

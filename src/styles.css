@@ -412,3 +412,17 @@ label.check.off { opacity: 0.45; }
   width: 100%; min-height: 140px; resize: vertical; background: #14151a; color: var(--text);
   border: 1px solid #3a3a44; border-radius: 8px; padding: 10px; font-size: 14px; line-height: 1.7; font-family: inherit;
 }
+
+/* 玩家端的战斗通报：状态条上方一条，几秒后自己收 */
+.player-notice {
+  position: absolute; left: 16px; right: 16px; bottom: 56px; display: flex; align-items: center; gap: 10px;
+  padding: 10px 14px; border-radius: 10px; font-size: 14px; z-index: 8; cursor: pointer;
+  background: rgba(24, 24, 30, 0.96); border: 1px solid #3a3a44; animation: player-notice-in 0.2s ease-out;
+}
+.player-notice.hit { border-color: var(--danger); }
+.player-notice.miss { border-color: #4a4a56; color: var(--muted); }
+.player-notice.downed { border-color: #d9534f; background: rgba(48, 18, 20, 0.96); }
+.player-notice .tag {
+  padding: 1px 8px; border-radius: 999px; background: #d9534f; color: #fff; font-size: 12px; font-weight: 700;
+}
+@keyframes player-notice-in { from { transform: translateY(10px); opacity: 0; } to { transform: none; opacity: 1; } }

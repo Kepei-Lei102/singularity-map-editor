@@ -116,8 +116,9 @@ export function demoWorld(): World {
     { id: uid(), kind: 'stairs', label: '通往阁楼', a: { mapId: study.id, x: 17, y: 1 }, b: { mapId: upstairs.id, x: 1, y: 1 }, hidden: false },
     { id: uid(), kind: 'portal', label: '梦境入口', a: { mapId: study.id, x: 10, y: 7 }, b: { mapId: dream.id, x: 10, y: 7 }, hidden: true },
   ];
-  const eng = { id: uid(), name: '示例·工程师', tags: ['工程师'], color: '#e07a5f' };
-  const singer = { id: uid(), name: '示例·歌唱家', tags: ['歌唱家'], color: '#81b29a' };
+  // 六维给一组像样的值，玩家端才能显示真实血条（HP 由六维推算，没填就是 0/0 的空条）
+  const eng = { id: uid(), name: '示例·工程师', tags: ['工程师'], color: '#e07a5f', attributes: { 力量: 40, 敏捷: 45, 意志: 55, 观察: 60, 智慧: 65, 魅力: 40 } };
+  const singer = { id: uid(), name: '示例·歌唱家', tags: ['歌唱家'], color: '#81b29a', attributes: { 力量: 30, 敏捷: 50, 意志: 60, 观察: 45, 智慧: 45, 魅力: 70 } };
   w.party = [eng, singer];
   study.tokens = [
     { id: uid(), pcId: eng.id, name: eng.name, color: eng.color, x: 3, y: 4 },

@@ -155,3 +155,15 @@ test('玩家窗口回传的掷骰结果不会被当成「复制标签页」丢�
   // 主持人这边要能收
   assert.match(src, /if \(m\.type === 'judge-roll'\) \{ onJudgeRoll\(m\); return; \}/);
 });
+
+test('战斗通报只发给当事人，且只带结果不带骰子细节', async () => {
+  const src = await readFile(join(root, 'src/runtime/sync.ts'), 'utf8');
+  const body = src.split('function combatNoticeFor')[1].split('/** 只把')[0];
+  // 既不是打人的也不是挨打的，就什么都不给
+  assert.match(body, /asAttacker[\s\S]{0,80}asTarget/);
+  assert.match(body, /if \(!asAttacker && !asTarget\) return null/);
+  // 有角色身份，玩家端才能换措辞
+  assert.match(body, /role: asAttacker \? 'attacker' : 'target'/);
+  // 推给玩家时带上
+  assert.match(src, /combatNotice: combatNoticeFor\(p\.pcId\)/);
+});
