@@ -1,7 +1,7 @@
 import { architectureTransitionError } from '../scene/architecture';
 import { produce, type Draft } from 'immer';
 import { useSyncExternalStore } from 'react';
-import type { World } from './types';
+import type { PendingJudgment, World } from './types';
 import { demoWorld, emptyWorld } from './defaults';
 import { isPlayerEntry } from './deployment';
 import { migrateWorld, syncMemory } from '../scene/memory';
@@ -257,6 +257,10 @@ export interface UIState {
     markText: string;
     markMode: boolean; // 放标记状态：G 键或按钮进入，点一下地图放下
   } | null; // 试玩
+  /** 开出来等玩家掷的判定；同一时间只开一个。 */
+  pendingJudgment: PendingJudgment | null;
+  /** 玩家窗口掷完回传的结果，等见证者确认后广播。 */
+  judgmentResult: { id: string; title: string; sides: number; value: number; tens: number | null; units: number | null; material: string; seed: number; rollId: string; byStandIn: boolean } | null;
   flowId: string | null;
   connKind: 'stairs' | 'portal' | 'door' | 'other';
   tokenPcId: string | null;
@@ -289,6 +293,8 @@ let ui: UIState = {
   selection: null,
   views: {},
   pendingConn: null,
+  pendingJudgment: null,
+  judgmentResult: null,
   pick: null,
   trial: null,
   diskTarget: null,

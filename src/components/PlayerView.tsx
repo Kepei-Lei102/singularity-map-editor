@@ -1,10 +1,11 @@
 import { useEffect, useState } from 'react';
-import { listenAsPlayer, send } from '../runtime/sync';
-import type { Focus, PublicSkill, SkillCast, World } from '../core/types';
+import { listenAsPlayer, reportJudgmentRoll, send } from '../runtime/sync';
+import type { Focus, PendingJudgment, PublicSkill, SkillCast, World } from '../core/types';
 import { TIER_LABEL } from '../core/types';
 import { MapCanvas } from './MapCanvas';
 import { MediaView } from './MediaPanel';
 import { DiceTray } from './DiceTray';
+import { hpOf } from '../rules/combat';
 
 /** 玩家窗口：主持人共享这个窗口的屏幕给玩家。只显示玩家该看到的东西。 */
 export function PlayerView() {
@@ -19,6 +20,14 @@ export function PlayerView() {
   const [skills, setSkills] = useState<PublicSkill[]>([]);
   const [pathway, setPathway] = useState<string | null>(null);
   const [avatar, setAvatar] = useState<string | null>(null);
+  /** 轮到自己掷的判定。玩家不能拒掷，所以只给「掷」。 */
+  const [pending, setPending] = useState<PendingJudgment | null>(null);
+  const [rolled, setRolled] = useState<{ sides: number; value: number } | null>(null);
+  /** 底部抽屉：一次只开一个。 */
+  const [drawer, setDrawer] = useState<'clues' | 'skills' | 'notes' | null>(null);
+  /** 笔记只存在这个浏览器里，不发给主持人。 */
+  const [notes, setNotes] = useState(() => { try { return localStorage.getItem('ts-player-notes') ?? ''; } catch { return ''; } });
+  const saveNotes = (v: string) => { setNotes(v); try { localStorage.setItem('ts-player-notes', v); } catch { /* 存不了也不影响看 */ } };
 
   useEffect(() => {
     const off = listenAsPlayer((m) => {
@@ -30,7 +39,11 @@ export function PlayerView() {
         setSkills(m.skills ?? []);
         setPathway(m.pathway ?? null);
         setAvatar(m.avatar ?? null);
-      } else if (m.type === 'clear') { setWorld(null); setMedia(null); setFocus(null); setCast(null); }
+        // 世界推送里也带一份自己的待掷判定：刷新后不丢
+        if (m.world.pendingJudgment) setPending((cur) => (cur?.id === m.world.pendingJudgment!.id ? cur : m.world.pendingJudgment!));
+      } else if (m.type === 'judge-request') { setPending(m.judgment); setRolled(null); }
+      else if (m.type === 'judge-cancel') { setPending(null); setRolled(null); }
+      else if (m.type === 'clear') { setWorld(null); setMedia(null); setFocus(null); setCast(null); setPending(null); setRolled(null); }
       else if (m.type === 'play') setMedia({ mediaId: m.mediaId, label: m.label, mime: m.mime, blob: m.blob });
       else if (m.type === 'stop') setMedia(null);
     });
@@ -49,31 +62,83 @@ export function PlayerView() {
     <div className="player">
       {map ? <MapCanvas world={world!} map={map} mode="player" playerNumbers={nums} viewer={undefined} /> : <div className="player-wait">{window.opener ? '等待主持人推送地图……' : '玩家端已就绪。请在创作者／见证者端选择「打开玩家窗口…」中的角色，建立专属视角。'}</div>}
       {map && <div className="player-title">{map.layer} · {map.name}</div>}
-      {map && avatar && <img className="player-avatar" src={avatar} alt="角色头像" />}
-      {map && <button className="player-nums" onClick={() => setNums(!nums)}>{nums ? '隐藏编号' : '显示编号'}</button>}
-      {map && <span className="player-viewer">{world!.party[0]?.name} 的视角</span>}
-      {clues.length > 0 && (
-        <div className="clues">
-          <div className="clues-title">线索</div>
-          {clues.map((c) => (
-            <div key={c.id} className="clue">
-              <b>{c.object}·{c.label}</b> <span className="muted">{c.kind === 'auto' ? '看到' : `${c.check}${TIER_LABEL[c.tier]}`}</span>
-              <div>{c.text}</div>
-            </div>
-          ))}
-        </div>
+
+
+      {/* 底部状态条：自己的人、自己的血、自己的 ME。这一条始终在。 */}
+      {map && (() => {
+        const me = world!.party[0];
+        const { hp, max } = hpOf(me ?? {});
+        return <div className="player-status">
+          {avatar ? <img className="player-status-avatar" src={avatar} alt="" /> : <i className="dot" style={{ background: me?.color ?? '#fff' }} />}
+          <span className="player-status-name">{me?.name ?? '你'}</span>
+          <span className="player-status-hp" title="HP">
+            <span className="bar"><span className="bar-fill" style={{ width: `${max ? Math.max(0, Math.min(100, (hp / max) * 100)) : 0}%` }} /></span>
+            <b>{hp} / {max}</b>
+          </span>
+          {me?.me !== undefined && <span className="player-status-me" title="ME">ME {me.me}{me.meMax ? ` / ${me.meMax}` : ''}</span>}
+          <span className="spacer" />
+          <button className="player-nums" onClick={() => setNums(!nums)}>{nums ? '隐藏编号' : '显示编号'}</button>
+        </div>;
+      })()}
+
+      {/* 右上角两个小图标：点了才从底部升起抽屉。 */}
+      {map && <div className="player-dock">
+        <button className={`player-dock-btn ${drawer === 'clues' ? 'on' : ''}`} onClick={() => setDrawer(drawer === 'clues' ? null : 'clues')} title="线索">
+          <span className="player-dock-icon">✦</span>{clues.length > 0 && <span className="player-dock-badge">{clues.length}</span>}
+        </button>
+        <button className={`player-dock-btn ${drawer === 'skills' ? 'on' : ''}`} onClick={() => setDrawer(drawer === 'skills' ? null : 'skills')} title="技能">
+          <span className="player-dock-icon">◇</span>{skills.length > 0 && <span className="player-dock-badge">{skills.length}</span>}
+        </button>
+        <button className={`player-dock-btn ${drawer === 'notes' ? 'on' : ''}`} onClick={() => setDrawer(drawer === 'notes' ? null : 'notes')} title="笔记">
+          <span className="player-dock-icon">✎</span>
+        </button>
+      </div>}
+      {/* 抽屉：从底部升起，一次只开一个。不点就一直不占地方。 */}
+      {drawer && (
+        <aside className={`player-drawer ${drawer}`}>
+          <div className="player-drawer-head">
+            <b>{drawer === 'clues' ? '线索' : drawer === 'skills' ? '我的技能' : '我的笔记'}</b>
+            {drawer === 'skills' && pathway && <span className="muted">当前途径：{pathway}</span>}
+            <span className="spacer" />
+            <button className="small" onClick={() => setDrawer(null)}>收起</button>
+          </div>
+          <div className="player-drawer-body">
+            {drawer === 'clues' && (clues.length === 0
+              ? <div className="muted">还没有线索。看到、检查到的东西会记在这里。</div>
+              : clues.map((c) => (
+                <div key={c.id} className="clue">
+                  <b>{c.object}·{c.label}</b> <span className="muted">{c.kind === 'auto' ? '看到' : `${c.check}${TIER_LABEL[c.tier]}`}</span>
+                  <div>{c.text}</div>
+                </div>
+              )))}
+            {drawer === 'skills' && (skills.length === 0
+              ? <div className="muted">还没有解锁技能。</div>
+              : skills.map((sk) => (
+                <div key={sk.id} className="player-skill">
+                  <b>【{sk.name}】</b> <span className="muted">{sk.pathway} · 序列 {sk.sequence} · {sk.me} ME</span>
+                  {pathway && sk.pathway !== pathway && <span className="badge">换途径 +1 ME</span>}
+                  <div>{sk.desc}</div>
+                </div>
+              )))}
+            {drawer === 'notes' && <textarea className="player-notes" value={notes} placeholder="记下你想记的：谁说过什么、哪里去过、要办什么事。只存在这台电脑上，不发给主持人。"
+              onChange={(e) => saveNotes(e.target.value)} />}
+          </div>
+        </aside>
       )}
-      {skills.length > 0 && (
-        <details className="player-skills">
-          <summary>我的技能 <span className="muted">{skills.length}</span>{pathway && <span className="muted"> · 当前途径：{pathway}</span>}</summary>
-          {skills.map((s) => (
-            <div key={s.id} className="player-skill">
-              <b>【{s.name}】</b> <span className="muted">{s.pathway} · 序列 {s.sequence} · {s.me} ME</span>
-              {pathway && s.pathway !== pathway && <span className="badge">换途径 +1 ME</span>}
-              <div>{s.desc}</div>
-            </div>
-          ))}
-        </details>
+      {pending && (
+        <div className="player-roll">
+          <h3>轮到你了 · {pending.title}</h3>
+          <div className="muted">见证者宣告了这个判定，骰子由你掷。掷了不能取消。</div>
+          {rolled
+            ? <div className="player-roll-result">D{rolled.sides} = {rolled.value === 100 ? '000' : rolled.value}</div>
+            : <DiceTray persona="player" sides={pending.sides}
+                onResult={(r) => {
+                  setRolled({ sides: r.sides, value: r.value });
+                  reportJudgmentRoll({ type: 'judge-roll', id: pending.id, title: pending.title, sides: r.sides, value: r.value, tens: r.tens, units: r.units, material: r.material, seed: r.seed, rollId: r.id });
+                }}
+                onError={() => {}} />}
+          {rolled && <div className="muted">已经送到见证者那边，等他确认后广播全队。</div>}
+        </div>
       )}
       {judgmentNotice && !judgment && <div className="player-judgment-notice">发生了一次判定</div>}
       {judgment && <button className="player-judgment-toggle" onClick={() => setDismissed(dismissed === judgment.id ? null : judgment.id)}>正式判定 · {judgment.title}</button>}

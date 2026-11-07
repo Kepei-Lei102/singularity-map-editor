@@ -1,6 +1,7 @@
 import { useState } from 'react';
-import { getUI, getWorld, useWorld, worldContext } from '../core/store';
-import { publishJudgment } from '../rules/judgments';
+import { getUI, getWorld, setUI, useUI, useWorld, worldContext } from '../core/store';
+import { cancelJudgment, openJudgment, publishJudgment, standInForJudgment } from '../rules/judgments';
+import { pushJudgmentRequest } from '../runtime/sync';
 import { tokenPosition } from '../scene/architecture';
 import type { Id } from '../core/types';
 import { DiceTray, type DiceSides, type DiceTrayRecord } from './DiceTray';
@@ -32,8 +33,66 @@ function initialSubject(): string {
 
 export function JudgmentPanel() {
   useWorld();
+  useUI();
   const context = worldContext();
+  const pending = getUI().pendingJudgment;
+  if (pending) return <PendingJudgmentPanel key={`${context}-${pending.id}`} context={context} />;
   return <JudgmentForm key={context} context={context} />;
+}
+
+/** 判定已经开出去了：等玩家掷，见证者这一格只能等、取消，或者代掷。 */
+function PendingJudgmentPanel({ context }: { context: string }) {
+  const world = useWorld();
+  const result = getUI().judgmentResult;
+  const p = getUI().pendingJudgment!;
+  const subject = world.party.find((x) => x.id === p.subjectId);
+  const [message, setMessage] = useState('');
+  const broadcast = () => {
+    if (!result) return;
+    const err = publishJudgment({
+      title: p.title, ruling: p.ruling, recipients: world.party.map((x) => x.id),
+      roll: {
+        id: result.rollId, sides: result.sides as never, value: result.value,
+        tens: result.tens, units: result.units, material: result.material as never,
+        persona: 'witness', seed: result.seed,
+      },
+      subjectId: p.subjectId, place: p.place ?? null,
+    }, context);
+    if (err) return setMessage(err);
+    setUI({ pendingJudgment: null, judgmentResult: null });
+  };
+  const standIn = !!p.standIn;
+  const onStandInRoll = (roll: DiceTrayRecord) => {
+    const err = publishJudgment({
+      title: p.title, ruling: p.ruling, recipients: world.party.map((x) => x.id),
+      roll: { id: roll.id, sides: roll.sides, value: roll.value, tens: roll.tens, units: roll.units, material: roll.material, persona: 'witness', seed: roll.seed },
+      subjectId: p.subjectId, place: p.place ?? null,
+    }, context);
+    if (err) return setMessage(err);
+    setUI({ pendingJudgment: null, judgmentResult: null });
+  };
+  return <section className="judgment-panel">
+    <h3>{standIn ? '代掷中' : `判定已经开出去了 · 等 ${subject?.name ?? '玩家'} 掷骰`}</h3>
+    <div><b>{p.title}</b> · D{p.sides} · {subject?.name ?? '角色'}</div>
+    {p.ruling && <div className="muted">你预先写好的裁定（已锁）：{p.ruling}</div>}
+    <div className="muted">骰子在他的窗口里。见证者默认不能代掷。</div>
+    {standIn && <div>
+      <div className="muted">玩家不在电脑前 / 用的是实体骰，你替他掷。</div>
+      <DiceTray persona="witness" sides={p.sides} displayResult={result ? { id: result.rollId, sides: result.sides as never, value: result.value, seed: result.seed, material: result.material as never, tens: result.tens, units: result.units } : null}
+        onResult={onStandInRoll} onError={setMessage} />
+    </div>}
+    {!standIn && (result
+      ? <div>
+          他掷出了：D{result.sides} = {result.value === 100 ? '000' : result.value}
+          <button onClick={broadcast}>确认并广播给全队</button>
+        </div>
+      : <div className="muted">等结果…</div>)}
+    <div className="btns">
+      {!standIn && <button onClick={() => { const e = standInForJudgment(); if (e) setMessage(e); }}>代掷（玩家不在电脑前 / 实体骰）</button>}
+      <button onClick={() => setMessage(cancelJudgment() ?? '已取消这个判定')}>取消整个判定</button>
+    </div>
+    <div role="status">{message}</div>
+  </section>;
 }
 
 function JudgmentForm({ context }: { context: string }) {
@@ -43,37 +102,22 @@ function JudgmentForm({ context }: { context: string }) {
   const [subjectId, setSubjectId] = useState(initialSubject);
   const [sides, setSides] = useState<DiceSides>(20);
   const [setup, setSetup] = useState<Setup | null>(null);
-  const [result, setResult] = useState<DiceTrayRecord | null>(null);
-  const [published, setPublished] = useState(false);
   const [message, setMessage] = useState('');
   const locked = !!setup;
 
   const confirmSetup = () => {
     if (!title.trim()) return setMessage('先填判定名称，再确认设置');
-    if (!world.party.length) return setMessage('还没有角色，判定无法广播');
+    if (!world.party.length) return setMessage('还没有角色，判定无法开出');
+    if (!subjectId) return setMessage('要指定判定落在谁身上——骰子由他掷');
     const place = subjectPlace(subjectId);
-    setSetup({ title: title.trim(), ruling, sides, subjectId: subjectId || null, place });
-    setMessage(place ? `设置已锁定：发生在 ${place.label}（${place.x.toFixed(2)}, ${place.y.toFixed(2)}）` : '设置已锁定：不指定位置，全队都能看到细节');
+    // 见证者只宣告，不掷；骰子交给玩家。
+    const err = openJudgment({ title, ruling, sides, subjectId, place: place ? { mapId: place.mapId, x: place.x, y: place.y } : null });
+    if (err) return setMessage(err);
+    setSetup({ title: title.trim(), ruling, sides, subjectId, place });
+    pushJudgmentRequest(subjectId);
+    setMessage('判定已经开出去，等玩家在自己的窗口里掷骰');
   };
 
-  const broadcast = (roll: DiceTrayRecord, s: Setup) => {
-    const error = publishJudgment({
-      title: s.title, ruling: s.ruling, recipients: getWorld().party.map((p) => p.id), roll,
-      subjectId: s.subjectId, place: s.place ? { mapId: s.place.mapId, x: s.place.x, y: s.place.y } : null,
-    }, context);
-    setMessage(error ?? '结果已落定，已广播给全队（没有私骰）');
-    if (!error) setPublished(true);
-    return !error;
-  };
-
-  const onRoll = (roll: DiceTrayRecord) => {
-    if (!setup || result || roll.sides !== setup.sides) return;
-    setResult(roll);
-    broadcast(roll, setup);
-  };
-
-  const retry = () => { if (result && setup) broadcast(result, setup); };
-  const reset = () => { setSetup(null); setResult(null); setPublished(false); setMessage(''); setRuling(''); };
 
   return <section className="judgment-panel">
     <h3>正式骰子判定 · 见证者月亮版</h3>
@@ -85,25 +129,15 @@ function JudgmentForm({ context }: { context: string }) {
       </select>
     </label>
     <label>骰子<select value={sides} disabled={locked} onChange={e => setSides(Number(e.target.value) as DiceSides)}>{[4,6,8,10,12,20,100].map(n => <option key={n} value={n}>D{n}</option>)}</select></label>
-    <DiceTray persona="witness" sides={sides} disabled={!setup || !!result || published}
-      displayResult={result}
-      onResult={onRoll} onError={setMessage} />
+    {!setup && <div className="muted">骰子在你的玩家窗口里掷。你这里只是宣告：判定名称、落在谁身上、用哪个骰子。</div>}
     <label>见证者裁定（掷之前写好；留空就是只广播骰点）
       <textarea value={ruling} disabled={locked} onChange={e => setRuling(e.target.value)} placeholder="例如：观察成功，发现钟面上的刻痕。" />
     </label>
-    <div className="muted">广播对象：全队 {world.party.length} 人。没有私骰，也不允许丢弃结果。</div>
-    {!setup && <button disabled={!title.trim() || !world.party.length} onClick={confirmSetup}>确认设置，开始掷骰</button>}
-    {setup && !result && <div>
-      <div>设置已锁定：{setup.title} · D{setup.sides} · {setup.subjectId ? world.party.find(p => p.id === setup.subjectId)?.name ?? '角色' : '不指定位置'}</div>
-      <div className="muted">选项已锁定；掷出的结果必须广播，不能取消或丢弃。</div>
-    </div>}
-    {result && <div>
-      本次结果：D{result.sides} = {result.value === 100 ? '000' : result.value}
-      {!published && <button onClick={retry}>重试广播</button>}
-      {published && <button onClick={reset}>开始下一次判定</button>}
-    </div>}
+    <div className="muted">广播对象：全队 {world.party.length} 人。骰子由玩家自己掷，不能拒掷；只有你能取消整个判定。</div>
+    {!setup && <button disabled={!title.trim() || !world.party.length || !subjectId} onClick={confirmSetup}>开判定，让玩家掷</button>}
+    {setup && <div className="muted">已开出去，等 {world.party.find(p => p.id === setup.subjectId)?.name ?? '玩家'} 掷骰。</div>}
     <div role="status">{message}</div>
-    <p className="hint">流程：先确认判定名称/角色/骰子，再掷；骰子落定即广播，不能取消或丢弃。视野外的玩家只会看到「发生了一次判定」。</p>
+    <p className="hint">流程：你宣告（名称 / 落在谁身上 / 骰子 / 预先写好的裁定）→ 玩家在他的窗口里自己掷 → 结果回到你这里 → 你确认后广播全队。裁定在宣告时就锁住，掷完不能改口。</p>
     {[...(world.judgments ?? [])].reverse().slice(0,10).map(j => <article key={j.id}><b>{j.title} · D{j.roll.sides}={j.roll.value===100?'000':j.roll.value}</b><div>{j.ruling}</div></article>)}
   </section>;
 }

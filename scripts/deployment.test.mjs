@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -106,4 +106,52 @@ test('同源玩家窗口：?view=player 能进玩家视角，消息来回都发�
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
+});
+
+test('判定：见证者只宣告不掷，骰子交给玩家', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'ts-judge-'));
+  try {
+    const storage = () => { const m = new Map(); return { getItem:k=>m.get(k)??null,setItem:(k,v)=>m.set(k,v),removeItem:k=>m.delete(k) }; };
+    globalThis.localStorage=storage();globalThis.sessionStorage=storage();
+    globalThis.location={origin:host,href:host+'/',search:''};
+    globalThis.window={setTimeout:()=>0,setInterval:()=>0,addEventListener:()=>{},removeEventListener:()=>{}};
+    globalThis.BroadcastChannel=class{postMessage(){}addEventListener(){}removeEventListener(){}};
+    const file = join(dir, 'judge.cjs');
+    await build({stdin:{contents:`export * from './src/rules/judgments';export * from './src/core/store';export * from './src/core/defaults';`,resolveDir:root},outfile:file,bundle:true,platform:'node',format:'cjs',logLevel:'silent',define:{'import.meta.env':JSON.stringify({VITE_APP_ROLE:'host'})}});
+    const api = createRequire(import.meta.url)(file);
+    const w = api.emptyWorld();
+    w.party = [{ id:'a', name:'Alice', tags:[], color:'#fff' }, { id:'b', name:'Bob', tags:[], color:'#000' }];
+    api.replaceWorld(w);
+    // 没指定角色不能开
+    assert.match(api.openJudgment({ title:'观察检定', ruling:'', sides:100, subjectId:'' }) ?? '', /角色/);
+    assert.equal(api.openJudgment({ title:'观察检定', ruling:'成功能看到刻痕', sides:100, subjectId:'a' }), null);
+    const p = api.getUI().pendingJudgment;
+    assert.equal(p.title, '观察检定');
+    assert.equal(p.sides, 100);
+    assert.equal(p.ruling, '成功能看到刻痕', '裁定在宣告时就锁住');
+    assert.equal(p.subjectId, 'a');
+    // 同一时间只能开一个
+    assert.match(api.openJudgment({ title:'第二个', ruling:'', sides:20, subjectId:'b' }) ?? '', /已经有一个/);
+    // 见证者代掷
+    assert.equal(api.standInForJudgment(), null);
+    assert.equal(api.getUI().pendingJudgment.standIn, true);
+    // 见证者能整个取消
+    assert.equal(api.cancelJudgment(), null);
+    assert.equal(api.getUI().pendingJudgment, null);
+    assert.match(api.cancelJudgment() ?? '', /没有待掷/);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('玩家窗口回传的掷骰结果不会被当成「复制标签页」丢掉', async () => {
+  const src = await readFile(join(root, 'src/runtime/sync.ts'), 'utf8');
+  // 会话撞车那段守卫必须显式放过 judge-roll：它和主持人带同一个 SESSION，
+  // 但它是绑定窗口发回来的，不是第二个编辑器实例。
+  const guard = src.split('export function listenAsEditor')[1].split('if (m.type === \'claim\'')[0];
+  assert.match(guard, /m\.type !== 'judge-roll'/);
+  // 回传要直发 opener，不走广播，避免被玩家窗口自己的监听再吃一遍
+  assert.match(src, /body\.type === 'judge-roll'[\s\S]{0,200}window\.opener/);
+  // 主持人这边要能收
+  assert.match(src, /if \(m\.type === 'judge-roll'\) \{ onJudgeRoll\(m\); return; \}/);
 });

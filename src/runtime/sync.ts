@@ -3,12 +3,12 @@ import { identityKnown, playerSeen, UNKNOWN_OBJECT } from '../scene/identity';
 import { objectEnabled } from '../core/objectData.js';
 import { isArchitectureObject, clipArchitecture, fogAt, tokenPosition } from '../scene/architecture';
 import { anyVisible } from '../scene/memory';
-import type { DiceJudgment, Endpoint, GameMap, PlayerClue, VisionLayer, World, Focus, SkillCast, PublicSkill } from '../core/types';
+import type { DiceJudgment, Endpoint, GameMap, PendingJudgment, PlayerClue, VisionLayer, World, Focus, SkillCast, PublicSkill } from '../core/types';
 import { visibleMarks } from '../scene/perception';
 import { viewerOf, visiblePoint } from '../scene/sight';
 import { currentPathwayOf, publicSkillsOf } from '../rules/skills';
 import { numbering } from '../scene/render';
-import { getRealWorld, getWorld, getUI, saveNow, worldContext, toast } from '../core/store';
+import { getRealWorld, getWorld, getUI, setUI, saveNow, worldContext, toast } from '../core/store';
 import { SESSION, rand, renewSession } from '../core/session';
 import { effectiveLayer, emptyVision } from '../scene/vision';
 import { onProjectReplaced, projectContext } from '../core/store';
@@ -21,6 +21,9 @@ export type SyncBody =
   | { type: 'world'; world: World; focus?: Focus | null; cast?: SkillCast | null; you?: string; skills?: PublicSkill[]; pathway?: string | null; avatar?: string | null }
   | { type: 'skill-decision'; castId: string; ok: boolean } // 玩家窗口回传：同不同意发动
   | { type: 'hello'; binding?: string }
+  | { type: 'judge-request'; judgment: PendingJudgment } // 见证者→玩家：轮到你自己掷
+  | { type: 'judge-cancel'; id: string } // 见证者取消整个判定
+  | { type: 'judge-roll'; id: string; title: string; sides: number; value: number; tens: number | null; units: number | null; material: string; seed: number; rollId: string } // 玩家掷完回传
   | { type: 'clear' }
   | { type: 'play'; mediaId: string; label: string; mime: string; blob?: Blob }
   | { type: 'stop' }
@@ -47,6 +50,12 @@ try {
 function saveBindings() {
   try { sessionStorage.setItem(bindingsKey(), JSON.stringify(Object.fromEntries([...players].filter(([, p]) => !p.trialContext).map(([key, p]) => [key, p.pcId])))); } catch { /* unavailable */ }
 }
+/** 只把「落在你身上」的待掷判定发给这个玩家；别人的判定他一概不知道。 */
+function pendingFor(pcId: string): PendingJudgment | null {
+  const p = getUI().pendingJudgment;
+  return p && p.subjectId === pcId ? p : null;
+}
+
 export function openPlayerWindow(pcId?: string, trial = false) {
   const w = trial ? getWorld() : getRealWorld(), id = pcId ?? w.party[0]?.id;
   if (!id || !w.party.some(p => p.id === id)) return;
@@ -125,7 +134,8 @@ export function playerWorld(w: World, mapId: string | null = w.playerMapId, pcId
   return {
     ...w,
     visionGroups: undefined, observationSeq: undefined, viewerId: pcId,
-    party: pcId ? w.party.filter(p => p.id === pcId).map(p => ({ id: p.id, name: p.name, tags: [], color: p.color })) : [],
+    // 只带自己那张卡：血、ME、六维区值够画状态条就行；技能走单独的公开清单。
+    party: pcId ? w.party.filter(p => p.id === pcId).map(p => ({ id: p.id, name: p.name, tags: [], color: p.color, attributes: p.attributes, hp: p.hp, hpMax: p.hpMax, me: p.me, meMax: p.meMax })) : [],
     terrains: w.terrains.filter((t) => usedTerrains.has(t.id)),
     materials: (w.materials ?? []).filter((m) => usedMaterials.has(m.id)),
     flows: [], log: [], npcs: [], media: [],
@@ -217,7 +227,7 @@ export function send(body: SyncBody, to?: string) {
       const out: SyncBody = !valid
         ? { type: 'clear' }
         : body.type === 'world'
-          ? { type: 'world', world: playerWorld(w, mapId, p.pcId), focus: getUI().focus ?? null, cast: getUI().cast ?? null, you: p.pcId, skills: publicSkillsOf(w.party.find((pc) => pc.id === p.pcId)?.skills ?? []),
+          ? { type: 'world', world: { ...playerWorld(w, mapId, p.pcId), pendingJudgment: pendingFor(p.pcId) } as World, focus: getUI().focus ?? null, cast: getUI().cast ?? null, you: p.pcId, skills: publicSkillsOf(w.party.find((pc) => pc.id === p.pcId)?.skills ?? []),
             pathway: currentPathwayOf(w.party.find((pc) => pc.id === p.pcId) ?? { skills: [] }),
             avatar: w.party.find((pc) => pc.id === p.pcId)?.avatar ?? null }
           : body;
@@ -234,7 +244,41 @@ export function send(body: SyncBody, to?: string) {
   if (body.type === 'alive') for (const p of players.values()) {
     if (p.win && !p.win.closed) try { p.win.postMessage(out, target()); } catch { /* closed */ }
   }
+  // 玩家端回传判定的掷骰结果：直接回给打开它的那个主持人窗口。
+  if (body.type === 'judge-roll') {
+    if (window.opener && !window.opener.closed) { try { window.opener.postMessage(out, messageTarget(hostOriginForPlayer())); } catch { /* closed */ } }
+    return;
+  }
   try { channel?.postMessage(out); } catch { /* unavailable */ }
+}
+
+/** 开出判定后，直接把「轮到你了」推到对应玩家的窗口。 */
+export function pushJudgmentRequest(pcId: string): void {
+  const p = pendingFor(pcId);
+  for (const [binding, entry] of players) {
+    if (entry.pcId !== pcId || !entry.win || entry.win.closed) continue;
+    const msg: SyncMsg = { type: 'judge-request', judgment: p ?? ({ ...(getUI().pendingJudgment as PendingJudgment) }), __ts: 'ts-map', seq: rand(), from: SESSION, inst: INST, born: BORN };
+    if (!p) continue;
+    try { entry.win.postMessage(msg, target()); } catch { /* closed */ }
+    void binding;
+  }
+}
+
+/** 玩家窗口掷完，主持人这边收下来，等着确认广播。 */
+function onJudgeRoll(m: Extract<SyncMsg, { type: 'judge-roll' }>): void {
+  const p = getUI().pendingJudgment;
+  if (!p || p.id !== m.id) return;
+  setUI({
+    judgmentResult: {
+      id: m.id, title: m.title, sides: m.sides, value: m.value, tens: m.tens, units: m.units,
+      material: m.material, seed: m.seed, rollId: m.rollId, byStandIn: false,
+    },
+  });
+}
+
+/** 玩家掷完：把结果送到见证者那边等他确认。 */
+export function reportJudgmentRoll(body: Extract<SyncBody, { type: 'judge-roll' }>): void {
+  send({ ...body });
 }
 
 /** 订阅消息（两条路都听，按编号去重）。 */
@@ -245,7 +289,8 @@ export function listen(fn: (m: SyncMsg, source: MessageEventSource | null) => vo
     const expected = player ? hostOriginForPlayer() : e.data.type === 'hello' ? playerWindowOrigin() : location.origin;
     if (e.origin && e.origin !== expected) return;
     // Cross-origin windows never participate in host session-collision negotiation.
-    if (!player && e.data.type !== 'hello' && e.source) return;
+    // 玩家窗口回传的掷骰结果例外：那是绑定窗口自己发的，要收。
+    if (!player && e.data.type !== 'hello' && e.data.type !== 'judge-roll' && e.source) return;
     seen.add(e.data.seq);
     if (seen.size > 500) seen.clear();
     fn(e.data, e.source);
@@ -267,13 +312,15 @@ export function listen(fn: (m: SyncMsg, source: MessageEventSource | null) => vo
 export function listenAsEditor(onHello: () => void) {
   const off = listen((m, source) => {
     // 另一个编辑器实例在用同一个会话标识（复制了标签页）：不管消息来得多晚，都按"后打开的让"处理
-    if (m.type !== 'hello' && m.from === SESSION && m.inst !== INST) {
+    // 玩家窗口的 judge-roll 也带同一个 SESSION，但那是绑定窗口发的，不是复制出来的编辑器，得放行。
+    if (m.type !== 'hello' && m.type !== 'judge-roll' && m.from === SESSION && m.inst !== INST) {
       const iAmNewer = m.born < BORN || (m.born === BORN && m.inst < INST);
       if (iAmNewer) renewSession();
       else { send({ type: 'taken' }); onHello(); saveNow(); } // 我是原来那个：叫对方换号，重推一次世界（万一玩家窗口刚才收到了对方的），并重存一次自己的槽（万一对方存进来过）
       return;
     }
     if (m.type === 'claim' || m.type === 'taken' || m.type === 'alive') return;
+    if (m.type === 'judge-roll') { onJudgeRoll(m); return; }
     if (m.type !== 'hello' || (m.to && m.to !== SESSION)) return;
     const p = m.binding && players.get(m.binding);
     if (!p || !source || !('postMessage' in source) || p.win && source !== p.win) return;
@@ -300,7 +347,7 @@ export function listenAsPlayer(fn: (m: SyncMsg) => void) {
   let lastHeard = 0;
   const QUIET = 5000;
   const off = listen((m, source) => {
-    if (m.type !== 'world' && m.type !== 'play' && m.type !== 'stop' && m.type !== 'clear' && m.type !== 'alive') return;
+    if (m.type !== 'world' && m.type !== 'play' && m.type !== 'stop' && m.type !== 'clear' && m.type !== 'alive' && m.type !== 'judge-request' && m.type !== 'judge-cancel') return;
     if (!bound || !binding) return;
     if (m.type !== 'alive' && (!source || source !== window.opener)) return;
     if (m.from !== bound) return;

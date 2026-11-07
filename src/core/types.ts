@@ -442,6 +442,23 @@ export interface Npc {
   progress: NpcProgress;
 }
 
+/**
+ * 开出来、等玩家自己掷的判定。见证者只宣告（名称 / 骰子 / 发生角色 / 预先写好的裁定），
+ * 骰子由玩家在自己的窗口里掷；玩家不能拒掷，只有见证者能整个取消。
+ */
+export interface PendingJudgment {
+  id: Id;
+  title: string;
+  ruling: string;
+  sides: 4 | 6 | 8 | 10 | 12 | 20 | 100;
+  subjectId: Id;
+  place?: { mapId: Id; x: number; y: number } | null;
+  at: number;
+  session: number;
+  /** 见证者代掷：玩家不在电脑前，或者用的是实体骰时走这条。 */
+  standIn?: boolean;
+}
+
 export interface DiceJudgment {
   id: Id;
   title: string;
@@ -461,6 +478,8 @@ export interface World {
   judgments?: DiceJudgment[];
   /** 只在玩家载荷里：最新一次判定不在他视野内，只给这个通知。 */
   judgmentNotice?: JudgmentNotice | null;
+  /** 只在玩家载荷里：落在自己身上、等自己掷的判定。别人的判定不会发过来。 */
+  pendingJudgment?: PendingJudgment | null;
   version: 1;
   name: string;
   terrains: Terrain[];

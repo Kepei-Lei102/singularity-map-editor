@@ -1,4 +1,6 @@
-.session-desk, .player-judgment { position: fixed; right: 18px; top: 80px; bottom: 18px; width: min(620px, calc(100vw - 36px)); overflow: auto; z-index: 60; background: #1b1c22; color: #e8e4da; border: 1px solid #555166; border-radius: 12px; padding: 18px; box-shadow: 0 12px 50px #0008; }
+.session-desk { position: fixed; right: 18px; top: 80px; bottom: 18px; width: min(620px, calc(100vw - 36px)); overflow: auto; z-index: 60; background: #1b1c22; color: #e8e4da; border: 1px solid #555166; border-radius: 12px; padding: 18px; box-shadow: 0 12px 50px #0008; }
+/* 玩家端的判定卡片：居中、不铺满，玩家还要看地图 */
+.player-judgment { position: fixed; right: auto; left: 50%; top: 50%; transform: translate(-50%, -50%); width: min(420px, calc(100vw - 40px)); max-height: 70vh; overflow: auto; z-index: 60; background: #1b1c22; color: #e8e4da; border: 1px solid #555166; border-radius: 12px; padding: 18px; box-shadow: 0 12px 50px #0008; }
 .session-desk[hidden], .session-desk [hidden] { display: none; }
 .desk-close { float: right; }
 .judgment-panel label { display: grid; gap: 6px; margin: 10px 0; }
@@ -182,15 +184,10 @@ textarea { resize: vertical; }
 .player .canvas-wrap { position: absolute; inset: 0; }
 .player-wait { display: grid; place-items: center; height: 100%; color: var(--muted); font-size: 18px; text-align: center; padding: 0 40px; line-height: 1.6; }
 .player-title {
-  position: absolute; top: 14px; left: 50%; transform: translateX(-50%); font-size: 16px; font-weight: 600;
-  padding: 6px 16px; border-radius: 20px; background: rgba(0, 0, 0, 0.6); border: 1px solid #333; pointer-events: none;
+  position: absolute; top: 14px; left: 14px; font-size: 15px; font-weight: 600; color: var(--text);
+  padding: 6px 14px; border-radius: 8px; background: rgba(0, 0, 0, 0.62); border: 1px solid #333; pointer-events: none;
 }
-.clues {
-  position: absolute; right: 14px; top: 14px; width: 300px; max-height: 60%; overflow-y: auto;
-  background: rgba(15, 15, 20, 0.88); border: 1px solid #3a3a44; border-radius: 10px; padding: 10px;
-}
-.clues-title { font-weight: 600; color: var(--accent); margin-bottom: 6px; }
-.clue { padding: 6px 0; border-top: 1px solid #2a2a33; line-height: 1.5; }
+.clue { padding: 8px 0; border-top: 1px solid #2a2a33; line-height: 1.6; font-size: 14px; }
 .player-media {
   position: absolute; inset: 6% 8%; display: grid; place-items: center; background: rgba(0, 0, 0, 0.85);
   border-radius: 12px; z-index: 5;
@@ -277,7 +274,7 @@ button.ai { color: #e6c2ff; border-color: #6b4f8c; }
 
 .num { display: inline-block; min-width: 24px; text-align: center; font-size: 11px; color: #111; border-radius: 3px; padding: 0 3px; }
 .num-object { background: #ffd166; } .num-zone { background: #9ec1ff; } .num-token { background: #b5e6b8; } .num-conn { background: #d9b8ff; }
-.player-nums { position: absolute; left: 34px; bottom: 14px; opacity: 0.7; }
+.player-nums { font-size: 13px; opacity: 0.75; }
 .map-badge { left: 34px !important; top: 24px !important; }
 .help { left: 34px !important; }
 
@@ -308,7 +305,7 @@ button.ai { color: #e6c2ff; border-color: #6b4f8c; }
 .trial-row .check { margin: 0; }
 .mark-text { width: 120px; }
 .link { cursor: pointer; text-decoration: underline; color: var(--accent); margin-left: 6px; }
-.player-viewer { position: absolute; left: 130px; bottom: 14px; width: auto; }
+
 .trial-msg { color: #ff9f43; margin-top: 4px; }
 .num-small { width: 64px !important; }
 
@@ -366,3 +363,52 @@ button.ai { color: #e6c2ff; border-color: #6b4f8c; }
 .trial-opportunity { background: rgba(192, 57, 43, 0.14); border: 1px solid #c0392b; border-radius: 8px; padding: 6px 8px; }
 .down-tag { display: inline-block; padding: 1px 8px; border-radius: 10px; border: 1px solid #ff9f43; color: #ff9f43; font-size: 12px; }
 label.check.off { opacity: 0.45; }
+.player-roll {
+  position: fixed; inset: 0; z-index: 95; display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 14px; background: rgba(8, 8, 11, 0.82); text-align: center; padding: 0 40px;
+}
+.player-roll h3 { margin: 0; font-size: 22px; color: var(--accent); }
+.player-roll-result { font-size: 44px; font-weight: 800; color: var(--text); letter-spacing: 2px; }
+
+/* ---------- 玩家端：状态条 / 抽屉 / 图标 ---------- */
+/* 玩家端第一需求是看清地图：所有侧栏都不常驻，只留一条底栏和三个小图标。 */
+.player-status {
+  position: absolute; left: 0; right: 0; bottom: 0; height: 48px; display: flex; align-items: center; gap: 12px;
+  padding: 0 16px; background: linear-gradient(to top, rgba(8, 8, 11, 0.92), rgba(8, 8, 11, 0.72));
+  border-top: 1px solid #2a2a33; font-size: 14px; z-index: 8;
+}
+.player-status-avatar { width: 30px; height: 30px; border-radius: 50%; object-fit: cover; border: 1px solid #3a3a44; }
+.player-status-name { font-weight: 600; color: var(--text); }
+.player-status-hp { display: inline-flex; align-items: center; gap: 8px; }
+.player-status-hp .bar { display: block; width: 96px; height: 6px; border-radius: 3px; background: #2a2a33; overflow: hidden; }
+.player-status-hp .bar-fill { display: block; height: 100%; background: var(--danger); transition: width 0.4s ease; }
+.player-status-hp b { font-size: 13px; color: var(--text); font-variant-numeric: tabular-nums; }
+.player-status-me { font-size: 13px; color: var(--accent2); }
+
+.player-dock { position: absolute; right: 14px; top: 14px; display: flex; gap: 8px; z-index: 9; }
+.player-dock-btn {
+  position: relative; width: 40px; height: 40px; border-radius: 10px; border: 1px solid #3a3a44;
+  background: rgba(15, 15, 20, 0.88); color: var(--text); font-size: 17px; cursor: pointer; line-height: 1;
+}
+.player-dock-btn.on { border-color: var(--accent); color: var(--accent); }
+.player-dock-icon { pointer-events: none; }
+.player-dock-badge {
+  position: absolute; top: -5px; right: -5px; min-width: 17px; height: 17px; padding: 0 4px; border-radius: 9px;
+  background: var(--accent); color: #14151a; font-size: 11px; font-weight: 700; line-height: 17px; text-align: center;
+}
+
+.player-drawer {
+  position: absolute; left: 0; right: 0; bottom: 48px; max-height: 42%; display: flex; flex-direction: column;
+  background: rgba(15, 15, 20, 0.96); border-top: 1px solid #3a3a44; z-index: 7;
+  animation: player-drawer-in 0.18s ease-out;
+}
+@keyframes player-drawer-in { from { transform: translateY(16px); opacity: 0; } to { transform: none; opacity: 1; } }
+.player-drawer-head {
+  display: flex; align-items: center; gap: 10px; padding: 10px 16px; border-bottom: 1px solid #2a2a33;
+  font-size: 14px; color: var(--accent);
+}
+.player-drawer-body { overflow-y: auto; padding: 8px 16px 16px; }
+.player-notes {
+  width: 100%; min-height: 140px; resize: vertical; background: #14151a; color: var(--text);
+  border: 1px solid #3a3a44; border-radius: 8px; padding: 10px; font-size: 14px; line-height: 1.7; font-family: inherit;
+}
