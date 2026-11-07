@@ -1364,8 +1364,18 @@ export function moveMapToken(mapId: string, id: string, p: { x: number; y: numbe
   if (!Number.isFinite(p.x) || !Number.isFinite(p.y)) return '无效位置';
   const fine = (m.subdivisions ?? []).includes(Math.floor(p.y) * m.width + Math.floor(p.x));
   p = fine ? { x: (Math.floor(p.x * 3) + .5) / 3, y: (Math.floor(p.y * 3) + .5) / 3 } : { x: Math.floor(p.x) + .5, y: Math.floor(p.y) + .5 };
-  if (!characterPathClear(getWorld(), m, tokenPosition(t), p, id)) return '人物或墙体挡住了路径';
-  update(d => { const dm = findMap(d, mapId)!; setTokenPosition(dm, dm.tokens.find(t => t.id === id)!, p); }); return null;
+  // 尸体躺在地上，队友直接抬走就行：不管路径通不通，也不占路。
+  if (!t.corpse && !characterPathClear(getWorld(), m, tokenPosition(t), p, id)) return '人物或墙体挡住了路径';
+  update(d => {
+    const dm = findMap(d, mapId)!;
+    const dt = dm.tokens.find(t => t.id === id)!;
+    setTokenPosition(dm, dt, p);
+    // 死者的记录位置跟着尸体走，以后查「死在哪」不会指着旧地方。
+    if (dt.corpse && dt.pcId) {
+      const pc = d.party.find(x => x.id === dt.pcId);
+      if (pc?.deathPlace) pc.deathPlace = { mapId, x: Math.floor(p.x), y: Math.floor(p.y) };
+    }
+  }); return null;
 }
 
 /**

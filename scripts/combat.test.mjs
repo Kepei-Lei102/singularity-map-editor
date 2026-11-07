@@ -358,3 +358,108 @@ test('NPC 没填血条就不扣，只提示记在裁定里', () => {
   assert.equal(ev.hpBefore, null);
   assert.match(ev.note ?? '', /没有血条/);
 });
+
+test('濒死三回合走完就撕卡：卡标已死亡，尸体留在原地', () => {
+  const w = api.emptyWorld();
+  const m = api.newMap('战斗', '现实', 1, 10, 10, 'floor', false);
+  m.objects = [];
+  w.party = [
+    { id: 'a', name: '队友', color: '#fff', tags: [], attributes: { 力量: 30, 敏捷: 30, 意志: 30, 观察: 30, 智慧: 30, 魅力: 30 } },
+    { id: 'b', name: '伤员', color: '#f00', tags: [], attributes: { 力量: 30, 敏捷: 30, 意志: 30, 观察: 30, 智慧: 30, 魅力: 30 }, hp: 0 },
+  ];
+  m.tokens = [
+    { id: 'ta', pcId: 'a', name: '队友', color: '#fff', x: 2, y: 2 },
+    { id: 'tb', pcId: 'b', name: '伤员', color: '#f00', x: 3, y: 2, status: { label: '濒死', roundsLeft: 3 } },
+  ];
+  m.fog = m.fog.map(() => 1);
+  w.maps = [m];
+  api.replaceWorld(w);
+  api.startTrial();
+  api.setUI({ trial: { mapId: m.id, players: [{ tokenId: 'ta', pcId: 'a', name: '队友' }], current: 0, combat: true, moved: {}, turn: 1, msg: '', markSymbol: '!', markText: '', markMode: false } });
+
+  api.trialEndTurn();
+  assert.equal(api.findMap(api.getWorld(), m.id).tokens.find((t) => t.id === 'tb').status.roundsLeft, 2, '第一轮只是减一');
+  assert.notEqual(api.getWorld().party.find((p) => p.id === 'b').dead, true);
+
+  api.trialEndTurn();
+  api.trialEndTurn();
+  const world = api.getWorld();
+  const tb = api.findMap(world, m.id).tokens.find((t) => t.id === 'tb');
+  const pcB = world.party.find((p) => p.id === 'b');
+  assert.equal(pcB.dead, true, '三回合到点撕卡');
+  assert.deepEqual(pcB.deathPlace, { mapId: m.id, x: 3, y: 2 }, '死在原地，坐标留着');
+  assert.equal(tb.corpse, true, '棋子变尸体，不删掉');
+  assert.equal(tb.status, undefined, '濒死标签清掉');
+  assert.ok(world.log.some((l) => l.text.includes('撕卡')), '日志里留一句');
+});
+
+test('尸体不能打、不能救，也不算可攻击目标', () => {
+  const w = api.emptyWorld();
+  const m = api.newMap('战斗', '现实', 1, 10, 10, 'floor', false);
+  m.objects = [];
+  const attrs = { 力量: 30, 敏捷: 30, 意志: 30, 观察: 30, 智慧: 30, 魅力: 30 };
+  w.party = [
+    { id: 'a', name: '队友', color: '#fff', tags: [], attributes: attrs, skills: ['011-9-102'] },
+    { id: 'b', name: '死者', color: '#f00', tags: [], attributes: attrs, hp: 0, dead: true, deathPlace: { mapId: m.id, x: 3, y: 2 } },
+  ];
+  m.tokens = [
+    { id: 'ta', pcId: 'a', name: '队友', color: '#fff', x: 2, y: 2 },
+    { id: 'tb', pcId: 'b', name: '死者', color: '#f00', x: 3, y: 2, corpse: true },
+  ];
+  m.fog = m.fog.map(() => 1);
+  w.maps = [m];
+  api.replaceWorld(w);
+  api.startTrial();
+  api.setUI({ trial: { mapId: m.id, players: [{ tokenId: 'ta', pcId: 'a', name: '队友' }], current: 0, combat: true, moved: {}, turn: 1, msg: '', markSymbol: '!', markText: '', markMode: false } });
+
+  assert.equal(api.trialAttackTargets().some((t) => t.tokenId === 'tb'), false, '尸体不进攻击候选');
+  assert.match(api.trialRescue('tb', { roll: 30 }) ?? '', /死了|救不回来/);
+});
+
+test('非战斗状态：濒死挂「急救机器人正在赶来」，到点自动拉起', () => {
+  const now = 1_000_000;
+  assert.match(api.robotIncoming(now).label, /急救机器人/);
+  assert.equal(api.robotArrived(api.robotIncoming(now).endsAt, now), false, '刚挂上时还没到');
+  assert.equal(api.robotArrived(api.robotIncoming(now).endsAt, now + api.ROBOT_ETA_MS), true, '到点就到了');
+
+  const w = api.emptyWorld();
+  const m = api.newMap('战斗', '现实', 1, 10, 10, 'floor', false);
+  m.objects = [];
+  const attrs = { 力量: 30, 敏捷: 30, 意志: 30, 观察: 30, 智慧: 30, 魅力: 30 };
+  w.party = [
+    { id: 'a', name: '队友', color: '#fff', tags: [], attributes: attrs },
+    { id: 'b', name: '伤员', color: '#f00', tags: [], attributes: attrs, hp: 0 },
+  ];
+  m.tokens = [
+    { id: 'ta', pcId: 'a', name: '队友', color: '#fff', x: 2, y: 2 },
+    { id: 'tb', pcId: 'b', name: '伤员', color: '#f00', x: 3, y: 2, status: api.robotIncoming(now) },
+  ];
+  m.fog = m.fog.map(() => 1);
+  w.maps = [m];
+  api.replaceWorld(w);
+  api.startTrial();
+  // 自由行动：不是战斗模式
+  api.setUI({ trial: { mapId: m.id, players: [{ tokenId: 'ta', pcId: 'a', name: '队友' }], current: 0, combat: false, moved: {}, turn: 1, msg: '', markSymbol: '!', markText: '', markMode: false } });
+
+  api.tickRobots(now + 1000);
+  assert.equal(api.findMap(api.getWorld(), m.id).tokens.find((t) => t.id === 'tb').status.label.startsWith('急救机器人'), true, '没到点不动');
+
+  api.tickRobots(now + api.ROBOT_ETA_MS);
+  const tb = api.findMap(api.getWorld(), m.id).tokens.find((t) => t.id === 'tb');
+  assert.equal(tb.status, undefined, '到点清掉状态');
+  assert.equal(api.getWorld().party.find((p) => p.id === 'b').hp, api.RESCUED_HP, '机器人把人拉起来，1 HP');
+});
+
+test('尸体能搬，搬了位置记录跟着走', () => {
+  const w = api.emptyWorld();
+  const m = api.newMap('战斗', '现实', 1, 10, 10, 'floor', false);
+  m.objects = [];
+  w.party = [{ id: 'b', name: '死者', color: '#f00', tags: [], dead: true, deathPlace: { mapId: m.id, x: 3, y: 2 } }];
+  m.tokens = [{ id: 'tb', pcId: 'b', name: '死者', color: '#f00', x: 3, y: 2, corpse: true }];
+  m.fog = m.fog.map(() => 1);
+  w.maps = [m];
+  api.replaceWorld(w);
+  assert.equal(api.moveMapToken(m.id, 'tb', { x: 7, y: 6 }), null, '尸体可以直接抬走');
+  const world = api.getWorld();
+  assert.deepEqual(world.party.find((p) => p.id === 'b').deathPlace, { mapId: m.id, x: 7, y: 6 }, '记录位置跟着尸体');
+});

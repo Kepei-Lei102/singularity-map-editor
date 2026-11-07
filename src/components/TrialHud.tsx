@@ -4,6 +4,7 @@ import { MARK_LIFE, findMap, giveMapKnowledge, setVisionMode } from '../runtime/
 import { HEAR_RANGE } from '../scene/perception';
 import {
   MOVE_PER_TURN, actionsLeft, addTrialPlayer, clearTrialStatus, endTrial, setTrialStatus, statusLeft, switchTrialPlayer,
+  tickRobots,
   toggleCombat, toggleMarkMode, trialAttack, trialAttackTargets, trialRescue, trialOpportunityAttack, trialSkipOpportunity,
 } from '../runtime/trial';
 
@@ -18,13 +19,16 @@ export function TrialHud() {
   const [stMin, setStMin] = useState(15);
   const t = ui.trial;
   const m = t ? findMap(w, t.mapId) : undefined;
-  const statuses = (t?.players ?? []).map((p) => ({ p, st: m?.tokens.find((k) => k.id === p.tokenId)?.status })).filter((x) => x.st);
+  const statuses = (t?.players ?? []).map((p) => {
+    const tok = m?.tokens.find((k) => k.id === p.tokenId);
+    return { p, st: tok?.corpse ? { label: '尸体', endsAt: undefined } : tok?.status };
+  }).filter((x) => x.st);
   const ticking = statuses.some((x) => x.st?.endsAt !== undefined);
-  // 有倒计时的时候每秒刷新一次
+  // 有倒计时的时候每秒刷新一次，顺手让急救机器人到点自动救人
   const [, setTick] = useState(0);
   useEffect(() => {
     if (!ticking) return;
-    const id = window.setInterval(() => setTick((n) => n + 1), 1000);
+    const id = window.setInterval(() => { tickRobots(); setTick((n) => n + 1); }, 1000);
     return () => window.clearInterval(id);
   }, [ticking]);
   if (!t) return null;

@@ -11,7 +11,7 @@ import { characterPathClear, furnitureSweepBlocked, nextTokenStep, setTokenPosit
 import { terrainBlocksPoint, terrainBlocksRect } from '../scene/terrain';
 import { slidingPuzzleForObject } from '../scene/sliding';
 import { viewerOf, visiblePoint } from '../scene/sight';
-import { ATTACK_RANGE, DYING_ROUNDS, ENGAGE_RANGE, RESCUED_HP, attackTargets, canRescue, canUseSharp, downedBy, downedLabel, hpOf, opportunityTriggers, rollAttack, rollRescue, stepLimitNear, type AttackTarget, type Downed, type Roller } from '../rules/combat';
+import { ATTACK_RANGE, DYING_LABEL, DYING_ROUNDS, ENGAGE_RANGE, RESCUED_HP, ROBOT_LABEL, attackTargets, canRescue, canUseSharp, downedBy, downedLabel, hpOf, opportunityTriggers, robotArrived, robotIncoming, rollAttack, rollRescue, settleDeath, stepLimitNear, type AttackTarget, type Downed, type Roller } from '../rules/combat';
 
 // 试玩：放白板玩家进去，用 WASD 走，体验视野。退出时一切恢复原样（沙盒）。
 // 默认是非战斗：不限步数；打开"战斗模式"才是每回合 5 格。
@@ -246,14 +246,27 @@ export function trialMove(dx: number, dy: number) {
 export function trialEndTurn() {
   const t = tr();
   if (!t?.combat) return;
+  // 濒死倒计时走完就是撕卡：卡标已死亡，棋子变尸体留在原地，不删掉。
+  const died: string[] = [];
   update((d) => {
     const m = findMap(d, t.mapId);
     for (const k of m?.tokens ?? []) {
       if (k.status?.roundsLeft === undefined) continue;
       k.status.roundsLeft -= 1;
-      if (k.status.roundsLeft <= 0) delete k.status;
+      if (k.status.roundsLeft > 0) continue;
+      if (k.status.label === DYING_LABEL && k.pcId) {
+        const pc = d.party.find((x) => x.id === k.pcId);
+        if (pc) {
+          if (settleDeath(pc, { mapId: t.mapId, x: k.x, y: k.y })) died.push(k.name);
+          k.corpse = true;
+        }
+      }
+      delete k.status;
     }
   });
+  for (const name of died) {
+    update((d) => { d.log.push({ id: uid(), at: Date.now(), session: d.session, kind: 'note', text: `${name} 濒死三回合无人救治，撕卡。尸体留在原地。` }); });
+  }
   // 自己行动完（结束回合）后，借机攻击重新亮起：每个人新一轮都能再借机一次。
   update((d) => {
     for (const k of findMap(d, t.mapId)?.tokens ?? []) delete k.opportunityUsed;
@@ -312,8 +325,12 @@ export function trialAttack(targetTokenId: string, opts: { roll?: number; roller
     const already = dt.status?.label === '濒死' ? 'dying' : dt.down ? 'down' : null;
     if (next <= 0) {
       downed = already ?? kind;
-      if (downed === 'dying') dt.status = { label: downedLabel('dying'), roundsLeft: DYING_ROUNDS };
-      else { delete dt.status; dt.down = true; }
+      if (downed === 'dying') {
+        // 战斗模式下倒计时按回合走；自由行动没有回合，改由急救机器人挂一个到场时间。
+        dt.status = t.combat
+          ? { label: downedLabel('dying'), roundsLeft: DYING_ROUNDS }
+          : robotIncoming();
+      } else { delete dt.status; dt.down = true; }
     } else downed = already;
   });
   setTr({
@@ -491,7 +508,8 @@ export function trialRescue(targetTokenId: string, opts: { roll?: number } = {})
   if (!m || !rescuer || !target) return '找不到角色或目标';
   const dist = Math.abs(rescuer.x - target.x) + Math.abs(rescuer.y - target.y);
   if (dist > ENGAGE_RANGE) return `救治要贴身（${dist} 格 > ${ENGAGE_RANGE}）`;
-  if (target.status?.label !== '濒死' && !target.down) return `${target.name} 不需要救治`;
+  if (target.corpse) return `${target.name} 已经死了，救不回来`; // 尸体不能治
+  if (target.status?.label !== '濒死' && !target.down && !target.status?.label.startsWith('急救机器人')) return `${target.name} 不需要救治`;
   const pc = w.party.find((p) => p.id === pl.pcId);
   if (!canRescue(pc?.skills ?? [])) return '没有解锁急救 / 救治类技能，做不了急救（动作库 #119 救治）';
   const roll = opts.roll ?? 1 + Math.floor(Math.random() * 100);
@@ -514,4 +532,30 @@ export function trialRescue(targetTokenId: string, opts: { roll?: number } = {})
   });
   setTr({ acted: true, msg: `救治成功（D100=${roll === 100 ? '00' : roll}${r.crit ? '，特大成功' : ''}）：${target.name} 被拉起来了，1 HP` });
   return null;
+}
+
+/**
+ * 自由行动（非战斗）下的急救机器人：到点就把人拉起来。
+ * 战斗模式不走这里——那边是回合倒计时。
+ * 由界面定时调用即可，重复调用没有副作用。
+ */
+export function tickRobots(now = Date.now()): void {
+  const t = tr();
+  if (!t || t.combat) return;
+  update((d) => {
+    const m = findMap(d, t.mapId);
+    if (!m) return;
+    for (const k of m.tokens) {
+      if (!k.status?.label.startsWith(ROBOT_LABEL)) continue;
+      if (!robotArrived(k.status.endsAt, now)) continue;
+      delete k.status;
+      if (k.pcId) {
+        const p = d.party.find((x) => x.id === k.pcId);
+        if (p) p.hp = Math.max(p.hp ?? 0, RESCUED_HP);
+      } else {
+        k.hp = Math.max(k.hp ?? 0, RESCUED_HP);
+      }
+      d.log.push({ id: uid(), at: now, session: d.session, kind: 'note', text: `急救机器人到场，${k.name} 被拉起来了（1 HP）。` });
+    }
+  });
 }

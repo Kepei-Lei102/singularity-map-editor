@@ -182,7 +182,7 @@ export function attackTargets(
   opts: { range?: number } = {},
 ): AttackTarget[] {
   return map.tokens
-    .filter((t) => t.id !== attacker.id)
+    .filter((t) => t.id !== attacker.id && !t.corpse) // 尸体不算可攻击目标
     .map((t) => {
       const visible = visibility(t);
       const pc = t.pcId ? world.party.find((p) => p.id === t.pcId) : undefined;
@@ -296,4 +296,54 @@ export function downedLabel(kind: Downed): string {
  */
 export function canUseSharp(attacker: { sharp?: boolean } | null | undefined): boolean {
   return !!attacker?.sharp;
+}
+
+// ---------- 撕卡与非战斗状态的急救机器人 ----------
+
+/** 撕卡之后留在原地的尸体；队友能搬，没人管就有机器人团队来收。 */
+export interface Corpse {
+  /** 原角色 id，用来把尸体和人物对上。 */
+  pcId: string;
+  name: string;
+  /** 死在哪张图的哪一格（小格坐标）。 */
+  mapId: string;
+  x: number;
+  y: number;
+  at: number;
+}
+
+/** 濒死倒计时走完：这个人死了，留一具尸体在原地。 */
+export function corpseOf(t: { pcId?: string; name: string; x: number; y: number }, mapId: string): Corpse | null {
+  if (!t.pcId) return null; // NPC 不撕卡，倒在地上就算完
+  return { pcId: t.pcId, name: t.name, mapId, x: t.x, y: t.y, at: Date.now() };
+}
+
+/**
+ * 非战斗状态下没有回合，濒死倒计时不走。
+ * 这时候默认由急救机器人来救：不是瞬间回血，而是先挂一个「正在赶来」的状态，
+ * 过一会儿才进来把人拉起来。给玩家留出情绪，也留出自己想办法的空档。
+ */
+export const ROBOT_ETA_MS = 3 * 60 * 1000; // 3 分钟到场
+export const ROBOT_LABEL = '急救机器人正在赶来';
+
+/** 非战斗状态下掉到濒死，给一个带到场时间的状态。 */
+export function robotIncoming(now = Date.now()): { label: string; endsAt: number } {
+  return { label: ROBOT_LABEL, endsAt: now + ROBOT_ETA_MS };
+}
+
+/** 时间到了没有：到了就把人拉起来。 */
+export function robotArrived(endsAt: number | undefined, now = Date.now()): boolean {
+  return endsAt !== undefined && now >= endsAt;
+}
+
+/**
+ * 濒死倒计时归零后的收尾：角色卡标已死亡，棋子变尸体留在原地。
+ * 返回死于哪，方便上层写日志。NPC 不走这里（NPC 不撕卡）。
+ */
+export function settleDeath(pc: { id: string; name: string; dead?: boolean; deathPlace?: { mapId: string; x: number; y: number } | null },
+  where: { mapId: string; x: number; y: number }): { mapId: string; x: number; y: number } | null {
+  if (pc.dead) return null;
+  pc.dead = true;
+  pc.deathPlace = { mapId: where.mapId, x: where.x, y: where.y };
+  return pc.deathPlace;
 }

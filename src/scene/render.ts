@@ -566,6 +566,27 @@ export function render(
   for (const t of map.tokens) {
     if (player && !(t.pcId && o.viewer && visionMembers(world, o.viewer).includes(t.pcId)) && t.pcId !== world.viewerId && fogAt(map, map, tokenPosition(t).x, tokenPosition(t).y) !== 1) continue;
     const pos = tokenPosition(t), cx = pos.x * CS, cy = pos.y * CS;
+    if (t.corpse) {
+      // 尸体：一个压扁的灰圈 + 一道横杠，颜色褪成队色，一眼看出不是活人。
+      ctx.save();
+      ctx.globalAlpha = 0.75;
+      ctx.beginPath();
+      ctx.ellipse(cx, cy, CS * 0.40, CS * 0.20, 0, 0, Math.PI * 2);
+      ctx.fillStyle = t.color;
+      ctx.fill();
+      ctx.lineWidth = 1.5;
+      ctx.strokeStyle = '#e8e8e8';
+      ctx.setLineDash([4, 3]);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.beginPath();
+      ctx.moveTo(cx - CS * 0.22, cy); ctx.lineTo(cx + CS * 0.22, cy);
+      ctx.strokeStyle = textColor(t.color);
+      ctx.lineWidth = 2;
+      ctx.stroke();
+      ctx.restore();
+      continue;
+    }
     ctx.beginPath();
     ctx.arc(cx, cy, CS * 0.38, 0, Math.PI * 2);
     ctx.fillStyle = t.color;

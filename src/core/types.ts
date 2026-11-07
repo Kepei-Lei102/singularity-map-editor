@@ -134,6 +134,8 @@ export interface Token {
   subcell?: Point; // 绝对子格单元索引，其中心是人物位置；x/y 仍为所属主格
   status?: TokenStatus;
   facing?: Facing; // 不填＝全向
+  /** 这个人死了，棋子在图上是一具尸体：不能行动、不能被治疗，但队友能搬。 */
+  corpse?: boolean;
   stance?: Stance; // 不填＝站
   /** 这一轮已经借机攻击过；轮到它自己行动时重新亮起。 */
   opportunityUsed?: boolean;
@@ -295,6 +297,10 @@ export interface PC {
    * 钝器把人打晕是「昏厥」，锐器才是「濒死」。
    */
   sharp?: boolean;
+  /** 死了：卡留在队里但标成已死亡，棋子变成尸体留在原地。 */
+  dead?: boolean;
+  /** 死在哪：地图 id 和小格坐标。尸体被搬走时跟着改。 */
+  deathPlace?: { mapId: Id; x: number; y: number } | null;
 }
 
 export interface Effect {
