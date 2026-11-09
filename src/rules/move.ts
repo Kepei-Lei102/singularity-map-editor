@@ -125,3 +125,13 @@ export const DEFAULT_HEIGHT: Record<Sex, number> = { 男: 170, 女: 160, 其他:
 export function heightOf(pc: PC): number {
   return typeof pc.heightCm === 'number' ? pc.heightCm : DEFAULT_HEIGHT[pc.sex ?? '其他'];
 }
+
+/** 梦境层用心理移动，其它层用物理移动。 */
+export function moveKindOfLayer(layer: string): MoveKind {
+  return layer === '梦境' ? 'mental' : 'physical';
+}
+
+/** 这张图上的角色这一回合的移动预算。 */
+export function moveBudgetOn(pc: PC, layer: string): MoveBudget {
+  return moveBudget(pc, moveKindOfLayer(layer));
+}

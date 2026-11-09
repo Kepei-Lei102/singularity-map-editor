@@ -188,3 +188,13 @@ test('身高没填按性别默认', () => {
   assert.equal(api.heightOf({ id: 'x', name: 'a', color: '#', tags: [] }), 170);
   assert.equal(api.heightOf({ id: 'x', name: 'a', color: '#', tags: [], heightCm: 182 }), 182);
 });
+
+test('按层选移动类型：梦境走心理，现实走物理', () => {
+  assert.equal(api.moveKindOfLayer('梦境'), 'mental');
+  assert.equal(api.moveKindOfLayer('现实'), 'physical');
+  assert.equal(api.moveKindOfLayer('任意'), 'physical', '不认识的就按物理，现实是默认');
+
+  const p = pc({ 智慧: 200, 敏捷: 0, 力量: 0, 意志: 0, 观察: 0, 魅力: 0 });
+  assert.equal(api.moveBudgetOn(p, '梦境').cells, 6);
+  assert.equal(api.moveBudgetOn(p, '现实').cells, 5);
+});

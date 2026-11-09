@@ -12,6 +12,7 @@ import { terrainBlocksPoint, terrainBlocksRect } from '../scene/terrain';
 import { slidingPuzzleForObject } from '../scene/sliding';
 import { viewerOf, visiblePoint } from '../scene/sight';
 import { describeSense, rollSense, senseHints, type SenseKind } from '../rules/sense';
+import { moveBudgetOn, tickCharge, type ChargeState } from '../rules/move';
 import { ATTACK_RANGE, DYING_LABEL, DYING_ROUNDS, ENGAGE_RANGE, RESCUED_HP, ROBOT_LABEL, attackTargets, canRescue, canUseSharp, downedBy, downedLabel, hpOf, opportunityTriggers, robotArrived, robotIncoming, rollAttack, rollRescue, settleDeath, stepLimitNear, type AttackTarget, type Downed, type Roller } from '../rules/combat';
 
 // 试玩：放白板玩家进去，用 WASD 走，体验视野。退出时一切恢复原样（沙盒）。
@@ -195,7 +196,13 @@ export function trialMove(dx: number, dy: number) {
   }
   const used = t.moved[pl.tokenId] ?? 0;
   const step = nextTokenStep(m, tok, dx, dy);
-  if (t.combat && used + step.cost > MOVE_PER_TURN * 3) return setTr({ msg: '这回合的移动力用完了，按空格结束回合' });
+  // 移动力按角色属性算：梦境层用心理移动，其它层用物理移动。
+  // 换算成细分格的预算（1 主格 = 3 细分格），再加已蓄好的额外格。
+  const mover = w.party.find((p) => p.id === pl.pcId);
+  const budget = mover ? moveBudgetOn(mover, m.layer) : null;
+  const stored = t.charge?.[pl.tokenId]?.cells ?? 0;
+  const allowed = (budget ? budget.cells + stored : MOVE_PER_TURN) * 3;
+  if (t.combat && used + step.cost > allowed) return setTr({ msg: '这回合的移动力用完了，按空格结束回合' });
   // 贴身缠斗：在敌人周围 2 格内，一次移动只能挪 1 格。
   if (t.combat && stepLimitNear(landingOf(step.a), m.tokens.filter((k) => k.id !== tok.id)) === 1 && step.cost > 3)
     return setTr({ msg: '贴身缠斗：一次只能挪 1 格' });
@@ -272,7 +279,20 @@ export function trialEndTurn() {
   update((d) => {
     for (const k of findMap(d, t.mapId)?.tokens ?? []) delete k.opportunityUsed;
   });
-  setTr({ moved: {}, turned: {}, turn: t.turn + 1, acted: false, opportunity: null, msg: '' });
+  // 每回合推进一次蓄力：移动力超出基准 25 点的人每回合攒 1/3 格，超出 38 点攒 1/2 格。
+  const charge = (() => {
+    const w = getWorld();
+    const m = findMap(w, t.mapId);
+    if (!m) return t.charge ?? {};
+    const next: Record<string, ChargeState> = { ...(t.charge ?? {}) };
+    for (const pl of t.players) {
+      const pc = w.party.find((p) => p.id === pl.pcId);
+      if (!pc) continue;
+      next[pl.tokenId] = tickCharge(moveBudgetOn(pc, m.layer), next[pl.tokenId] ?? { progress: 0, cells: 0 });
+    }
+    return next;
+  })();
+  setTr({ moved: {}, turned: {}, turn: t.turn + 1, acted: false, opportunity: null, msg: '', charge });
 }
 
 /** 这一回合还有几点行动点：每回合 1 点，攻击/主动技能花掉就算用完。 */

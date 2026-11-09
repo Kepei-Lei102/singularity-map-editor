@@ -228,6 +228,8 @@ export interface UIState {
     current: number;
     combat: boolean; // 战斗模式：每回合 5 格；不开就是不限步数
     moved: Record<string, number>;
+    /** 蓄力进度：移动力够高的人每回合攒一点，攒满多一格。用完才重新蓄。 */
+    charge?: Record<string, { progress: number; cells: number }>;
     turned?: Record<string, boolean>; // 本回合已经原地转身过的棋子（缠斗限制用）
     acted?: boolean; // 这一回合的行动点已经用掉（攻击/技能）
     /** 这次攻击用锐器（默认钝器）。只有身上带锐器的角色才勾得动。 */
