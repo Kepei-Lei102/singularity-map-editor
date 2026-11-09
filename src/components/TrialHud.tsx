@@ -22,7 +22,7 @@ import { MARK_LIFE, findMap, giveMapKnowledge, setVisionMode } from '../runtime/
 import { HEAR_RANGE } from '../scene/perception';
 import {
   MOVE_PER_TURN, actionsLeft, addTrialPlayer, clearTrialStatus, endTrial, setTrialStatus, statusLeft, switchTrialPlayer,
-  tickRobots,
+  tickRobots, trialSense,
   toggleCombat, toggleMarkMode, trialAttack, trialAttackTargets, trialRescue, trialOpportunityAttack, trialSkipOpportunity,
 } from '../runtime/trial';
 
@@ -149,6 +149,20 @@ export function TrialHud() {
           })()}
         </div>
       )}
+      {/* 感知动作：四个都掷骰，掷完把候选摆给见证者挑。 */}
+      <div className="trial-row">
+        <span className="muted">感知</span>
+        {([['observe', '观察'], ['search', '搜索'], ['smell', '嗅闻'], ['listen', '倾听']] as const).map(([k, label]) => (
+          <button key={k} className="small chip" title={k === 'search' ? '敏捷和观察各掷一次，两个都过才算成功' : '掷观察'}
+            onClick={() => trialSense(k)}>{label}</button>
+        ))}
+        {t.sense && (
+          <span className="muted small-text">
+            上次：{t.sense.roll.rolls.map((r) => `${r.attr} ${r.value === 100 ? '00' : r.value}${r.success ? '✓' : '✗'}`).join('，')}
+            {t.sense.hints.length ? ` · ${t.sense.hints.length} 条候选` : ' · 没有候选，自己写'}
+          </span>
+        )}
+      </div>
       {t.opportunity && (
         <div className="trial-row trial-opportunity">
           <span className="badge warn">借机攻击！</span>

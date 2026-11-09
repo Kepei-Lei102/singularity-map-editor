@@ -11,6 +11,7 @@ import { characterPathClear, furnitureSweepBlocked, nextTokenStep, setTokenPosit
 import { terrainBlocksPoint, terrainBlocksRect } from '../scene/terrain';
 import { slidingPuzzleForObject } from '../scene/sliding';
 import { viewerOf, visiblePoint } from '../scene/sight';
+import { describeSense, rollSense, senseHints, type SenseKind } from '../rules/sense';
 import { ATTACK_RANGE, DYING_LABEL, DYING_ROUNDS, ENGAGE_RANGE, RESCUED_HP, ROBOT_LABEL, attackTargets, canRescue, canUseSharp, downedBy, downedLabel, hpOf, opportunityTriggers, robotArrived, robotIncoming, rollAttack, rollRescue, settleDeath, stepLimitNear, type AttackTarget, type Downed, type Roller } from '../rules/combat';
 
 // 试玩：放白板玩家进去，用 WASD 走，体验视野。退出时一切恢复原样（沙盒）。
@@ -558,4 +559,35 @@ export function tickRobots(now = Date.now()): void {
       d.log.push({ id: uid(), at: now, session: d.session, kind: 'note', text: `急救机器人到场，${k.name} 被拉起来了（1 HP）。` });
     }
   });
+}
+
+/**
+ * 感知动作：观察／搜索／嗅闻／倾听。
+ * 掷骰成功之后，规则版会把对得上的线索摆出来当候选，见证者再决定给什么。
+ * 失败就什么都不给——这是作者定的口径。
+ *
+ * 战斗模式下占一个行动点；自由行动不占。
+ */
+export function trialSense(kind: SenseKind, opts: { targetObjectId?: string | null; roll?: (sides: number) => number } = {}): string | null {
+  const t = tr();
+  const pl = t?.players[t.current];
+  if (!t || !pl) return '没有正在试玩的角色';
+  if (t.combat && t.acted) return '这回合的行动点已经用掉了，按空格结束回合';
+  const w = getWorld();
+  const m = findMap(w, t.mapId);
+  const tok = m?.tokens.find((x) => x.id === pl.tokenId);
+  if (!m || !tok) return '找不到你的棋子';
+  if (tok.corpse) return '你已经死了';
+  const pc = w.party.find((p) => p.id === pl.pcId);
+  if (!pc) return '找不到角色卡';
+
+  const roll = rollSense(kind, pc, opts.roll);
+  const hints = senseHints({ pc, pcName: pl.name, map: m, at: { x: tok.x, y: tok.y }, targetObjectId: opts.targetObjectId, roll });
+  const useful = hints.filter((h) => h.from !== 'none');
+
+  setTr({ acted: t.combat ? true : t.acted, sense: { kind, roll, hints: useful, at: Date.now() }, msg: describeSense(roll, pl.name) });
+  update((d) => {
+    d.log.push({ id: uid(), at: Date.now(), session: d.session, kind: 'note', text: describeSense(roll, pl.name) });
+  });
+  return null;
 }

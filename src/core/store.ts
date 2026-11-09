@@ -1,6 +1,7 @@
 import { architectureTransitionError } from '../scene/architecture';
 import { produce, type Draft } from 'immer';
 import { useSyncExternalStore } from 'react';
+import type { SenseHint, SenseKind, SenseRoll } from '../rules/sense';
 import type { PendingJudgment, World } from './types';
 import { demoWorld, emptyWorld } from './defaults';
 import { isPlayerEntry } from './deployment';
@@ -251,6 +252,8 @@ export interface UIState {
       note?: string;
       at: number;
     } | null;
+    /** 最近一次感知判定的结果。见证者据此决定给什么信息。 */
+    sense?: { kind: SenseKind; roll: SenseRoll; hints: SenseHint[]; at: number } | null;
     turn: number;
     msg: string;
     markSymbol: string;
