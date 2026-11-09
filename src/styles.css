@@ -442,3 +442,8 @@ label.check.off { opacity: 0.45; }
 .trial-say { padding: 7px 10px; border-radius: 8px; background: rgba(255, 255, 255, 0.05); border: 1px solid #3a3a44; font-size: 13px; }
 .trial-say-form { display: flex; flex-direction: column; gap: 5px; margin-top: 6px; }
 .trial-say-form input { font-size: 13px; }
+
+/* 交流动作候选：一排小按钮，点一下就接住 */
+.trial-say-chips { display: flex; flex-wrap: wrap; gap: 5px; }
+.trial-say-chips .chip { font-size: 12px; }
+.trial-say-ops { display: flex; gap: 6px; }

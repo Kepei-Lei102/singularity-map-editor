@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { setUI, useUI, useWorld } from '../core/store';
 import { pendingUtterances, resolveUtterance } from '../rules/dialogue';
+import { TALK_ACTIONS, guessTalkAction } from '../rules/talkActions';
 import { MARK_LIFE, findMap, giveMapKnowledge, setVisionMode } from '../runtime/actions';
 import { HEAR_RANGE } from '../scene/perception';
 import {
@@ -152,15 +153,30 @@ export function TrialHud() {
               <div><b>{u.pcName}</b>{u.targetName && <span className="muted"> → {u.targetName}</span>}：「{u.text}」</div>
               {taking === u.id ? (
                 <div className="trial-say-form">
-                  <input value={actLabel} placeholder="接成什么动作？比如「和 NPC 理论」「查看钟面」"
-                    onChange={(e) => setActLabel(e.target.value)} autoFocus />
-                  <input value={actOutcome} placeholder="结果（可不填；对话的效果直接判也行）"
+                  {/* 白卡的交流动作就这 10 个，点一下就接住，不用手打。
+                      原话里带「吵」「求」这类字眼时，把最可能的那个标出来。 */}
+                  <div className="trial-say-chips">
+                    {TALK_ACTIONS.map((a) => {
+                      const guess = guessTalkAction(u.text);
+                      return (
+                        <button key={a.name} className={`small chip ${guess?.name === a.name ? 'on' : ''}`}
+                          title={a.what} onClick={() => { resolveUtterance(u.id, { label: a.name }); setTaking(null); }}>
+                          {a.name}
+                        </button>
+                      );
+                    })}
+                  </div>
+                  <input value={actLabel} placeholder="或者自己写一个动作（不是这 10 个的时候）"
+                    onChange={(e) => setActLabel(e.target.value)} />
+                  <input value={actOutcome} placeholder="结果（可不填）"
                     onChange={(e) => setActOutcome(e.target.value)} />
-                  <button className="small primary" disabled={!actLabel.trim()} onClick={() => {
-                    resolveUtterance(u.id, { label: actLabel, outcome: actOutcome });
-                    setTaking(null); setActLabel(''); setActOutcome('');
-                  }}>接住</button>
-                  <button className="small" onClick={() => { setTaking(null); setActLabel(''); setActOutcome(''); }}>算了</button>
+                  <div className="trial-say-ops">
+                    <button className="small primary" disabled={!actLabel.trim()} onClick={() => {
+                      resolveUtterance(u.id, { label: actLabel, outcome: actOutcome });
+                      setTaking(null); setActLabel(''); setActOutcome('');
+                    }}>接住</button>
+                    <button className="small" onClick={() => { setTaking(null); setActLabel(''); setActOutcome(''); }}>算了</button>
+                  </div>
                 </div>
               ) : (
                 <button className="small" onClick={() => { setTaking(u.id); setActLabel(''); setActOutcome(''); }}>接成动作…</button>
