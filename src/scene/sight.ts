@@ -27,7 +27,7 @@ export const EYE_RATIO = 0.93;
 export const DEFAULT_HEIGHT_CM = { 男: 173, 女: 164, 其他: 170 } as const;
 /** 蹲下／趴下是锁死高度，不按身高算。 */
 // 坐和蹲的眼高差不多，暂时共用一个值；躺下就是趴。
-export const STANCE_EYE = { 坐: 0.9, 蹲: 0.9, 趴: 0.3 } as const;
+export const STANCE_EYE = { 坐: 0.9, 蹲: 0.9, 躺: 0.3, 趴: 0.3 } as const;
 
 
 export interface Body {
@@ -41,6 +41,7 @@ export function eyeHeight(body: Body = {}): number {
   const stance = body.stance ?? '站';
   if (stance === '坐') return STANCE_EYE.坐;
   if (stance === '蹲') return STANCE_EYE.蹲;
+  if (stance === '躺') return STANCE_EYE.躺;
   if (stance === '趴') return STANCE_EYE.趴;
   const cm = body.heightCm ?? DEFAULT_HEIGHT_CM[body.sex ?? '其他'];
   return Math.round(cm * EYE_RATIO) / 100;

@@ -8,6 +8,11 @@
 // - 阈值：移动力超 25，3 回合蓄 1 格；超 38，2 回合蓄 1 格。用完才能重新蓄
 //
 // 基准 375 正好 5 格，跟老的 MOVE_PER_TURN 对得上。
+//
+// 关于属性取值范围（0–100，官方属性测试口径）：
+// - 普通人大概在 45–55 那一档，算下来移动值 425 上下，正常走 5 格
+// - 80 以上是特种兵、职业运动员那一档，不是随便堆堆就能到的
+// - 所以按三倍消耗趴着爬，普通人就是 1 格，只有身体素质极好的人能摸到 2 格
 import type { PC, Sex } from '../core/types';
 
 /** 每多少点移动值换 1 格。 */
@@ -167,10 +172,27 @@ export const RUN_MODES: Record<RunMode, RunSpec> = {
 
 /**
  * 这一刻的移动额度，单位是细分格（1 主格 = 3）。
- * 倍数乘出来带小数时向下取整：5 格慢跑 = 7.5 格，按 7 格算，不多给。
+ *
+ * 算法是「对移动点数做运算，再除以 75 取整」——不是先取格数再乘倍数。
+ * 425 点的人慢跑 1.5 倍：425×1.5 = 637.5 → ÷75 = 8.5 → 8 格。
+ * 旧算法先取 5 格再乘 1.5 得 7.5 格，少给了一点。作者定的是这个算法。
  */
 export function runAllowance(b: MoveBudget, spec: RunSpec, stored = 0): number {
-  return Math.floor((b.cells + stored) * spec.speed) * 3;
+  // 蓄好的额外格是「已经拿到手的格子」，不参与倍数缩放，直接加在后面。
+  const points = (b.value * spec.speed) / POINTS_PER_CELL + stored;
+  return Math.floor(points) * 3;
+}
+
+/**
+ * 趴着爬的额度：移动点数除以 3，再除以 75 取整。
+ * 普通人 425 点 → 141.7 → 1.89 格 → 1 格。
+ * 敏捷堆到特种兵级别（80+）的人才能摸到 2 格。
+ */
+export const CRAWL_DIVISOR = 3;
+
+export function crawlAllowance(b: MoveBudget, stored = 0): number {
+  const points = b.value / CRAWL_DIVISOR / POINTS_PER_CELL + stored;
+  return Math.floor(points) * 3;
 }
 
 /** 跑起来还能不能拐这个弯。 */
@@ -184,4 +206,41 @@ export function runMeShort(pc: PC, spec: RunSpec): boolean {
   if (spec.meCost <= 0) return false;
   if (pc.me == null) return false;
   return pc.me < spec.meCost;
+}
+
+// ---------- 走一格要花多少移动点数 ----------
+
+/** 起身要花的移动点数（作者定：普通人 445 点的话接近一半）。 */
+export const STAND_UP_COST = 150;
+/** 从躺翻身到趴要花的移动点数。 */
+export const ROLL_OVER_COST = 75;
+
+/**
+ * 走一格（主格）要扣多少移动点数。
+ *
+ * 正常走一格 75 点（就是一格的价钱）；跑步换成「消耗更慢的系数」：
+ * 慢跑 75÷1.5 = 50，奔跑 75÷2 = 37.5，爆跑 75÷3 = 25。
+ * 趴着爬反过来，三倍消耗：75×3 = 225。
+ *
+ * 作者的口径是「能用点数算就用点数算」，所以跑步也走这条路，
+ * 不再单算一个额度再比步数。
+ */
+export function stepPrice(mode: RunMode | null, prone: boolean): number {
+  if (prone) return POINTS_PER_CELL * CRAWL_DIVISOR;
+  if (!mode) return POINTS_PER_CELL;
+  return POINTS_PER_CELL / RUN_MODES[mode].speed;
+}
+
+/** 这点移动点数还够不够走一格。 */
+export function canAffordStep(pointsLeft: number, price: number): boolean {
+  return pointsLeft >= price - 1e-9;
+}
+
+/**
+ * 回合开始时的移动点数池。
+ * 就是角色的移动值，加上已经蓄好的额外格换成点数。
+ */
+export function movePool(b: MoveBudget | null, storedCells = 0): number {
+  if (!b) return POINTS_PER_CELL * 5; // 没角色卡：老口径 5 格
+  return b.value + storedCells * POINTS_PER_CELL;
 }

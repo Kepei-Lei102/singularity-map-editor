@@ -67,11 +67,17 @@ export function characterPathClear(w: World, m: GameMap, a: Point, b: Point, id?
   if (m.objects.some(o => o.enabled !== false && o.kind === 'object' && !isArchitectureObject(o) && (o.physical?.blocksMove ?? (o.blocksWhen ? o.blocksWhen.includes(o.state) : o.height >= 0.5)) && circleSweep(a, b, objectRect(o), radius))) return false;
   return !m.tokens.some(t => t.id !== id && circleSweep(a, b, { ...tokenPosition(t), w: 0, h: 0 }, radius * 2));
 }
+/**
+ * 人走路一律整格走：人有那么大一块，一次方向就是一整格。
+ * 细分格仍然留着给物件、建筑和碰撞判定用——那些才需要 1/3 的精度。
+ *
+ * cost 还是按细分格记（1 主格 = 3），因为下面的移动点数要按它扣。
+ */
 export function nextTokenStep(m: GameMap, t: Token, dx: number, dy: number) {
-  const a = tokenPosition(t), fine = isSubdivided(m, a.x, a.y);
-  let b = { x: a.x + dx * (fine ? 1 / 3 : 1), y: a.y + dy * (fine ? 1 / 3 : 1) };
-  if (!isSubdivided(m, b.x, b.y)) b = { x: Math.floor(b.x) + 0.5, y: Math.floor(b.y) + 0.5 };
-  return { a, b, cost: Math.round((Math.abs(b.x - a.x) + Math.abs(b.y - a.y)) * 3) };
+  const a = tokenPosition(t);
+  // 从当前所在格的中心出发，走到相邻格的中心。
+  const b = { x: Math.floor(a.x) + dx + 0.5, y: Math.floor(a.y) + dy + 0.5 };
+  return { a, b, cost: 3 };
 }
 export function setTokenPosition(m: GameMap, t: Token, p: Point) {
   t.x = Math.floor(p.x); t.y = Math.floor(p.y);

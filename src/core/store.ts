@@ -227,7 +227,13 @@ export interface UIState {
     players: { tokenId: string; pcId: string; name: string }[];
     current: number;
     combat: boolean; // 战斗模式：每回合 5 格；不开就是不限步数
+    /** 每回合已经用掉的移动点数（按细分格记的老口径，保留给界面显示）。 */
     moved: Record<string, number>;
+    /**
+     * 这一回合还剩多少移动点数。回合开始时重置成角色的总移动点数。
+     * 走一格扣当前跑法/姿态的单价；起身扣 150，翻身扣 75。
+     */
+    movePoints?: Record<string, number>;
     /** 蓄力进度：移动力够高的人每回合攒一点，攒满多一格。用完才重新蓄。 */
     charge?: Record<string, { progress: number; cells: number }>;
     /** 这一回合按的跑法。没写＝正常走。 */

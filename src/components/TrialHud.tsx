@@ -154,9 +154,13 @@ export function TrialHud() {
       {/* 姿态：只改视野高度。站着看得远，坐和蹲矮一截，躺下最低。 */}
       <div className="trial-row">
         <span className="muted">姿态</span>
-        {([['站', '站起'], ['坐', '坐下'], ['趴', '躺下']] as const).map(([s, label]) => (
+        {([['站', '站起'], ['坐', '坐下'], ['蹲', '蹲下'], ['躺', '躺下'], ['趴', '趴下']] as const).map(([s, label]) => (
           <button key={s} className={`small chip ${(curTok?.stance ?? '站') === s ? 'on' : ''}`}
-            title={s === '站' ? '站直，看得最远' : s === '坐' ? '坐下，视线变低' : '躺下，视线最低'}
+            title={s === '站' ? '站直，看得最远'
+              : s === '坐' ? '坐下，视线矮一截'
+              : s === '蹲' ? '蹲下，视线矮一截'
+              : s === '躺' ? '躺下：基本丧失行动能力，要花行动点才能翻身或起来'
+              : '趴下：能动，但按三倍消耗爬'}
             onClick={() => { const e = trialStance(s); if (e) set({ msg: e }); }}>{label}</button>
         ))}
         <span className="muted small-text">推动：朝家具走就是推</span>

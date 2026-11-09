@@ -225,14 +225,31 @@ test('拐弯限制：慢跑不限，奔跑一次，爆跑零次', () => {
   assert.equal(api.canTurn(sprint, 0), false, '爆跑一次都不准拐');
 });
 
-test('跑步额度按倍数换算成细分格', () => {
-  const b = api.moveBudget(pc({ 敏捷: 50, 力量: 50, 意志: 50 })); // 425 → 5 格
-  // 5 格 × 1.5 = 7.5 格，向下取整算 7 格
-  assert.equal(api.runAllowance(b, api.RUN_MODES.jog), 7 * 3);
-  assert.equal(api.runAllowance(b, api.RUN_MODES.run), 5 * 2 * 3);
-  assert.equal(api.runAllowance(b, api.RUN_MODES.sprint), 5 * 3 * 3);
-  // 蓄好的额外格也算进倍数
-  assert.equal(api.runAllowance(b, api.RUN_MODES.run, 2), (5 + 2) * 2 * 3);
+test('跑步额度：对移动点数做运算，再除以 75 取整', () => {
+  const b = api.moveBudget(pc({ 敏捷: 50, 力量: 50, 意志: 50 })); // 425 点
+  // 425 × 1.5 = 637.5 → ÷75 = 8.5 → 8 格（不是先取 5 格再乘 1.5 的 7 格）
+  assert.equal(api.runAllowance(b, api.RUN_MODES.jog), 8 * 3);
+  // 425 × 2 = 850 → 11.33 → 11 格
+  assert.equal(api.runAllowance(b, api.RUN_MODES.run), 11 * 3);
+  // 425 × 3 = 1275 → 17 格
+  assert.equal(api.runAllowance(b, api.RUN_MODES.sprint), 17 * 3);
+  // 蓄好的额外格不进倍数，直接加在后面
+  assert.equal(api.runAllowance(b, api.RUN_MODES.run, 2), 13 * 3);
+});
+
+test('趴着爬：点数除以 3，普通人 1 格', () => {
+  // 普通人 425 点 → 141.7 → ÷75 = 1.89 → 1 格
+  const normal = api.moveBudget(pc({ 敏捷: 50, 力量: 50, 意志: 50 }));
+  assert.equal(api.crawlAllowance(normal), 1 * 3);
+
+  // 敏捷 80 是特种兵那一档：375+32+15+15 = 437 → ÷3 = 145.7 → ÷75 = 1.94 → 还是 1 格
+  const spec = api.moveBudget(pc({ 敏捷: 80, 力量: 50, 意志: 50 }));
+  assert.equal(api.crawlAllowance(spec), 1 * 3, '敏捷 80 也就 1 格');
+
+  // 要有 6 格底子才够 2 格：6 格 ≈ 450 点，÷3 = 150 → ÷75 = 2 格
+  const strong = api.moveBudget(pc({ 敏捷: 100, 力量: 100, 意志: 100 })); // 375+40+30+30=475
+  assert.equal(strong.cells, 6);
+  assert.equal(api.crawlAllowance(strong), 2 * 3, '475 点 → 158 → 2 格');
 });
 
 test('ME 不够时拦下来；没填 ME 就不拦', () => {
@@ -245,4 +262,56 @@ test('ME 不够时拦下来；没填 ME 就不拦', () => {
 
   const unknown = pc({}); // 没填 ME
   assert.equal(api.runMeShort(unknown, api.RUN_MODES.run), false, '没填就不拦');
+});
+
+test('走一格的价钱：正常 75，跑步按系数降，趴着三倍', () => {
+  assert.equal(api.stepPrice(null, false), 75, '正常一格就是一格的价');
+  assert.equal(api.stepPrice('jog', false), 50, '慢跑 75÷1.5');
+  assert.equal(api.stepPrice('run', false), 37.5, '奔跑 75÷2');
+  assert.equal(api.stepPrice('sprint', false), 25, '爆跑 75÷3');
+  assert.equal(api.stepPrice(null, true), 225, '趴着爬 75×3');
+  assert.equal(api.stepPrice('run', true), 225, '趴着就不管跑法了');
+});
+
+test('起身 150 点、翻身 75 点', () => {
+  assert.equal(api.STAND_UP_COST, 150);
+  assert.equal(api.ROLL_OVER_COST, 75);
+  // 普通人 445 点：起身之后剩 295，约等于 3.9 格
+  assert.equal(Math.floor((445 - api.STAND_UP_COST) / 75), 3);
+});
+
+test('点池 = 移动值 + 蓄好的额外格换的点数', () => {
+  const pc45 = pc({ 敏捷: 50, 力量: 50, 意志: 50 }); // 425
+  const b = api.moveBudget(pc45);
+  assert.equal(api.movePool(b), 425);
+  assert.equal(api.movePool(b, 2), 425 + 150);
+  assert.equal(api.movePool(null), 375, '没角色卡：老口径 5 格');
+});
+
+test('够不够走一格', () => {
+  assert.equal(api.canAffordStep(75, 75), true);
+  assert.equal(api.canAffordStep(74, 75), false);
+  assert.equal(api.canAffordStep(37.5, 37.5), true, '浮点也要判对');
+});
+
+test('普通人在点数池里能走几格', () => {
+  const b = api.moveBudget(pc({ 敏捷: 50, 力量: 50, 意志: 50 })); // 425
+  let left = api.movePool(b);
+  let steps = 0;
+  const price = api.stepPrice(null, false);
+  while (api.canAffordStep(left, price)) { left -= price; steps++; }
+  assert.equal(steps, 5, '425 点走 5 格');
+  assert.equal(Math.round(left), 50);
+
+  // 慢跑能走几格
+  let jogLeft = api.movePool(b), jogSteps = 0;
+  const jogPrice = api.stepPrice('jog', false);
+  while (api.canAffordStep(jogLeft, jogPrice)) { jogLeft -= jogPrice; jogSteps++; }
+  assert.equal(jogSteps, 8, '慢跑 8 格，跟原来算的一致');
+
+  // 趴着爬
+  let crawlLeft = api.movePool(b), crawlSteps = 0;
+  const crawlPrice = api.stepPrice(null, true);
+  while (api.canAffordStep(crawlLeft, crawlPrice)) { crawlLeft -= crawlPrice; crawlSteps++; }
+  assert.equal(crawlSteps, 1, '普通人趴着就是 1 格');
 });

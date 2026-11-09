@@ -12,7 +12,7 @@ import { terrainBlocksPoint, terrainBlocksRect } from '../scene/terrain';
 import { slidingPuzzleForObject } from '../scene/sliding';
 import { viewerOf, visiblePoint } from '../scene/sight';
 import { describeSense, rollSense, senseHints, type SenseKind } from '../rules/sense';
-import { canTurn, moveBudgetOn, runAllowance, RUN_MODES, runMeShort, tickCharge, type ChargeState, type RunMode } from '../rules/move';
+import { canAffordStep, canTurn, moveBudgetOn, movePool, RUN_MODES, runMeShort, stepPrice, tickCharge, STAND_UP_COST, ROLL_OVER_COST, type ChargeState, type RunMode } from '../rules/move';
 import { ATTACK_RANGE, DYING_LABEL, DYING_ROUNDS, ENGAGE_RANGE, RESCUED_HP, ROBOT_LABEL, attackTargets, canRescue, canUseSharp, downedBy, downedLabel, hpOf, opportunityTriggers, robotArrived, robotIncoming, rollAttack, rollRescue, settleDeath, stepLimitNear, type AttackTarget, type Downed, type Roller } from '../rules/combat';
 
 // 试玩：放白板玩家进去，用 WASD 走，体验视野。退出时一切恢复原样（沙盒）。
@@ -170,6 +170,11 @@ export function endTrial() {
   playingBefore = null;
 }
 
+/** 躺下的人干不了什么，得先花行动点翻身或者站起来。 */
+function lyingMsg(tok: { stance?: string; name: string }): string | null {
+  return tok.stance === '躺' ? `${tok.name}躺着，先翻身或站起来（要花行动点）` : null;
+}
+
 export function trialMove(dx: number, dy: number) {
   const t = tr();
   const pl = t?.players[t.current];
@@ -182,6 +187,8 @@ export function trialMove(dx: number, dy: number) {
     if (tok.status.endsAt !== undefined && tok.status.endsAt <= Date.now()) clearTrialStatus(tok.id);
     else return setTr({ msg: `${pl.name}${tok.status.label}中，暂时不能行动` });
   }
+  const lying = lyingMsg(tok);
+  if (lying) return setTr({ msg: lying });
   // 朝向：战斗中第一次按方向＝原地转身，再按同方向才走（回合制下等于一次确认）。
   // 自由行动不确认，朝向跟着走；转身不占行动点；被缠斗时一回合只能转一次。
   const dir = dirOf(dx, dy);
@@ -206,14 +213,17 @@ export function trialMove(dx: number, dy: number) {
   const used = t.moved[pl.tokenId] ?? 0;
   const step = nextTokenStep(m, tok, dx, dy);
   // 移动力按角色属性算：梦境层用心理移动，其它层用物理移动。
-  // 换算成细分格的预算（1 主格 = 3 细分格），再加已蓄好的额外格。
   const mover = w.party.find((p) => p.id === pl.pcId);
   const budget = mover ? moveBudgetOn(mover, m.layer) : null;
   const stored = t.charge?.[pl.tokenId]?.cells ?? 0;
-  const allowed = budget && runSpec
-    ? runAllowance(budget, runSpec, stored)
-    : (budget ? budget.cells + stored : MOVE_PER_TURN) * 3;
-  if (t.combat && used + step.cost > allowed) return setTr({ msg: '这回合的移动力用完了，按空格结束回合' });
+  const prone = tok.stance === '趴';
+  // 战斗模式才花移动点数；自由行动不限步数。
+  // 这一回合的点池在回合开始时建好，这里只查够不够、走完扣掉。
+  const price = stepPrice(t.runMode ?? null, prone);
+  if (t.combat) {
+    const left = t.movePoints?.[pl.tokenId] ?? movePool(budget, stored);
+    if (!canAffordStep(left, price)) return setTr({ msg: '这回合的移动点数用完了，按空格结束回合' });
+  }
   // 贴身缠斗：在敌人周围 2 格内，一次移动只能挪 1 格。
   if (t.combat && stepLimitNear(landingOf(step.a), m.tokens.filter((k) => k.id !== tok.id)) === 1 && step.cost > 3)
     return setTr({ msg: '贴身缠斗：一次只能挪 1 格' });
@@ -250,8 +260,13 @@ export function trialMove(dx: number, dy: number) {
     setTokenPosition(findMap(d, t.mapId)!, dt, step.b);
     dt.facing = dir; // 自由行动：朝向跟着移动；战斗中这时朝向已经等于 dir
   });
+  // 战斗模式才扣移动点数；自由行动不限步数。
+  const pointsLeft = t.combat
+    ? Math.max(0, (t.movePoints?.[pl.tokenId] ?? movePool(budget, stored)) - price)
+    : t.movePoints?.[pl.tokenId];
   setTr({
     moved: { ...t.moved, [pl.tokenId]: used + step.cost },
+    movePoints: t.combat ? { ...(t.movePoints ?? {}), [pl.tokenId]: pointsLeft! } : t.movePoints,
     msg: '',
     opportunity: opp?.leaving && opp.enemies.length
       ? { moverTokenId: tok.id, enemies: opp.enemies, from: opp.from, to: opp.to }
@@ -303,7 +318,19 @@ export function trialEndTurn() {
     }
     return next;
   })();
-  setTr({ moved: {}, turned: {}, turn: t.turn + 1, acted: false, opportunity: null, msg: '', charge });
+  // 新回合把移动点数池重置成各角色的移动值（加上蓄好的额外格）。
+  const movePoints = (() => {
+    const w = getWorld();
+    const m = findMap(w, t.mapId);
+    if (!m) return t.movePoints ?? {};
+    const next: Record<string, number> = {};
+    for (const pl of t.players) {
+      const pc = w.party.find((p) => p.id === pl.pcId);
+      next[pl.tokenId] = movePool(pc ? moveBudgetOn(pc, m.layer) : null, charge[pl.tokenId]?.cells ?? 0);
+    }
+    return next;
+  })();
+  setTr({ moved: {}, turned: {}, turn: t.turn + 1, acted: false, opportunity: null, msg: '', charge, movePoints });
 }
 
 /** 这一回合还有几点行动点：每回合 1 点，攻击/主动技能花掉就算用完。 */
@@ -325,6 +352,7 @@ export function trialAttack(targetTokenId: string, opts: { roll?: number; roller
   const target = m?.tokens.find((x) => x.id === targetTokenId);
   if (!m || !attacker || !target) return '找不到攻击者或目标';
   if (attacker.id === target.id) return '不能打自己';
+  if (attacker.stance === '躺') return `${attacker.name}躺着，打不了。先翻身或站起来`;
   if (target.status?.label === '濒死') return `${target.name} 已经濒死了`;
   const dist = Math.abs(attacker.x - target.x) + Math.abs(attacker.y - target.y);
   if (dist > ATTACK_RANGE) return `超出攻击距离（${dist} 格 > ${ATTACK_RANGE}）`;
@@ -653,8 +681,13 @@ export function trialRun(mode: RunMode | null): string | null {
 }
 
 /**
- * 姿态：坐、躺、起。目前只影响视野高度——站着看得远，蹲着看得近。
- * 战斗里的额外效果（比如趴着被远程打是不是有优势）还没定，先不写死。
+ * 姿态：站、坐、蹲、躺、趴。
+ *
+ * 作者口径：
+ * - 躺下基本丧失行动能力，要先用行动点翻身（躺→趴）或站起来（躺→站）
+ * - 趴着能动，但按三倍消耗爬：普通人一回合 1 格
+ * - 坐／蹲可以直接躺下，不用先站起来
+ * - 目前姿态只影响视野高度；战斗里的额外效果还没定，先不写死
  */
 export function trialStance(stance: Stance | null): string | null {
   const t = tr();
@@ -666,12 +699,36 @@ export function trialStance(stance: Stance | null): string | null {
   if (tok.corpse) return '你已经死了';
   if (tok.status?.label === '昏厥') return `${pl.name}昏厥中，动不了`;
 
-  const next = stance ?? '站';
-  if ((tok.stance ?? '站') === next) return `已经是${next === '站' ? '站' : next}着了`;
+  const mMap = findMap(w, t.mapId)!;
+  const mover = w.party.find((p) => p.id === pl.pcId);
+  const from = tok.stance ?? '站';
+  const to = stance ?? '站';
+  if (from === to) return `已经是${to}着了`;
+
+  // 从躺或趴起来要花移动点数（不是行动点）：起身 150，翻身到趴 75。
+  // 坐／蹲直接躺下不用花。
+  const rising = (from === '躺' || from === '趴') && to !== from;
+  const cost = !rising ? 0 : to === '趴' ? ROLL_OVER_COST : STAND_UP_COST;
+  // 这回合还没走过路时，点池还是满的——按满池算，不是按 0 算。
+  const poolNow = t.movePoints?.[pl.tokenId]
+    ?? movePool(mover ? moveBudgetOn(mover, mMap.layer) : null, t.charge?.[pl.tokenId]?.cells ?? 0);
+  if (cost > 0 && t.combat && !canAffordStep(poolNow, cost)) {
+    return `移动点数不够：${to === '趴' ? '翻身' : '起身'}要 ${cost} 点，这回合只剩 ${Math.round(poolNow)} 点`;
+  }
+
   update((d) => {
     const dt = findMap(d, t.mapId)!.tokens.find((x) => x.id === pl.tokenId)!;
-    if (next === '站') delete dt.stance; else dt.stance = next;
+    if (to === '站') delete dt.stance; else dt.stance = to;
   });
-  setTr({ msg: next === '站' ? `${pl.name}站起来` : `${pl.name}${next === '坐' ? '坐' : '躺'}下了` });
+  const say: Record<Stance, string> = {
+    站: `${pl.name}站起来了`, 坐: `${pl.name}坐下了`, 蹲: `${pl.name}蹲下了`,
+    躺: `${pl.name}躺下了`, 趴: `${pl.name}趴下了`,
+  };
+  setTr({
+    msg: say[to],
+    movePoints: cost > 0 && t.combat
+      ? { ...(t.movePoints ?? {}), [pl.tokenId]: Math.max(0, poolNow - cost) }
+      : t.movePoints,
+  });
   return null;
 }
