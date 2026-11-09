@@ -4,7 +4,7 @@ import { effectiveLayer } from '../scene/vision';
 import { objectEnabled } from '../core/objectData.js';
 import { beginSandbox, endSandbox, getUI, getWorld, setUI, toast, update, type UIState } from '../core/store';
 import { addMark, autoReveal, cancelPendingPlay, checkEnterTriggers, findMap, ioBusy } from './actions';
-import type { Facing, GameMap, MapObject, World } from '../core/types';
+import type { Facing, GameMap, MapObject, Stance, World } from '../core/types';
 import { gridDist, uid } from '../core/util';
 import { blocksMovement, ROUND_MINUTES } from '../scene/perception';
 import { characterPathClear, furnitureSweepBlocked, nextTokenStep, setTokenPosition, tokenPosition } from '../scene/architecture';
@@ -649,5 +649,29 @@ export function trialRun(mode: RunMode | null): string | null {
     acted: t.combat && spec.usesAction ? true : t.acted,
     msg: spec.usesAction ? `换【${spec.label}】` : '',
   });
+  return null;
+}
+
+/**
+ * 姿态：坐、躺、起。目前只影响视野高度——站着看得远，蹲着看得近。
+ * 战斗里的额外效果（比如趴着被远程打是不是有优势）还没定，先不写死。
+ */
+export function trialStance(stance: Stance | null): string | null {
+  const t = tr();
+  const pl = t?.players[t.current];
+  if (!t || !pl) return '没有正在试玩的角色';
+  const w = getWorld();
+  const tok = findMap(w, t.mapId)?.tokens.find((x) => x.id === pl.tokenId);
+  if (!tok) return '找不到你的棋子';
+  if (tok.corpse) return '你已经死了';
+  if (tok.status?.label === '昏厥') return `${pl.name}昏厥中，动不了`;
+
+  const next = stance ?? '站';
+  if ((tok.stance ?? '站') === next) return `已经是${next === '站' ? '站' : next}着了`;
+  update((d) => {
+    const dt = findMap(d, t.mapId)!.tokens.find((x) => x.id === pl.tokenId)!;
+    if (next === '站') delete dt.stance; else dt.stance = next;
+  });
+  setTr({ msg: next === '站' ? `${pl.name}站起来` : `${pl.name}${next === '坐' ? '坐' : '躺'}下了` });
   return null;
 }

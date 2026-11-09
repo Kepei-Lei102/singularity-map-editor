@@ -34,6 +34,8 @@ test('眼高：男 173、女 164 按 0.93 折算；蹲趴锁死', () => {
   assert.equal(eyeHeight({ heightCm: 190 }), 1.77);
   assert.equal(eyeHeight({ stance: '蹲', sex: '男' }), 0.9);
   assert.equal(eyeHeight({ stance: '趴' }), 0.3);
+  // 坐跟蹲一样高；躺下就是趴
+  assert.equal(eyeHeight({ stance: '坐', sex: '男' }), 0.9);
 });
 
 test('空地 15 格看得见，第 16 格看不见（预算 1.56，每格 0.1）', () => {

@@ -23,7 +23,7 @@ import { MARK_LIFE, findMap, giveMapKnowledge, setVisionMode } from '../runtime/
 import { HEAR_RANGE } from '../scene/perception';
 import {
   MOVE_PER_TURN, actionsLeft, addTrialPlayer, clearTrialStatus, endTrial, setTrialStatus, statusLeft, switchTrialPlayer,
-  tickRobots, trialRun, trialSense,
+  tickRobots, trialRun, trialSense, trialStance,
   toggleCombat, toggleMarkMode, trialAttack, trialAttackTargets, trialRescue, trialOpportunityAttack, trialSkipOpportunity,
 } from '../runtime/trial';
 
@@ -62,6 +62,7 @@ export function TrialHud() {
   }, [ticking]);
   if (!t) return null;
   const cur = t.players[t.current];
+  const curTok = m?.tokens.find((k) => k.id === cur.tokenId);
   const used = cur ? t.moved[cur.tokenId] ?? 0 : 0;
   const color = (pcId: string) => w.party.find((p) => p.id === pcId)?.color ?? '#fff';
   const set = (patch: Partial<typeof t>) => setUI({ trial: { ...t, ...patch } });
@@ -150,6 +151,16 @@ export function TrialHud() {
           })()}
         </div>
       )}
+      {/* 姿态：只改视野高度。站着看得远，坐和蹲矮一截，躺下最低。 */}
+      <div className="trial-row">
+        <span className="muted">姿态</span>
+        {([['站', '站起'], ['坐', '坐下'], ['趴', '躺下']] as const).map(([s, label]) => (
+          <button key={s} className={`small chip ${(curTok?.stance ?? '站') === s ? 'on' : ''}`}
+            title={s === '站' ? '站直，看得最远' : s === '坐' ? '坐下，视线变低' : '躺下，视线最低'}
+            onClick={() => { const e = trialStance(s); if (e) set({ msg: e }); }}>{label}</button>
+        ))}
+        <span className="muted small-text">推动：朝家具走就是推</span>
+      </div>
       {/* 跑法：慢跑不耗蓝不限拐弯；奔跑 2 倍耗 1 ME、整回合只准拐一次；爆跑 3 倍不能拐。 */}
       <div className="trial-row">
         <span className="muted">跑法</span>

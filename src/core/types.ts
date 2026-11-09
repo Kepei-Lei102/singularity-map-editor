@@ -267,7 +267,7 @@ export interface Connection {
 /** 性别：只影响默认身高（男 173、女 164）。 */
 export type Sex = '男' | '女' | '其他';
 /** 姿态：站、蹲、趴。蹲／趴的眼高锁死。 */
-export type Stance = '站' | '蹲' | '趴';
+export type Stance = '站' | '坐' | '蹲' | '趴';
 /** 面向：4 向，不做斜向。 */
 export type Facing = '北' | '东' | '南' | '西';
 
