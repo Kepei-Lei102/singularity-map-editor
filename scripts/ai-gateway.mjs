@@ -8,6 +8,38 @@ changes 最多 30 条，每个目标最多一条，只能是以下两种格式�
 {"kind":"object-state","mapId":"快照的稳定ID","objectId":"稳定ID","fromState":0,"toState":1,"reason":"理由"}
 {"kind":"token-status","mapId":"稳定ID","tokenId":"稳定ID","fromStatus":null,"status":{"label":"状态名","roundsLeft":2},"reason":"理由"}
 物件状态是 states 数组从 0 开始的整数序号，fromState 必须等于快照当前 state，toState 必须在 states 内且与当前不同，已停用物件不能建议操作。人物 fromStatus 必须与快照 status 完全相同；无状态用 null。status 为 null 表示解除状态，否则仅包含 label（最多120字）及可选的 endsAt（真实时间毫秒整数）或 roundsLeft（1–10000整数），这两个时限字段不能同时出现。没有时间依据时只写 label。message 必须非空；没有可执行建议时 changes 为空数组。`;
+
+/** 动作清单，供上面拼提示词。跟 src/rules/talkActions.ts 保持同一份。 */
+const TALK_ACTION_LIST = [
+  '【攀谈】：主动找人聊天',
+  '【私聊】：一对一私密交流',
+  '【喊话】：远距离喊话',
+  '【示意】：手势／眼神示意',
+  '【倾听】：聆听他人或环境',
+  '【对线】：非严肃的口头交锋：抬杠、拌嘴。不产生实质后果',
+  '【求助】：向他人、NPC 或见证者请求帮助',
+  '【微笑】：用表情表达友善与亲和',
+  '【拥抱】：用身体接触表达亲近、安慰或安抚',
+  '【亲吻】：用亲吻表达亲密',
+].join('\n');
+
+/**
+ * 意图匹配的系统提示词。跟顾问那套完全分开：
+ * 顾问要「只能建议、不许执行」并返回 changes 结构；这里只要一个动作名。
+ * 两者混在一起会互相污染，所以走独立端点。
+ */
+export const INTENT_SYSTEM = `你是跑团主持人的助手。玩家说了一句话，你要判断它属于下面哪一个交流动作。
+只从这 10 个里选，或者回答 null（说明这句话其实不是交流动作）。
+
+${TALK_ACTION_LIST}
+
+规则：
+- 语气词、动作描写、括号里的补充也可能是在交流，要读懂意图，不要只看字面。
+- 如果这句话其实不是交流（比如只是移动、拿东西、观察环境），回答 null。
+- 只能返回 JSON：{"action":"【名字】"} 或 {"action":null}
+- 不要解释，不要 Markdown，不要加别的字段。`;
+
+
 const MAX_BODY = 1_000_000;
 const MAX_UPSTREAM = 512_000;
 const MAX_REPLY = 24_000;
@@ -73,6 +105,56 @@ function validate(payload) {
 }
 
 /** token should be the launcher's existing per-process TOKEN. No credentials are retained. */
+
+/** 上游返回里取出文本（两种协议都支持）。失败就抛 GatewayError。 */
+async function textOf(upstream, protocol) {
+  if (!upstream.ok) { await upstream.body?.cancel(); reject(502, `AI 服务请求失败（HTTP ${upstream.status}）`); }
+  const data = await upstreamJSON(upstream);
+  if (protocol === 'responses') {
+    if (data.status !== 'completed') reject(502, 'AI 服务未完成回复，请重试');
+    return Array.isArray(data.output) ? data.output.filter(o => o?.type === 'message' && o.role === 'assistant').flatMap(o => Array.isArray(o.content) ? o.content.filter(c => c?.type === 'output_text' && typeof c.text === 'string').map(c => c.text) : []).join('\n') : '';
+  }
+  const choice = data.choices?.[0];
+  if (choice?.finish_reason !== 'stop' || choice.message?.tool_calls?.length) reject(502, 'AI 服务未完成文本回复，请重试');
+  return choice.message?.content;
+}
+
+/** 意图端点接受的请求字段，比顾问那套窄。 */
+function intentPayload(payload) {
+  if (!object(payload) || Object.keys(payload).some(k => !['protocol', 'baseURL', 'model', 'text', 'apiKey'].includes(k))) reject(400, '意图请求字段无效');
+  const endpoint = advisorEndpoint(payload.baseURL, payload.protocol);
+  if (!string(payload.model, 200) || !/^[\w.\-:/]+$/.test(payload.model)) reject(400, '模型名无效');
+  if (!string(payload.text, 1000)) reject(400, '原话不能为空，且不超过 1000 字');
+  if (payload.apiKey !== undefined && (typeof payload.apiKey !== 'string' || payload.apiKey.length > 4096 || /[\r\n\x00]/.test(payload.apiKey))) reject(400, 'API Key 格式无效');
+  return { endpoint, model: payload.model, text: payload.text, apiKey: payload.apiKey };
+}
+
+/**
+ * 把玩家原话匹配到白卡的 10 个交流动作。
+ * 跟顾问走同一套鉴权、端点校验、超时和大小限制，只是提示词和请求体不一样。
+ * 返回 { action: 名字 | null }，字段不合法就抛 GatewayError。
+ */
+export async function intentRequest(payload, { fetchImpl = fetch, env = process.env, signal } = {}) {
+  const p = intentPayload(payload);
+  let key = p.apiKey || env.OPENAI_API_KEY || '';
+  if (!string(key, 4096) || /[\r\n\x00]/.test(key)) reject(400, '请填写此次请求的 API Key，或设置启动器 OPENAI_API_KEY');
+  const request = payload.protocol === 'responses'
+    ? { model: p.model, instructions: INTENT_SYSTEM, input: [{ role: 'user', content: p.text }], max_output_tokens: 60, stream: false, store: false }
+    : { model: p.model, messages: [{ role: 'system', content: INTENT_SYSTEM }, { role: 'user', content: p.text }], max_completion_tokens: 60, temperature: 0, stream: false, store: false };
+  const upstream = await fetchImpl(p.endpoint, { method: 'POST', redirect: 'error', signal,
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${key}` }, body: JSON.stringify(request) });
+  key = '';
+  const text = await textOf(upstream, payload.protocol);
+  if (!string(text, 2000)) reject(502, 'AI 服务没有给出可用的回答');
+  const m = text.match(/\{[\s\S]*\}/);
+  if (!m) reject(502, 'AI 的回答里找不到 JSON');
+  let parsed;
+  try { parsed = JSON.parse(m[0]); } catch { reject(502, 'AI 的回答不是合法 JSON'); }
+  const action = parsed?.action === null ? null : typeof parsed?.action === 'string' ? parsed.action : undefined;
+  if (action === undefined) reject(502, 'AI 的回答缺少 action 字段');
+  return { action };
+}
+
 export function mountAIGateway(middlewares, { token = randomBytes(32).toString('hex'), sameOrigin, fetchImpl = fetch, env = process.env, timeoutMs = 45_000, uploadTimeoutMs = 10_000 } = {}) {
   if (!string(token, 512) || token.length < 16) throw new Error('AI gateway requires a per-process host token');
   let active = 0;
@@ -91,7 +173,7 @@ export function mountAIGateway(middlewares, { token = randomBytes(32).toString('
   };
   middlewares.use((req, res, next) => {
     const route = req.url?.split('?')[0];
-    if (route !== '/__ai' && route !== '/__ai-session') return next();
+    if (route !== '/__ai' && route !== '/__ai-session' && route !== '/__ai-intent') return next();
     const send = (status, value) => { if (!res.destroyed && !res.writableEnded) { res.statusCode = status; res.setHeader('Content-Type', 'application/json; charset=utf-8'); res.end(JSON.stringify(value)); } };
     res.setHeader('Cache-Control', 'no-store'); res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('Cross-Origin-Resource-Policy', 'same-origin');
@@ -102,6 +184,7 @@ export function mountAIGateway(middlewares, { token = randomBytes(32).toString('
     }
     if (req.method !== 'POST') return send(405, { error: '仅支持 POST' });
     if (!originOK(req) || !tokenOK(req) || (req.headers['sec-fetch-site'] && req.headers['sec-fetch-site'] !== 'same-origin')) return send(403, { error: 'AI 请求未通过主持人同源验证' });
+
     if (!/^application\/json(?:\s*;.*)?$/i.test(req.headers['content-type'] ?? '') || req.headers['content-encoding']) return send(415, { error: 'AI 请求需要未压缩 JSON' });
     if (Number(req.headers['content-length']) > MAX_BODY) return send(413, { error: 'AI 请求超过大小上限' });
     if (active >= 2) return send(429, { error: 'AI 网关忙，请等待现有请求结束' });
@@ -112,6 +195,13 @@ export function mountAIGateway(middlewares, { token = randomBytes(32).toString('
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     void (async () => {
       try {
+        // 意图匹配走自己的处理；鉴权、限流、超时上面都已经做过了。
+        if (route === '/__ai-intent') {
+          const payload = await body(req, controller.signal, uploadTimeoutMs);
+          const result = await intentRequest(payload, { fetchImpl, env, signal: controller.signal });
+          send(200, { action: result.action });
+          return;
+        }
         const payload = await body(req, controller.signal, uploadTimeoutMs);
         const endpoint = validate(payload);
         let key = payload.apiKey || env.OPENAI_API_KEY || '';
