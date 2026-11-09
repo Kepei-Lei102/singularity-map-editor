@@ -230,6 +230,10 @@ export interface UIState {
     moved: Record<string, number>;
     /** 蓄力进度：移动力够高的人每回合攒一点，攒满多一格。用完才重新蓄。 */
     charge?: Record<string, { progress: number; cells: number }>;
+    /** 这一回合按的跑法。没写＝正常走。 */
+    runMode?: 'jog' | 'run' | 'sprint' | null;
+    /** 这一回合已经拐了几次弯。奔跑只准拐一次，爆跑一次都不准。 */
+    runTurns?: number;
     turned?: Record<string, boolean>; // 本回合已经原地转身过的棋子（缠斗限制用）
     acted?: boolean; // 这一回合的行动点已经用掉（攻击/技能）
     /** 这次攻击用锐器（默认钝器）。只有身上带锐器的角色才勾得动。 */

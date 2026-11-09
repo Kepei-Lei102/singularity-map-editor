@@ -135,3 +135,53 @@ export function moveKindOfLayer(layer: string): MoveKind {
 export function moveBudgetOn(pc: PC, layer: string): MoveBudget {
   return moveBudget(pc, moveKindOfLayer(layer));
 }
+
+// ---------- 跑步三档 ----------
+
+/**
+ * 三档速度。作者口径：
+ * - 慢跑：1.5 倍，不耗 ME，不限拐弯，不占行动点
+ * - 奔跑：2 倍，耗 1 ME，整回合只能拐一次弯，占行动点
+ * - 爆跑：3 倍，耗 1 ME，不能拐弯，占行动点（能解锁的职业很少）
+ */
+export type RunMode = 'jog' | 'run' | 'sprint';
+
+export interface RunSpec {
+  mode: RunMode;
+  label: string;
+  /** 移动力倍数。 */
+  speed: number;
+  /** 耗多少 ME。 */
+  meCost: number;
+  /** 整个回合最多拐几次弯。null = 不限。 */
+  turns: number | null;
+  /** 占不占行动点。 */
+  usesAction: boolean;
+}
+
+export const RUN_MODES: Record<RunMode, RunSpec> = {
+  jog: { mode: 'jog', label: '慢跑', speed: 1.5, meCost: 0, turns: null, usesAction: false },
+  run: { mode: 'run', label: '奔跑', speed: 2, meCost: 1, turns: 1, usesAction: true },
+  sprint: { mode: 'sprint', label: '爆跑', speed: 3, meCost: 1, turns: 0, usesAction: true },
+};
+
+/**
+ * 这一刻的移动额度，单位是细分格（1 主格 = 3）。
+ * 倍数乘出来带小数时向下取整：5 格慢跑 = 7.5 格，按 7 格算，不多给。
+ */
+export function runAllowance(b: MoveBudget, spec: RunSpec, stored = 0): number {
+  return Math.floor((b.cells + stored) * spec.speed) * 3;
+}
+
+/** 跑起来还能不能拐这个弯。 */
+export function canTurn(spec: RunSpec, turnedSoFar: number): boolean {
+  if (spec.turns === null) return true;
+  return turnedSoFar < spec.turns;
+}
+
+/** 这一档跑起来，ME 够不够。null 表示角色没填 ME，不拦。 */
+export function runMeShort(pc: PC, spec: RunSpec): boolean {
+  if (spec.meCost <= 0) return false;
+  if (pc.me == null) return false;
+  return pc.me < spec.meCost;
+}

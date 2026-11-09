@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { setUI, useUI, useWorld } from '../core/store';
 import { pendingUtterances, resolveUtterance } from '../rules/dialogue';
 import { TALK_ACTIONS, guessTalkAction } from '../rules/talkActions';
+import { moveBudgetOn } from '../rules/move';
 import { intentEnabled, requestTalkIntent, setIntentEnabled, type AdvisorSettings } from '../runtime/sessionAI';
 
 /**
@@ -22,7 +23,7 @@ import { MARK_LIFE, findMap, giveMapKnowledge, setVisionMode } from '../runtime/
 import { HEAR_RANGE } from '../scene/perception';
 import {
   MOVE_PER_TURN, actionsLeft, addTrialPlayer, clearTrialStatus, endTrial, setTrialStatus, statusLeft, switchTrialPlayer,
-  tickRobots, trialSense,
+  tickRobots, trialRun, trialSense,
   toggleCombat, toggleMarkMode, trialAttack, trialAttackTargets, trialRescue, trialOpportunityAttack, trialSkipOpportunity,
 } from '../runtime/trial';
 
@@ -149,6 +150,31 @@ export function TrialHud() {
           })()}
         </div>
       )}
+      {/* 跑法：慢跑不耗蓝不限拐弯；奔跑 2 倍耗 1 ME、整回合只准拐一次；爆跑 3 倍不能拐。 */}
+      <div className="trial-row">
+        <span className="muted">跑法</span>
+        {([['jog', '慢跑'], ['run', '奔跑'], ['sprint', '爆跑']] as const).map(([m, label]) => (
+          <button key={m} className={`small chip ${t.runMode === m ? 'on' : ''}`}
+            title={m === 'jog' ? '1.5 倍，不耗 ME，不限拐弯，不占行动点'
+              : m === 'run' ? '2 倍，耗 1 ME，整回合只能拐一次弯，占行动点'
+              : '3 倍，耗 1 ME，不能拐弯，占行动点（能解锁的职业很少）'}
+            onClick={() => { const e = trialRun(m); if (e) set({ msg: e }); }}>{label}</button>
+        ))}
+        <button className={`small chip ${t.runMode ? '' : 'on'}`} onClick={() => { const e = trialRun(null); if (e) set({ msg: e }); }}>正常走</button>
+        {(() => {
+          // 这一行解释「为什么是这么多格」，挡掉猜不到的疑问。
+          const card = w.party.find((p) => p.id === cur?.pcId);
+          if (!card) return null;
+          const b = moveBudgetOn(card, m?.layer ?? '现实');
+          const stored = t.charge?.[cur?.tokenId ?? '']?.cells ?? 0;
+          return (
+            <span className="muted small-text">
+              {b.kind === 'mental' ? '心理' : '物理'} {b.cells} 格{stored ? `（+${stored} 蓄）` : ''}
+              {card.me != null ? ` · ME ${card.me}` : ''}
+            </span>
+          );
+        })()}
+      </div>
       {/* 感知动作：四个都掷骰，掷完把候选摆给见证者挑。 */}
       <div className="trial-row">
         <span className="muted">感知</span>

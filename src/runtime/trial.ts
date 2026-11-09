@@ -12,7 +12,7 @@ import { terrainBlocksPoint, terrainBlocksRect } from '../scene/terrain';
 import { slidingPuzzleForObject } from '../scene/sliding';
 import { viewerOf, visiblePoint } from '../scene/sight';
 import { describeSense, rollSense, senseHints, type SenseKind } from '../rules/sense';
-import { moveBudgetOn, tickCharge, type ChargeState } from '../rules/move';
+import { canTurn, moveBudgetOn, runAllowance, RUN_MODES, runMeShort, tickCharge, type ChargeState, type RunMode } from '../rules/move';
 import { ATTACK_RANGE, DYING_LABEL, DYING_ROUNDS, ENGAGE_RANGE, RESCUED_HP, ROBOT_LABEL, attackTargets, canRescue, canUseSharp, downedBy, downedLabel, hpOf, opportunityTriggers, robotArrived, robotIncoming, rollAttack, rollRescue, settleDeath, stepLimitNear, type AttackTarget, type Downed, type Roller } from '../rules/combat';
 
 // 试玩：放白板玩家进去，用 WASD 走，体验视野。退出时一切恢复原样（沙盒）。
@@ -185,13 +185,22 @@ export function trialMove(dx: number, dy: number) {
   // 朝向：战斗中第一次按方向＝原地转身，再按同方向才走（回合制下等于一次确认）。
   // 自由行动不确认，朝向跟着走；转身不占行动点；被缠斗时一回合只能转一次。
   const dir = dirOf(dx, dy);
+  const runSpec = t.runMode ? RUN_MODES[t.runMode] : null;
   if (t.combat && tok.facing !== dir) {
     if (t.combat && isEngaged(m, tok) && t.turned?.[pl.tokenId]) return setTr({ msg: '被缠斗住了：这回合只能转一次身' });
+    // 跑起来拐弯有限：奔跑整回合只能拐一次，爆跑一次都不准。
+    if (runSpec && !canTurn(runSpec, t.runTurns ?? 0)) {
+      return setTr({ msg: runSpec.turns === 0 ? `【${runSpec.label}】不能拐弯，往${dir}得先停下来` : `【${runSpec.label}】这一回合已经拐过弯了` });
+    }
     update((d) => {
       const dt = findMap(d, t.mapId)!.tokens.find((x) => x.id === pl.tokenId)!;
       dt.facing = dir;
     });
-    setTr({ msg: `转向${dir}`, turned: t.combat ? { ...(t.turned ?? {}), [pl.tokenId]: true } : t.turned });
+    setTr({
+      msg: `转向${dir}`,
+      turned: t.combat ? { ...(t.turned ?? {}), [pl.tokenId]: true } : t.turned,
+      runTurns: runSpec ? (t.runTurns ?? 0) + 1 : t.runTurns,
+    });
     return;
   }
   const used = t.moved[pl.tokenId] ?? 0;
@@ -201,7 +210,9 @@ export function trialMove(dx: number, dy: number) {
   const mover = w.party.find((p) => p.id === pl.pcId);
   const budget = mover ? moveBudgetOn(mover, m.layer) : null;
   const stored = t.charge?.[pl.tokenId]?.cells ?? 0;
-  const allowed = (budget ? budget.cells + stored : MOVE_PER_TURN) * 3;
+  const allowed = budget && runSpec
+    ? runAllowance(budget, runSpec, stored)
+    : (budget ? budget.cells + stored : MOVE_PER_TURN) * 3;
   if (t.combat && used + step.cost > allowed) return setTr({ msg: '这回合的移动力用完了，按空格结束回合' });
   // 贴身缠斗：在敌人周围 2 格内，一次移动只能挪 1 格。
   if (t.combat && stepLimitNear(landingOf(step.a), m.tokens.filter((k) => k.id !== tok.id)) === 1 && step.cost > 3)
@@ -608,6 +619,35 @@ export function trialSense(kind: SenseKind, opts: { targetObjectId?: string | nu
   setTr({ acted: t.combat ? true : t.acted, sense: { kind, roll, hints: useful, at: Date.now() }, msg: describeSense(roll, pl.name) });
   update((d) => {
     d.log.push({ id: uid(), at: Date.now(), session: d.session, kind: 'note', text: describeSense(roll, pl.name) });
+  });
+  return null;
+}
+
+/**
+ * 换跑法。跑步要花 ME、占行动点；慢跑两样都不花。
+ * 只有进战斗模式才谈得上「占行动点」——自由行动不数行动点。
+ */
+export function trialRun(mode: RunMode | null): string | null {
+  const t = tr();
+  const pl = t?.players[t.current];
+  if (!t || !pl) return '没有正在试玩的角色';
+  const w = getWorld();
+  const pc = w.party.find((p) => p.id === pl.pcId);
+  if (!pc) return '找不到角色卡';
+  if (mode === null) { setTr({ runMode: null, runTurns: 0, msg: '' }); return null; }
+
+  const spec = RUN_MODES[mode];
+  if (t.combat && spec.usesAction && t.acted) return `【${spec.label}】要占行动点，这回合已经用掉了`;
+  if (runMeShort(pc, spec)) return `ME 不够：【${spec.label}】要 ${spec.meCost} ME，现在只有 ${pc.me}`;
+
+  if (spec.meCost > 0) {
+    update((d) => { const p = d.party.find((x) => x.id === pl.pcId); if (p && p.me != null) p.me -= spec.meCost; });
+  }
+  setTr({
+    runMode: mode,
+    runTurns: 0,
+    acted: t.combat && spec.usesAction ? true : t.acted,
+    msg: spec.usesAction ? `换【${spec.label}】` : '',
   });
   return null;
 }

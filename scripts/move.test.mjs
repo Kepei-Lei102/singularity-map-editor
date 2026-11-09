@@ -198,3 +198,51 @@ test('按层选移动类型：梦境走心理，现实走物理', () => {
   assert.equal(api.moveBudgetOn(p, '梦境').cells, 6);
   assert.equal(api.moveBudgetOn(p, '现实').cells, 5);
 });
+
+test('三档速度的数值', () => {
+  assert.equal(api.RUN_MODES.jog.speed, 1.5);
+  assert.equal(api.RUN_MODES.run.speed, 2);
+  assert.equal(api.RUN_MODES.sprint.speed, 3);
+  assert.equal(api.RUN_MODES.jog.meCost, 0, '慢跑不耗 ME');
+  assert.equal(api.RUN_MODES.run.meCost, 1);
+  assert.equal(api.RUN_MODES.sprint.meCost, 1);
+  assert.equal(api.RUN_MODES.jog.usesAction, false, '慢跑不占行动点');
+  assert.equal(api.RUN_MODES.run.usesAction, true);
+  assert.equal(api.RUN_MODES.sprint.usesAction, true);
+});
+
+test('拐弯限制：慢跑不限，奔跑一次，爆跑零次', () => {
+  const jog = api.RUN_MODES.jog;
+  assert.equal(api.canTurn(jog, 0), true);
+  assert.equal(api.canTurn(jog, 5), true, '慢跑想拐几次拐几次');
+
+  const run = api.RUN_MODES.run;
+  assert.equal(api.canTurn(run, 0), true, '还没拐过，可以拐');
+  assert.equal(api.canTurn(run, 1), false, '拐过一次就不行了');
+  assert.equal(api.canTurn(run, 2), false);
+
+  const sprint = api.RUN_MODES.sprint;
+  assert.equal(api.canTurn(sprint, 0), false, '爆跑一次都不准拐');
+});
+
+test('跑步额度按倍数换算成细分格', () => {
+  const b = api.moveBudget(pc({ 敏捷: 50, 力量: 50, 意志: 50 })); // 425 → 5 格
+  // 5 格 × 1.5 = 7.5 格，向下取整算 7 格
+  assert.equal(api.runAllowance(b, api.RUN_MODES.jog), 7 * 3);
+  assert.equal(api.runAllowance(b, api.RUN_MODES.run), 5 * 2 * 3);
+  assert.equal(api.runAllowance(b, api.RUN_MODES.sprint), 5 * 3 * 3);
+  // 蓄好的额外格也算进倍数
+  assert.equal(api.runAllowance(b, api.RUN_MODES.run, 2), (5 + 2) * 2 * 3);
+});
+
+test('ME 不够时拦下来；没填 ME 就不拦', () => {
+  const broke = pc({}, { me: 0 });
+  assert.equal(api.runMeShort(broke, api.RUN_MODES.run), true);
+  assert.equal(api.runMeShort(broke, api.RUN_MODES.jog), false, '慢跑不耗 ME，穷也能跑');
+
+  const rich = pc({}, { me: 5 });
+  assert.equal(api.runMeShort(rich, api.RUN_MODES.sprint), false);
+
+  const unknown = pc({}); // 没填 ME
+  assert.equal(api.runMeShort(unknown, api.RUN_MODES.run), false, '没填就不拦');
+});
