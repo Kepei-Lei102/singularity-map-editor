@@ -171,6 +171,12 @@ export interface GameMap {
   cellCm?: number;
   cells: string[]; // terrain id，'' = 空
   d100: number[]; // 1 = D100 区域
+  /**
+   * 每格相对本层地面的高度，单位是「格」（1 格 = 0.75 米）。
+   * 不填就是 0（平地）。跳跃、攀爬、高度恐惧都按这个算。
+   * 跟 cells 一样长，key = y * width + x。
+   */
+  heights?: number[];
   fog: number[]; // 0 = 没去过（黑），1 = 现在看得见，2 = 去过、现在看不见（灰，显示记忆）
   seen: Memory; // 玩家对这张图的记忆：上一次看见时的样子
   autoFog: boolean; // 自动视野：按玩家角色的视线算迷雾
