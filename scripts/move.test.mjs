@@ -74,6 +74,18 @@ test('身高：1.5 米起步，超出的厘米数直接加点', () => {
   assert.ok(tall.parts.some((p) => p.label.includes('180')));
 });
 
+test('身高只补物理移动，不补心理', () => {
+  const attrs = { 智慧: 50, 观察: 50, 魅力: 50, 敏捷: 50, 力量: 50, 意志: 50 };
+  const short = api.moveBudget(pc(attrs, { heightCm: 160 }), 'physical');
+  const tall = api.moveBudget(pc(attrs, { heightCm: 190 }), 'physical');
+  assert.equal(tall.value - short.value, 30, '物理该差 30 点');
+
+  const mShort = api.moveBudget(pc(attrs, { heightCm: 160 }), 'mental');
+  const mTall = api.moveBudget(pc(attrs, { heightCm: 190 }), 'mental');
+  assert.equal(mTall.value, mShort.value, '心理移动跟身高无关');
+  assert.ok(!mTall.parts.some((p) => p.label.includes('190')), '心理的明细里不该出现身高');
+});
+
 test('女性心理移动多 25 点', () => {
   const attrs = { 智慧: 50, 观察: 50, 魅力: 50 };
   const male = api.moveBudget(pc(attrs, { sex: '男' }), 'mental');
@@ -96,35 +108,52 @@ test('每 75 点 1 格，75 的整数倍正好进位', () => {
   assert.ok(just.toNext > 0 && just.toNext <= 75);
 });
 
-test('蓄力门槛：超 25 点 3 回合，超 38 点 2 回合', () => {
-  assert.equal(api.moveBudget(pc({})).charge, null, '基准 375 没有蓄力');
-  // 敏捷 ×0.4 加点：62.5 点 → 25，65 点 → 26，95 点 → 38，97.5 点 → 39
-  assert.equal(api.moveBudget(pc({ 敏捷: 62.5 })).charge, null, '正好超出 25 没有');
-  assert.deepEqual(api.moveBudget(pc({ 敏捷: 65 })).charge, { rounds: 3 });
-  // 两个门槛是叠加的：超出 38 也已经超过 25，所以 38 走 3 回合那档
-  assert.deepEqual(api.moveBudget(pc({ 敏捷: 95 })).charge, { rounds: 3 }, '超出 38 但没到 39，还是 3 回合');
-  assert.deepEqual(api.moveBudget(pc({ 敏捷: 97.5 })).charge, { rounds: 2 }, '超出 39 才进 2 回合');
+test('蓄力分档：25–37 每回合 1/3，38–74 每回合 1/2', () => {
+  assert.equal(api.moveBudget(pc({})).charge, null, '基准 375 超出 0，没有蓄力');
+  // 超出 24 → 没有
+  assert.equal(api.moveBudget(pc({ 敏捷: 60 })).charge, null);
+  // 超出 25 → 1/3
+  assert.deepEqual(api.moveBudget(pc({ 敏捷: 62.5 })).charge, { perRound: 1 / 3, rounds: 3 });
+  // 超出 37 → 还是 1/3
+  assert.deepEqual(api.moveBudget(pc({ 敏捷: 92.5 })).charge, { perRound: 1 / 3, rounds: 3 });
+  // 超出 38 → 1/2
+  assert.deepEqual(api.moveBudget(pc({ 敏捷: 95 })).charge, { perRound: 1 / 2, rounds: 2 });
+  // 超出 74 → 还是 1/2
+  assert.deepEqual(api.moveBudget(pc({ 敏捷: 185 })).charge, { perRound: 1 / 2, rounds: 2 });
+  // 超出 75 → 不再额外算（作者口径：太复杂了）
+  assert.equal(api.moveBudget(pc({ 敏捷: 187.5 })).charge, null);
 });
 
-test('蓄力按回合累计，攒够才给一格', () => {
-  const b = api.moveBudget(pc({ 敏捷: 65 })); // 超出 26 点，3 回合
-  let s = { rounds: 0, cells: 0 };
+test('1/3 档：三回合攒满一格', () => {
+  const b = api.moveBudget(pc({ 敏捷: 65 })); // 超出 26
+  let s = { progress: 0, cells: 0 };
   s = api.tickCharge(b, s);
   assert.equal(s.cells, 0);
+  assert.ok(Math.abs(s.progress - 1 / 3) < 1e-9);
   s = api.tickCharge(b, s);
   assert.equal(s.cells, 0);
+  assert.ok(Math.abs(s.progress - 2 / 3) < 1e-9);
   s = api.tickCharge(b, s);
   assert.equal(s.cells, 1, '第三回合给一格');
-  assert.equal(s.rounds, 0, '给了就重新蓄');
+  assert.equal(s.progress, 0, '给了就从零重新蓄');
 });
 
-test('2 回合门槛的蓄得更快', () => {
-  const b = api.moveBudget(pc({ 敏捷: 97.5 })); // 超出 39 点，2 回合
-  let s = { rounds: 0, cells: 0 };
+test('1/2 档：两回合攒满一格', () => {
+  const b = api.moveBudget(pc({ 敏捷: 97.5 })); // 超出 39
+  let s = { progress: 0, cells: 0 };
   s = api.tickCharge(b, s);
   assert.equal(s.cells, 0);
+  assert.ok(Math.abs(s.progress - 0.5) < 1e-9);
   s = api.tickCharge(b, s);
   assert.equal(s.cells, 1);
+  assert.equal(s.progress, 0);
+});
+
+test('蓄满之后继续转，会接着攒下一格', () => {
+  const b = api.moveBudget(pc({ 敏捷: 97.5 }));
+  let s = { progress: 0, cells: 0 };
+  for (let i = 0; i < 6; i++) s = api.tickCharge(b, s);
+  assert.equal(s.cells, 3, '六回合攒三格');
 });
 
 test('没有蓄力门槛的人，怎么转都不给', () => {
@@ -135,9 +164,9 @@ test('没有蓄力门槛的人，怎么转都不给', () => {
 });
 
 test('用掉一格蓄力之后，重新从 0 蓄', () => {
-  const s = api.spendCharge({ rounds: 2, cells: 2 });
+  const s = api.spendCharge({ progress: 0.9, cells: 2 });
   assert.equal(s.cells, 1);
-  assert.equal(s.rounds, 0, '用完就重新蓄');
+  assert.equal(s.progress, 0, '用完就重新蓄');
 });
 
 test('这回合能走几格，要把蓄的算进来', () => {

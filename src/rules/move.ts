@@ -31,8 +31,9 @@ export interface MoveBudget {
   toNext: number;
   /** 各个加成的明细，方便在界面上解释为什么是这个数。 */
   parts: { label: string; points: number }[];
-  /** 蓄力门槛：达到才有额外移动格。没有就是 null。 */
-  charge: { rounds: number } | null;
+  /** 蓄力门槛：达到才有额外移动格。没有就是 null。
+   *  按每回合蓄多少来算，而不是数回合数——超出越多蓄得越快。 */
+  charge: { perRound: number; rounds: number } | null;
 }
 
 const num = (v: number | undefined) => (typeof v === 'number' && Number.isFinite(v) ? v : 0);
@@ -70,14 +71,23 @@ export function moveBudget(pc: PC, kind: MoveKind = 'physical'): MoveBudget {
     value += min + li + zhi;
   }
 
-  const hb = heightBonus(pc.heightCm);
-  if (hb) {
-    parts.push({ label: `身高 ${pc.heightCm}cm`, points: hb });
-    value += hb;
+  // 身高只补物理移动：个子高迈得远，跟脑子转得快不快没关系。
+  if (kind === 'physical') {
+    const hb = heightBonus(pc.heightCm);
+    if (hb) {
+      parts.push({ label: `身高 ${pc.heightCm}cm`, points: hb });
+      value += hb;
+    }
   }
 
-  // 阈值按「超出多少格」算：25 点 = 1/3 格，38 点 = 半格左右。
-  const charge = value > BASE_MOVE + 38 ? { rounds: 2 } : value > BASE_MOVE + 25 ? { rounds: 3 } : null;
+  // 蓄力按「超出基准多少点」分档：
+  //   25–37 每回合蓄 1/3 格（3 回合满 1 格）
+  //   38–74 每回合蓄 1/2 格（2 回合满 1 格）
+  //   其他不额外算，太多了反而复杂
+  const over = value - BASE_MOVE;
+  const charge = over >= 38 && over < 75 ? { perRound: 1 / 2, rounds: 2 }
+    : over >= 25 && over < 38 ? { perRound: 1 / 3, rounds: 3 }
+    : null;
 
   const cells = Math.floor(value / POINTS_PER_CELL);
   return { kind, value, cells, toNext: (cells + 1) * POINTS_PER_CELL - value, parts, charge };
@@ -88,19 +98,24 @@ export function cellsThisTurn(b: MoveBudget, stored = 0): number {
   return b.cells + Math.max(0, stored);
 }
 
-/** 蓄力：到了门槛就按回合数累计，攒够算 1 格。用完才能重新蓄。 */
-export interface ChargeState { rounds: number; cells: number }
+/**
+ * 蓄力进度。progress 是「已经蓄了多少格」，用小数记：
+ * 超出 25–37 的人每回合 +1/3，超出 38–74 的人每回合 +1/2。
+ * 攒到 1 就多一格，花掉之后重新蓄。
+ */
+export interface ChargeState { progress: number; cells: number }
 
 export function tickCharge(b: MoveBudget, s: ChargeState): ChargeState {
   if (!b.charge) return s;
-  const rounds = s.rounds + 1;
-  if (rounds >= b.charge.rounds) return { rounds: 0, cells: s.cells + 1 };
-  return { rounds, cells: s.cells };
+  // 每回合最多蓄 1 格，多出来的丢掉，不然小数会越积越多。
+  const progress = Math.min(1, s.progress + b.charge.perRound);
+  if (progress >= 1 - 1e-9) return { progress: 0, cells: s.cells + 1 };
+  return { progress, cells: s.cells };
 }
 
 /** 用掉一格蓄力。用完之后重新从 0 蓄。 */
 export function spendCharge(s: ChargeState): ChargeState {
-  return { rounds: 0, cells: Math.max(0, s.cells - 1) };
+  return { progress: 0, cells: Math.max(0, s.cells - 1) };
 }
 
 /** 性别没填时按默认身高算。 */
