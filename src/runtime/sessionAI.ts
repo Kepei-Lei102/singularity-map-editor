@@ -143,3 +143,60 @@ export async function requestSessionAI(settings: AdvisorSettings, context: strin
   if (typeof data.text !== 'string') throw new Error('AI 网关没有返回文本');
   return parseSessionAIReply(data.text);
 }
+
+// ---------- 意图匹配：白卡交流动作交给本机模型猜 ----------
+
+/** 模型这层的开关存在本机；关掉就只用正则。 */
+export const INTENT_ENABLED_KEY = 'ts-ai-intent';
+
+export function intentEnabled(): boolean {
+  try { return localStorage.getItem(INTENT_ENABLED_KEY) !== 'off'; } catch { return true; }
+}
+
+export function setIntentEnabled(on: boolean): void {
+  try { localStorage.setItem(INTENT_ENABLED_KEY, on ? 'on' : 'off'); } catch { /* 存不了就用默认值 */ }
+}
+
+/**
+ * 问本机网关：这句话属于哪个交流动作。
+ *
+ * 只在主持人端用。玩家窗口没有网关，也不该有——发给别人的发布包里根本没有这层。
+ * 任何失败都返回 error 而不是抛出：猜动作只是锦上添花，猜不出来就让见证者自己点。
+ * 所以这里不重试、不纠缠，一次不成就算了。
+ */
+export async function requestTalkIntent(
+  text: string,
+  settings: AdvisorSettings,
+  apiKey = '',
+  signal?: AbortSignal,
+  /** 换掉 fetch 用。测试里传一个假的，就不必去动全局对象。 */
+  fetchImpl: typeof fetch = fetch,
+): Promise<{ action: string | null } | { error: string }> {
+  if (!intentEnabled()) return { error: '意图匹配已关闭' };
+  if (!text.trim() || text.length > 1000) return { error: '原话为空或太长' };
+  try {
+    const boot = await fetchImpl('/__ai-session', { cache: 'no-store', credentials: 'same-origin', signal });
+    if (!boot.ok) return { error: '没有本机 AI 网关' };
+    const { token } = await boot.json();
+    if (typeof token !== 'string' || !token) return { error: '网关会话无效' };
+    const res = await fetchImpl('/__ai-intent', { method: 'POST', credentials: 'same-origin', signal,
+      headers: { 'Content-Type': 'application/json', 'X-AI-Token': token },
+      body: JSON.stringify({ ...settings, text, apiKey }),
+    });
+    const data = await res.json();
+    if (!res.ok) return { error: typeof data.error === 'string' ? data.error : '网关请求失败' };
+    const action = data.action === null ? null : typeof data.action === 'string' ? data.action : undefined;
+    if (action === undefined) return { error: '网关没给出 action' };
+    // 只认白卡那 10 个；模型编了个不存在的名字就当没猜出来
+    if (action !== null && !TALK_ACTION_NAMES.has(action)) return { action: null };
+    return { action };
+  } catch (e) {
+    return { error: e instanceof Error ? e.message : '连不上网关' };
+  }
+}
+
+/** 白卡交流动作的名字，用来挡掉模型编造的名字。 */
+const TALK_ACTION_NAMES = new Set([
+  '【攀谈】', '【私聊】', '【喊话】', '【示意】', '【倾听】',
+  '【对线】', '【求助】', '【微笑】', '【拥抱】', '【亲吻】',
+]);

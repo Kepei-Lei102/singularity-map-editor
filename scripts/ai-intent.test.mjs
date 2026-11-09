@@ -120,3 +120,14 @@ test('意图提示词里放着 10 个动作和 null 的规矩', () => {
 test('顾问那套端点没被破坏', () => {
   assert.equal(advisorEndpoint('http://127.0.0.1:3425/v1', 'chat-completions'), 'http://127.0.0.1:3425/v1/chat/completions');
 });
+
+test('本机回环网关可以不填 key，远程端点必须填', async (t) => {
+  const { send } = await intentGateway(t, { fetchImpl: async () => chatReply('{"action":"【示意】"}') });
+  // 回环地址 + 空 key → 放行（magpie 这类网关信任本机）
+  const loop = await send(payload({ baseURL: 'http://127.0.0.1:3425/v1', apiKey: '' }));
+  assert.equal(loop.status, 200);
+  assert.deepEqual(await loop.json(), { action: '【示意】' });
+  // 远程地址 + 空 key → 仍然要 key
+  const remote = await send(payload({ baseURL: 'https://api.example.com/v1', apiKey: '' }));
+  assert.equal(remote.status, 400);
+});

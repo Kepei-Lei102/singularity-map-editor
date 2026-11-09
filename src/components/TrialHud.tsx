@@ -2,6 +2,22 @@ import { useEffect, useState } from 'react';
 import { setUI, useUI, useWorld } from '../core/store';
 import { pendingUtterances, resolveUtterance } from '../rules/dialogue';
 import { TALK_ACTIONS, guessTalkAction } from '../rules/talkActions';
+import { intentEnabled, requestTalkIntent, setIntentEnabled, type AdvisorSettings } from '../runtime/sessionAI';
+
+/**
+ * 猜动作用的连接设置。跟「本场 AI」面板是两套：
+ * 那个是顾问，这个是轻量的分类器，模型可以不同。
+ * 地址走本机网关，key 由网关那边持有，前端不碰。
+ */
+const AI_INTENT_SETTINGS_KEY = 'ts-ai-intent-settings';
+const AI_INTENT_DEFAULT: AdvisorSettings = { protocol: 'chat-completions', baseURL: 'http://127.0.0.1:3425/v1', model: 'private-deepseek/deepseek-v4.1-flash-1017' };
+function aiIntentSettings(): AdvisorSettings {
+  try {
+    const raw = localStorage.getItem(AI_INTENT_SETTINGS_KEY);
+    if (raw) return { ...AI_INTENT_DEFAULT, ...JSON.parse(raw) };
+  } catch { /* 坏的就用默认 */ }
+  return AI_INTENT_DEFAULT;
+}
 import { MARK_LIFE, findMap, giveMapKnowledge, setVisionMode } from '../runtime/actions';
 import { HEAR_RANGE } from '../scene/perception';
 import {
@@ -23,6 +39,11 @@ export function TrialHud() {
   const [taking, setTaking] = useState<string | null>(null);
   const [actLabel, setActLabel] = useState('');
   const [actOutcome, setActOutcome] = useState('');
+  /** 模型猜出来的动作（正则猜不出时才去问），以及正在问的那条。 */
+  const [aiGuess, setAiGuess] = useState<Record<string, string | null>>({});
+  const [asking, setAsking] = useState<string | null>(null);
+  /** 模型那层的开关；关掉就只用正则。 */
+  const [aiOn, setAiOn] = useState<boolean>(() => intentEnabled());
   const t = ui.trial;
   const m = t ? findMap(w, t.mapId) : undefined;
   const waiting = pendingUtterances();
@@ -147,7 +168,14 @@ export function TrialHud() {
       )}
       {waiting.length > 0 && (
         <div className="trial-says">
-          <div className="trial-says-head">玩家说的话 <span className="muted">（{waiting.length} 条还没接住）</span></div>
+          <div className="trial-says-head">
+            玩家说的话 <span className="muted">（{waiting.length} 条还没接住）</span>
+            <span className="spacer" />
+            {/* 网关挂了或太慢时可以关掉：关掉之后只靠正则，照样能接。 */}
+            <label className="check small-text" title="关掉之后只靠关键字猜，不再问本机模型">
+              <input type="checkbox" checked={aiOn} onChange={(e) => { const v = e.target.checked; setAiOn(v); setIntentEnabled(v); }} /> 模型辅助
+            </label>
+          </div>
           {waiting.map((u) => (
             <div key={u.id} className="trial-say">
               <div><b>{u.pcName}</b>{u.targetName && <span className="muted"> → {u.targetName}</span>}：「{u.text}」</div>
@@ -155,11 +183,13 @@ export function TrialHud() {
                 <div className="trial-say-form">
                   {/* 白卡的交流动作就这 10 个，点一下就接住，不用手打。
                       原话里带「吵」「求」这类字眼时，把最可能的那个标出来。 */}
+                  {asking === u.id && <div className="muted small-text">在想…</div>}
                   <div className="trial-say-chips">
                     {TALK_ACTIONS.map((a) => {
-                      const guess = guessTalkAction(u.text);
+                      // 正则优先；正则没结果就用模型猜的（猜不出来就是 null）
+                      const guess = guessTalkAction(u.text)?.name ?? aiGuess[u.id] ?? null;
                       return (
-                        <button key={a.name} className={`small chip ${guess?.name === a.name ? 'on' : ''}`}
+                        <button key={a.name} className={`small chip ${guess === a.name ? 'on' : ''}`}
                           title={a.what} onClick={() => { resolveUtterance(u.id, { label: a.name }); setTaking(null); }}>
                           {a.name}
                         </button>
@@ -179,7 +209,18 @@ export function TrialHud() {
                   </div>
                 </div>
               ) : (
-                <button className="small" onClick={() => { setTaking(u.id); setActLabel(''); setActOutcome(''); }}>接成动作…</button>
+                <button className="small" onClick={() => {
+                  setTaking(u.id); setActLabel(''); setActOutcome('');
+                  // 正则猜不出来才问模型。问到了就记下来，不用重复问。
+                  if (!guessTalkAction(u.text) && intentEnabled() && aiGuess[u.id] === undefined) {
+                    setAsking(u.id);
+                    const ctl = new AbortController();
+                    requestTalkIntent(u.text, aiIntentSettings(), '', ctl.signal).then((r) => {
+                      setAiGuess((m) => ({ ...m, [u.id]: 'action' in r ? r.action : null }));
+                      setAsking((k) => (k === u.id ? null : k));
+                    });
+                  }
+                }}>接成动作…</button>
               )}
             </div>
           ))}

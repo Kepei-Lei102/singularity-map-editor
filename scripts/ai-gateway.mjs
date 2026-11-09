@@ -119,6 +119,11 @@ async function textOf(upstream, protocol) {
   return choice.message?.content;
 }
 
+/** 是不是本机的网关地址。 */
+function isLoopbackEndpoint(endpoint) {
+  try { return ['localhost', '127.0.0.1', '[::1]'].includes(new URL(endpoint).hostname); } catch { return false; }
+}
+
 /** 意图端点接受的请求字段，比顾问那套窄。 */
 function intentPayload(payload) {
   if (!object(payload) || Object.keys(payload).some(k => !['protocol', 'baseURL', 'model', 'text', 'apiKey'].includes(k))) reject(400, '意图请求字段无效');
@@ -137,7 +142,10 @@ function intentPayload(payload) {
 export async function intentRequest(payload, { fetchImpl = fetch, env = process.env, signal } = {}) {
   const p = intentPayload(payload);
   let key = p.apiKey || env.OPENAI_API_KEY || '';
-  if (!string(key, 4096) || /[\r\n\x00]/.test(key)) reject(400, '请填写此次请求的 API Key，或设置启动器 OPENAI_API_KEY');
+  // 本机回环网关（magpie 这类）信任本机请求，key 可填任意值，所以前端不必持有它。
+  // 远程端点仍然必须给 key。
+  if (!key && !isLoopbackEndpoint(p.endpoint)) reject(400, '请填写此次请求的 API Key，或设置启动器 OPENAI_API_KEY');
+  if (key && (!string(key, 4096) || /[\r\n\x00]/.test(key))) reject(400, 'API Key 格式无效');
   const request = payload.protocol === 'responses'
     ? { model: p.model, instructions: INTENT_SYSTEM, input: [{ role: 'user', content: p.text }], max_output_tokens: 60, stream: false, store: false }
     : { model: p.model, messages: [{ role: 'system', content: INTENT_SYSTEM }, { role: 'user', content: p.text }], max_completion_tokens: 60, temperature: 0, stream: false, store: false };
