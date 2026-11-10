@@ -299,3 +299,54 @@ export function fearCheck(fear: FearTier): JumpCheck | null {
 }
 
 export { fearTier };
+
+// ---------- 走路时的落差检查 ----------
+
+/** 走一格时，落差是什么情况。 */
+export type StepDrop =
+  | { kind: 'flat' }
+  /** 上一格台阶：能走，双倍移动点。 */
+  | { kind: 'stepUp'; height: number }
+  /** 往下走。一格的台阶是正常下台阶（safe），再高就是跳下去，会摔。 */
+  | { kind: 'stepDown'; height: number; injury: InjuryTier; safe: boolean }
+  /** 高差太大，走不过去：得用【攀跳】或【攀爬】，或者跳下去。 */
+  | { kind: 'blocked'; reason: string };
+
+/**
+ * 判断走向目标格时的高度情况。
+ *
+ * 作者口径：
+ * - 往上 1 格：普通移动，双倍移动点
+ * - 往上 2 格以上：要【攀跳】（2–3 格）或【攀爬】（4 格以上），一步走不上去
+ * - 往下：一步台阶直接下，再高就要跳，会摔
+ */
+export function stepDrop(fromHeight: number, toHeight: number): StepDrop {
+  const diff = toHeight - fromHeight;
+  if (diff === 0) return { kind: 'flat' };
+  if (diff === 1) return { kind: 'stepUp', height: 1 };
+  if (diff > 1) {
+    const need = diff <= 3 ? '【攀跳】' : '【攀爬】';
+    return { kind: 'blocked', reason: `这里比脚下高 ${diff} 格（${(diff * CELL_M).toFixed(2)} 米），得用${need}上去` };
+  }
+  // 往下
+  const drop = -diff;
+  // 下 1 格就是走下台阶，不该摔；再往下才是跳下去。
+  if (drop === 1) return { kind: 'stepDown', height: 1, injury: 'light', safe: true };
+  if (drop <= 2) return { kind: 'stepDown', height: drop, injury: 'light', safe: false };
+  return { kind: 'stepDown', height: drop, injury: injuryTier(drop), safe: false };
+}
+
+/** 走这一格要花的移动点数倍数：上台阶双倍。 */
+export function stepDropMultiplier(d: StepDrop): number {
+  return d.kind === 'stepUp' ? 2 : 1;
+}
+
+/** 给人看的说明。 */
+export function describeStepDrop(d: StepDrop): string {
+  if (d.kind === 'flat') return '';
+  if (d.kind === 'stepUp') return '上一步台阶，双倍移动点';
+  if (d.kind === 'stepDown') return d.safe
+    ? '下一步台阶，正常走'
+    : `下 ${d.height} 格，摔伤 ${INJURY_LABEL[d.injury]} 1D${INJURY_DICE[d.injury]}`;
+  return d.reason;
+}

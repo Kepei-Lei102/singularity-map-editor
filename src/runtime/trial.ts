@@ -12,6 +12,8 @@ import { terrainBlocksPoint, terrainBlocksRect } from '../scene/terrain';
 import { slidingPuzzleForObject } from '../scene/sliding';
 import { viewerOf, visiblePoint } from '../scene/sight';
 import { describeSense, rollSense, senseHints, type SenseKind } from '../rules/sense';
+import { stepDrop } from '../rules/jump';
+import { heightAt } from '../scene/height';
 import { canAffordStep, canTurn, moveBudgetOn, movePool, RUN_MODES, runMeShort, stepPrice, tickCharge, STAND_UP_COST, ROLL_OVER_COST, type ChargeState, type RunMode } from '../rules/move';
 import { ATTACK_RANGE, DYING_LABEL, DYING_ROUNDS, ENGAGE_RANGE, RESCUED_HP, ROBOT_LABEL, attackTargets, canRescue, canUseSharp, downedBy, downedLabel, hpOf, opportunityTriggers, robotArrived, robotIncoming, rollAttack, rollRescue, settleDeath, stepLimitNear, type AttackTarget, type Downed, type Roller } from '../rules/combat';
 
@@ -252,6 +254,14 @@ export function trialMove(dx: number, dy: number) {
   const occupied = t.combat && m2.tokens.find((k) => k.id !== tok.id && Math.floor(tokenPosition(k).x) === landing.x && Math.floor(tokenPosition(k).y) === landing.y);
   if (occupied) return setTr({ msg: `${occupied.name} 在这里，不能停在同一个格子上` });
   if (!characterPathClear(now, m2, step.a, step.b, tok.id)) return setTr({ msg: '人物或墙体挡住了路径' });
+  // 落差：上一步台阶能走（双倍点数），再高就得上攀跳/攀爬；往下就是跳，会摔。
+  const drop = stepDrop(heightAt(m2, Math.floor(step.a.x), Math.floor(step.a.y)), heightAt(m2, landing.x, landing.y));
+  if (drop.kind === 'blocked') return setTr({ msg: drop.reason });
+  const extraPrice = drop.kind === 'stepUp' ? price : 0; // 上台阶再付一份
+  if (t.combat && drop.kind !== 'flat') {
+    const left = t.movePoints?.[pl.tokenId] ?? movePool(budget, stored);
+    if (!canAffordStep(left, price + extraPrice)) return setTr({ msg: `移动点数不够上这步台阶（要 ${Math.round(price + extraPrice)} 点，还剩 ${Math.round(left)}）` });
+  }
   // 借机攻击：只认贴身脱离（原本 1–2 格内，这一步往外挪）。弹提示，不自动打。
   const others = m2.tokens.filter((k) => k.id !== tok.id);
   const opp = t.combat ? opportunityTriggers(landingOf(step.a), landingOf(step.b), others) : null;
@@ -262,7 +272,7 @@ export function trialMove(dx: number, dy: number) {
   });
   // 战斗模式才扣移动点数；自由行动不限步数。
   const pointsLeft = t.combat
-    ? Math.max(0, (t.movePoints?.[pl.tokenId] ?? movePool(budget, stored)) - price)
+    ? Math.max(0, (t.movePoints?.[pl.tokenId] ?? movePool(budget, stored)) - price - extraPrice)
     : t.movePoints?.[pl.tokenId];
   setTr({
     moved: { ...t.moved, [pl.tokenId]: used + step.cost },

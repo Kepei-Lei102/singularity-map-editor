@@ -268,3 +268,63 @@ test('一楼层高的下落正好是普通意志那档', () => {
   // 挑高 8 格 = 6 米 → 普通意志
   assert.equal(api.planJump('down', 8, NO).fear, 'normal');
 });
+
+// ---------- 走路时的落差 ----------
+
+test('平地：正常走', () => {
+  const d = api.stepDrop(0, 0);
+  assert.equal(d.kind, 'flat');
+  assert.equal(api.stepDropMultiplier(d), 1);
+  assert.equal(api.describeStepDrop(d), '');
+});
+
+test('上一格台阶：能走，双倍移动点', () => {
+  const d = api.stepDrop(0, 1);
+  assert.equal(d.kind, 'stepUp');
+  assert.equal(api.stepDropMultiplier(d), 2, '上台阶双倍');
+  assert.match(api.describeStepDrop(d), /双倍/);
+});
+
+test('往上 2 格：走不上去，要攀跳', () => {
+  const d = api.stepDrop(0, 2);
+  assert.equal(d.kind, 'blocked');
+  assert.match(d.reason, /攀跳/);
+});
+
+test('往上 5 格：要攀爬', () => {
+  const d = api.stepDrop(0, 5);
+  assert.equal(d.kind, 'blocked');
+  assert.match(d.reason, /攀爬/);
+});
+
+test('往下 1 格：下台阶，不摔', () => {
+  const d = api.stepDrop(1, 0);
+  assert.equal(d.kind, 'stepDown');
+  assert.equal(d.safe, true, '一格台阶是正常走');
+  assert.match(api.describeStepDrop(d), /正常走/);
+});
+
+test('往下 2 格：要跳，轻伤', () => {
+  const d = api.stepDrop(2, 0);
+  assert.equal(d.safe, false);
+  assert.equal(d.injury, 'light');
+  assert.match(api.describeStepDrop(d), /1D4/);
+});
+
+test('往下 8 格：重伤 1D12', () => {
+  const d = api.stepDrop(8, 0);
+  assert.equal(d.injury, 'heavy');
+  assert.match(api.describeStepDrop(d), /1D12/);
+});
+
+test('往下 12 格：1D20', () => {
+  const d = api.stepDrop(12, 0);
+  assert.equal(d.injury, 'brutal');
+  assert.match(api.describeStepDrop(d), /1D20/);
+});
+
+test('落差从高往低算，负数看不懂就按绝对值', () => {
+  assert.equal(api.stepDrop(5, 5).kind, 'flat');
+  assert.equal(api.stepDrop(3, 4).kind, 'stepUp');
+  assert.equal(api.stepDrop(4, 3).kind, 'stepDown');
+});
