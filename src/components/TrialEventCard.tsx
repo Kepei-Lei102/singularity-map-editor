@@ -18,6 +18,13 @@ export function TrialEventCard() {
   const isHit = ev.kind === 'hit';
   // 没真扣到血就别报伤害数字：打已经倒地的人、打没血条的 NPC，账本都记「没变化」。
   const landed = isHit && damageLanded(ev);
+  // −N 报实际扣掉的血，不是掷出来的伤害（打在残血上，掷 3 只扣 1）；不一样就把掷出的数写小字。
+  const lost = landed && ev.hpBefore !== null && ev.hpAfter !== null ? ev.hpBefore - ev.hpAfter : 0;
+  // 濒死/昏厥是这一击最要紧的结果，不能跟着伤害块一起消失。
+  const tags = (<>
+    {ev.downed === 'dying' && <span className="dying-tag">濒死</span>}
+    {ev.downed === 'down' && <span className="down-tag">昏厥</span>}
+  </>);
   const color = (pcId: string | null) => (pcId ? w.party.find((p) => p.id === pcId)?.color ?? '#fff' : '#fff');
   return (
     <div className={`trial-event ${ev.kind}`} role="status">
@@ -35,18 +42,18 @@ export function TrialEventCard() {
       </div>
       {landed ? (
         <div className="trial-event-damage">
-          <span className="damage-num">−{ev.damage}</span>
+          <span className="damage-num">−{lost}</span>
           <span className="damage-label">伤害</span>
+          {lost !== ev.damage && <span className="muted">掷出 {ev.damage}</span>}
           {ev.hpBefore !== null && ev.hpAfter !== null && (
             <span className="hp-bar">
               <b>{ev.hpBefore}</b> → <b className={ev.hpAfter === 0 ? 'dead' : ''}>{ev.hpAfter}</b>
               {ev.hpMax ? <span className="muted"> / {ev.hpMax}</span> : null}
             </span>
           )}
-          {ev.downed === 'dying' && <span className="dying-tag">濒死</span>}
-          {ev.downed === 'down' && <span className="down-tag">昏厥</span>}
+          {tags}
         </div>
-      ) : null}
+      ) : (isHit && ev.downed ? <div className="trial-event-damage">{tags}</div> : null)}
       {ev.note && <div className="trial-event-note">{ev.note}</div>}
       {isHit && !landed && !ev.note && <div className="trial-event-note">命中，但数值没有变化</div>}
       <div className="trial-event-foot">1 行动点已用 · 按空格结束回合<a onClick={clearTrialEvent}>收起</a></div>

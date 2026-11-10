@@ -142,8 +142,8 @@ export function PlayerView() {
           {notice.kind === 'miss'
             ? <span>没打中</span>
             : damageLanded(notice)
-              ? <span>命中，掉了 {notice.damage} 点血{notice.hpAfter !== null && notice.hpMax ? ` → ${notice.hpAfter} / ${notice.hpMax}` : ''}</span>
-              : <span>命中，但数值没有变化{notice.hpAfter !== null && notice.hpMax ? `（${notice.hpAfter} / ${notice.hpMax}）` : ''}</span>}
+              ? <span>命中，掉了 {notice.hpBefore! - notice.hpAfter!} 点血{notice.hpMax ? ` → ${notice.hpAfter} / ${notice.hpMax}` : ''}</span>
+              : <span>{notice.note ?? `命中，但数值没有变化${notice.hpAfter !== null && notice.hpMax ? `（${notice.hpAfter} / ${notice.hpMax}）` : ''}`}</span>}
           {notice.downed === 'dying' && <span className="tag">濒死</span>}
           {notice.downed === 'down' && <span className="tag">昏厥</span>}
         </div>
