@@ -261,11 +261,22 @@ test('Shift + 点击是压低', () => {
   assert.equal(api.getWorld().maps[0].heights[0], 1);
 });
 
-test('压低到 0 就不再往下', () => {
+test('压低可以到负数：那就是挖坑', () => {
   const map = heightFixture();
-  api.setHeightArea(map.id, { x0: 0, y0: 0, x1: 0, y1: 0 }, 0);
   api.nudgeHeight(map.id, [[0, 0]], -3);
-  assert.equal(api.getWorld().maps[0].heights?.[0] ?? 0, 0);
+  assert.equal(api.getWorld().maps[0].heights[0], -3, '地面下 3 格就是坑深 3');
+});
+
+test('挖坑最深到 -8（一层挑高）', () => {
+  const map = heightFixture();
+  api.nudgeHeight(map.id, [[0, 0]], -20);
+  assert.equal(api.getWorld().maps[0].heights[0], -8);
+});
+
+test('高度一律取整', () => {
+  const map = heightFixture();
+  api.setHeightArea(map.id, { x0: 0, y0: 0, x1: 0, y1: 0 }, 1.7);
+  assert.equal(api.getWorld().maps[0].heights[0], 2);
 });
 
 test('整次拖动只占一步撤销，undo 回到原样', () => {

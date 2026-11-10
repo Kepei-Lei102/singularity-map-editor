@@ -330,6 +330,16 @@ export function trialMove(dx: number, dy: number) {
   autoReveal(t.mapId);
 }
 
+/**
+ * 试玩里这个角色的六维填了吗。
+ * 没填的话区值是 0、门槛是 0，任何属性检定都必败——
+ * 掷了也只会得出「不行」，不如直接告诉他去填。
+ */
+function attributesFilled(pc: World['party'][number] | null | undefined): boolean {
+  const a = pc?.attributes;
+  return !!a && ['力量', '敏捷', '意志', '观察', '智慧', '魅力'].some((k) => (a[k] ?? 0) > 0);
+}
+
 /** 坑深：坑底比脚下低就按落差；坑底根本没面（同高）就当掉一层。 */
 function pitFallOf(m: GameMap, from: { x: number; y: number }, dx: number, dy: number): number {
   const cur = heightAt(m, from.x, from.y);
@@ -356,6 +366,11 @@ function beginGapJump(
   req.landingStep = ahead.landingStep;
   req.unitPrice = unitPrice;
   if (!plan.check) { settleJump(req, []); return; }
+  // 没填六维就别开判定：门槛 0，掷什么都过不了，白掷一次骰子。
+  const pc = w.party.find((p) => p.id === pcId);
+  if (!attributesFilled(pc)) {
+    return setTr({ msg: `${tok.name} 还没填六维（右上角角色面板 → 六维与 HP）。没填的话任何检定都是必败，先填上再跳` });
+  }
   const tier = plan.injury ?? injuryTier(fall);
   const err = openJudgment({
     title: `跳跃：坑宽 ${ahead.width} 格`,

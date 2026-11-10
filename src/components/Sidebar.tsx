@@ -4,6 +4,7 @@ import { canEditMap, setUI, toast, update, useUI, useWorld, type Tool } from '..
 import { CONN_LABEL, type ConnKind, type Room } from '../core/types';
 import { numbering, playerNumbering } from '../scene/render';
 import { effectiveLayer } from '../scene/vision';
+import { clampHeight, MAX_HEIGHT_CELLS, MIN_HEIGHT_CELLS } from '../scene/height';
 import { newMap } from '../core/defaults';
 import { cellName, uid } from '../core/util';
 import { Area, Check, Num, Row, Section, Txt } from './fields';
@@ -106,7 +107,7 @@ export function Sidebar() {
         {ui.tool === 'd100' && <div className="hint">D100 区域：恐怖副本等，用百分值检定。再刷一次可以擦掉。</div>}
         {ui.tool === 'heightBrush' && (
           <>
-            <div className="hint">左键抬高 1 格，按住拖动连续抬；Shift + 左键压低。最低到地面（0）。1 格 = 0.75 米，一层楼挑高 8 格。</div>
+            <div className="hint">左键抬高 1 格，按住拖动连续抬；Shift + 左键压低。压到负数就是挖坑：-3 表示坑底在地面下 3 格。1 格 = 0.75 米，一层楼挑高 8 格。</div>
             <button className="tool" onClick={() => setUI({ tool: 'heightRect', heightValue: 0 })}>切到框选压平 →</button>
           </>
         )}
@@ -114,7 +115,7 @@ export function Sidebar() {
           <>
             <div className="hint">拖出一片，再在下面填高度应用。压平就是填 0。</div>
             <Row label="高度（格）">
-              <Num value={ui.heightValue ?? 1} min={0} step={1} onChange={(v) => setUI({ heightValue: Math.max(0, Math.round(Number.isFinite(v) ? v : 0)) })} />
+              <Num value={ui.heightValue ?? 1} min={MIN_HEIGHT_CELLS} max={MAX_HEIGHT_CELLS} step={1} onChange={(v) => setUI({ heightValue: clampHeight(v) })} />
             </Row>
             {ui.heightRect && ui.heightRect.mapId === ui.mapId ? (
               <div className="hint">

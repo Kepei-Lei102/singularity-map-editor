@@ -497,3 +497,24 @@ test('有【攀爬】之后，3 格坑还是过不去（那是跳远的事）', 
   const plan = api.planJump('across', 3, withClimb);
   assert.equal(plan.allowed, false, '攀爬管上下，不管横跨');
 });
+
+// ---------- 挖坑：负高度 ----------
+
+test('挖坑：地面 0、坑底 -3 → 往下 3 格，会摔', () => {
+  const d = api.stepDrop(0, -3);
+  assert.equal(d.kind, 'stepDown');
+  assert.equal(d.height, 3);
+  assert.equal(d.safe, false);
+  assert.equal(d.injury, 'medium');
+});
+
+test('挖坑：从坑底爬回地面是往上，拦住', () => {
+  const d = api.stepDrop(-3, 0);
+  assert.equal(d.kind, 'blocked');
+});
+
+test('台阶：下一格还是正常走', () => {
+  const d = api.stepDrop(1, 0);
+  assert.equal(d.kind, 'stepDown');
+  assert.equal(d.safe, true);
+});

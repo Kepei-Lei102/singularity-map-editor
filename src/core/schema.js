@@ -93,6 +93,20 @@ export function repairWorld(w) {
   for (const m of w.maps) {
     if (!m || typeof m !== 'object') continue;
     clampNum(m, 'floor', -1000, 1000, `地图「${m.name}」的楼层`, true);
+    // 高度数组：长度不对就重建成对的长度，数值超范围/带小数就夹回去。
+    if (Array.isArray(m.heights)) {
+      const want = (Number(m.width) || 0) * (Number(m.height) || 0);
+      if (want > 0 && m.heights.length !== want) {
+        fixed.push(`地图「${m.name}」的高度数组长度 ${m.heights.length} → ${want}`);
+        const old = m.heights;
+        m.heights = Array.from({ length: want }, (_, i) => (typeof old[i] === 'number' && Number.isFinite(old[i]) ? old[i] : 0));
+      }
+      for (let i = 0; i < m.heights.length; i++) {
+        const raw = m.heights[i];
+        const v = Math.max(-8, Math.min(24, Math.round(Number.isFinite(raw) ? raw : 0)));
+        if (v !== raw) { fixed.push(`地图「${m.name}」第 ${i} 格高度：${raw} → ${v}`); m.heights[i] = v; }
+      }
+    }
     for (const o of Array.isArray(m.objects) ? m.objects : []) {
       clampNum(o, 'height', 0, 1000, `「${o?.name}」的高度`);
       clampNum(o, 'w', 1, MAX_SIDE, `「${o?.name}」的宽`, true);
@@ -308,6 +322,8 @@ export function checkWorld(w, migrated = false) {
     for (const L of Object.values(m.views ?? {})) checkSubFog(L, `${at}.views.subFog`);
     strings(m.cells, `${at}.cells`, n);
     arr(m.d100, `${at}.d100`, n).forEach((v, i) => num(v, `${at}.d100[${i}]`));
+    // 高度：每格一个整数，负数是往地面以下挖坑。范围跟 scene/height.ts 的 MIN/MAX 对齐。
+    if (m.heights !== undefined) arr(m.heights, `${at}.heights`, n).forEach((v, i) => int(v, `${at}.heights[${i}]`, -8, 24));
     fogs(m.fog, `${at}.fog`, n);
     optBool(m.autoFog, `${at}.autoFog`);
     if (migrated) for (const k of ['roomCells', 'seen', 'views', 'rooms']) if (m[k] === undefined) fail(`${at}.${k}`, '缺失');

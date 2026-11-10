@@ -94,10 +94,11 @@ export function PartyPanel() {
             <summary>六维与 HP <span className="muted">{(() => { const h = hpOf(p); return h.max ? `${h.hp}/${h.max}` : '未填'; })()}</span></summary>
             {ATTRS.map((a) => (
               <Row key={a} label={a}><span className="inline">
-                <Num value={p.attributes?.[a] ?? 0} min={0} onChange={(v) => update((d) => {
+                <Num value={p.attributes?.[a] ?? 0} min={0} max={100} onChange={(v) => update((d) => {
                   const pc = d.party.find((x) => x.id === p.id)!;
                   pc.attributes ??= {};
-                  pc.attributes[a] = Math.max(0, Number.isFinite(v) ? v : 0);
+                  // 属性是 0–100 的刻度，超出去区值就没有意义了。
+                  pc.attributes[a] = Math.min(100, Math.max(0, Number.isFinite(v) ? v : 0));
                 })} />
                 <span className="muted">区值 {Math.floor((p.attributes?.[a] ?? 0) / 5)}</span>
               </span></Row>

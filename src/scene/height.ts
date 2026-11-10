@@ -10,6 +10,21 @@ import type { GameMap } from '../core/types';
 
 /** 一层楼挑多高（格）。作者定：8 格 = 6 米。 */
 export const FLOOR_HEIGHT_CELLS = 8;
+
+/**
+ * 高度能用到的范围。
+ * 负数是往地面以下挖坑：坑底在地面下 3 格就写 -3，落差按高度差算。
+ * 最深到 -8（= 一层挑高），再深就该用下一层表达了。
+ */
+export const MIN_HEIGHT_CELLS = -FLOOR_HEIGHT_CELLS;
+/** 往上最多抬三层挑高，再多也该分层。 */
+export const MAX_HEIGHT_CELLS = FLOOR_HEIGHT_CELLS * 3;
+
+/** 高度一律取整并夹进可用范围。 */
+export function clampHeight(cells: number): number {
+  const v = Number.isFinite(cells) ? Math.round(cells) : 0;
+  return Math.min(MAX_HEIGHT_CELLS, Math.max(MIN_HEIGHT_CELLS, v));
+}
 /** 一格多少米。 */
 export const CELL_METERS = 0.75;
 
@@ -41,6 +56,7 @@ export function setHeight(m: GameMap, x: number, y: number, cells: number): bool
   if (!Number.isInteger(x) || !Number.isInteger(y)) return false;
   if (x < 0 || y < 0 || x >= m.width || y >= m.height) return false;
   if (!Number.isFinite(cells)) return false;
+  cells = clampHeight(cells);
   const i = y * m.width + x;
   if (!m.heights) {
     // 第一次写的时候补一个整层 0 的数组，之后按索引读写。

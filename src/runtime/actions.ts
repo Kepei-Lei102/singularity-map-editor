@@ -27,7 +27,7 @@ import { send } from './sync';
 import { migrateWorld } from '../scene/memory';
 import { knowledgeLayers, spatialKeys, visionMembers } from '../scene/vision';
 import { applySlidingMove, seesSlidingObject } from '../scene/sliding';
-import { setHeight } from '../scene/height';
+import { clampHeight, setHeight } from '../scene/height';
 
 export const findMap = (w: World | Draft<World>, id: string) => w.maps.find((m) => m.id === id);
 export const findObj = (w: World | Draft<World>, mapId: string, id: string) =>
@@ -1404,7 +1404,8 @@ export function nudgeHeight(mapId: string, cells: [number, number][], delta: num
     for (const [x, y] of cells) {
       if (x < 0 || y < 0 || x >= m.width || y >= m.height) continue;
       const before = m.heights?.[y * m.width + x] ?? 0;
-      const after = Math.max(0, before + delta); // 不能低于地面
+      // 负数就是往地面以下挖坑，不是错误值。
+      const after = clampHeight(before + delta);
       if (after === before) continue;
       setHeight(m, x, y, after);
       changed++;
@@ -1423,7 +1424,7 @@ export function setHeightArea(mapId: string, rect: { x0: number; y0: number; x1:
     const y0 = Math.max(0, Math.min(rect.y0, rect.y1));
     const x1 = Math.min(m.width - 1, Math.max(rect.x0, rect.x1));
     const y1 = Math.min(m.height - 1, Math.max(rect.y0, rect.y1));
-    const target = Math.max(0, height);
+    const target = clampHeight(height);
     for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) {
       const before = m.heights?.[y * m.width + x] ?? 0;
       if (before === target) continue;
