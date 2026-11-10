@@ -12,7 +12,7 @@ const temp = await mkdtemp(join(tmpdir(), 'ts-ui-test-'));
 const bundle = join(temp, 'editor.cjs');
 // Exercise the real pointer handlers without a DOM. Only React hooks and canvas are replaced.
 await build({
-  stdin: { contents: `export * from './src/core/defaults'; export * from './src/core/store'; export * from './src/scene/render'; export * from './src/components/Sidebar'; export * from './src/components/MapCanvas';`, resolveDir: root },
+  stdin: { contents: `export * from './src/core/defaults'; export * from './src/core/store'; export * from './src/scene/render'; export * from './src/components/Sidebar'; export * from './src/components/toolGroups'; export * from './src/components/MapCanvas';`, resolveDir: root },
   outfile: bundle, bundle: true, platform: 'node', format: 'cjs', logLevel: 'silent',
   plugins: [{ name: 'hooks', setup(b) {
     b.onResolve({ filter: /^react\/jsx-runtime$/ }, () => ({ path: 'jsx', namespace: 'test' }));

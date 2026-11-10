@@ -1,45 +1,21 @@
 import { useState } from 'react';
-import { canEditMap, setUI, toast, update, useUI, useWorld, type Mode, type Tool, type UIState } from '../core/store';
+import { ALL_TOOLS, GROUP_LABEL, GROUP_ORDER, toolsFor } from './toolGroups';
+import { canEditMap, setUI, toast, update, useUI, useWorld, type Tool } from '../core/store';
 import { CONN_LABEL, type ConnKind, type Room } from '../core/types';
 import { numbering, playerNumbering } from '../scene/render';
 import { effectiveLayer } from '../scene/vision';
 import { newMap } from '../core/defaults';
 import { cellName, uid } from '../core/util';
 import { Area, Check, Num, Row, Section, Txt } from './fields';
-import { captureRoomReset, resetRoom, saveRoomLayout, deleteRoomLayout, paintFog, setVisionAlgo } from '../runtime/actions';
+import { captureRoomReset, resetRoom, saveRoomLayout, deleteRoomLayout, paintFog, setVisionAlgo, nudgeHeight, setHeightArea } from '../runtime/actions';
 
-const ALL_TOOLS: [Tool, string, string][] = [
-  ['select', '选择/移动', 'V'],
-  ['pan', '平移地图', 'P'],
-  ['subdivide', '细分为3×3', ''],
-  ['unsubdivide', '取消细分', ''],
-  ['wall', '薄墙', ''],
-  ['glass', '玻璃墙', ''],
-  ['archDoor', '建筑门', ''],
-  ['archErase', '擦除建筑', ''],
-  ['paint', '画笔', 'B'],
-  ['fill', '矩形填充', 'R'],
-  ['erase', '橡皮', 'E'],
-  ['object', '物件', 'O'],
-  ['zone', '触发区', 'Z'],
-  ['conn', '连接点', 'C'],
-  ['token', '棋子', 'T'],
-  ['d100', 'D100 区域', 'D'],
-  ['room', '房间', 'M'],
-  ['fogReveal', '迷雾：看得见', 'F'],
-  ['fogHide', '迷雾：变灰', 'G'],
-  ['fogBlack', '迷雾：抹黑', 'H'],
-];
-// 编辑地图 = 形状；备团 = 内容（棋子初始位置、初始迷雾）；带团 = 跑
-export const MODE_TOOLS: Record<Mode, Tool[]> = {
-  edit: ['pan', 'subdivide', 'unsubdivide', 'wall', 'glass', 'archDoor', 'archErase', 'select', 'paint', 'fill', 'erase', 'object', 'zone', 'conn', 'room', 'd100'],
-  prep: ['select', 'pan', 'token', 'fogReveal', 'fogHide', 'fogBlack'],
-  run: ['select', 'pan', 'token', 'fogReveal', 'fogHide', 'fogBlack'],
+/** 框选矩形里的所有格子，按行排好。 */
+const allCellsIn = (r: { x0: number; y0: number; x1: number; y1: number }): [number, number][] => {
+  const out: [number, number][] = [];
+  for (let y = Math.min(r.y0, r.y1); y <= Math.max(r.y0, r.y1); y++)
+    for (let x = Math.min(r.x0, r.x1); x <= Math.max(r.x0, r.x1); x++) out.push([x, y]);
+  return out;
 };
-/** 当前能用的工具：解锁时把"编辑地图"的工具也加进来。 */
-export const toolsFor = (s: UIState): Tool[] =>
-  s.unlock && s.mode !== 'edit' ? [...new Set([...MODE_TOOLS[s.mode], ...MODE_TOOLS.edit])] : MODE_TOOLS[s.mode];
-export const TOOL_KEYS = Object.fromEntries(ALL_TOOLS.map(([t, , k]) => [k.toLowerCase(), t])) as Record<string, Tool>;
 
 export function Sidebar() {
   const w = useWorld();
@@ -76,10 +52,22 @@ export function Sidebar() {
 
       <Section title="工具">
         <div className="tools">
-          {tools.map(([t, label, key]) => (
-            <button key={t} className={ui.tool === t ? 'tool on' : 'tool'} aria-label={label} title={key ? `${label} · 快捷键 ${key}` : label}
-              onClick={() => setUI({ tool: t, pendingConn: null })}>{label}</button>
-          ))}
+          {GROUP_ORDER.map((g) => {
+            const inGroup = tools.filter(([, , , gg]) => gg === g);
+            if (!inGroup.length) return null;
+            return (
+              <div key={g} className="tool-group">
+                <div className="tool-group-name">{GROUP_LABEL[g]}</div>
+                <div className="tools">
+                  {inGroup.map(([t, label, key]) => (
+                    <button key={t} className={ui.tool === t ? 'tool on' : 'tool'} aria-label={label}
+                      title={key ? `${label} · 快捷键 ${key}` : label}
+                      onClick={() => setUI({ tool: t, pendingConn: null })}>{label}</button>
+                  ))}
+                </div>
+              </div>
+            );
+          })}
         </div>
         {ui.tool === 'pan' && <div className="hint">直接拖动地图平移；从家具、触发区或棋子上拖动也只移动视图，不改变选择。P 切到平移，V 回到选择/移动。</div>}
         {ui.tool.startsWith('fog') && <Row label="迷雾目标"><select value={ui.knowledgeTarget} onChange={e => setUI({ knowledgeTarget: e.target.value })}>
@@ -116,6 +104,48 @@ export function Sidebar() {
           </Row>
         )}
         {ui.tool === 'd100' && <div className="hint">D100 区域：恐怖副本等，用百分值检定。再刷一次可以擦掉。</div>}
+        {ui.tool === 'heightBrush' && (
+          <>
+            <div className="hint">左键抬高 1 格，按住拖动连续抬；Shift + 左键压低。最低到地面（0）。1 格 = 0.75 米，一层楼挑高 8 格。</div>
+            <button className="tool" onClick={() => setUI({ heightValue: 0 })}>全部压平（用框选工具）</button>
+          </>
+        )}
+        {ui.tool === 'heightRect' && (
+          <>
+            <div className="hint">拖出一片，再在下面填高度应用。压平就是填 0。</div>
+            <Row label="高度（格）">
+              <Num value={ui.heightValue ?? 1} min={0} step={1} onChange={(v) => setUI({ heightValue: v })} />
+            </Row>
+            {ui.heightRect && ui.heightRect.mapId === ui.mapId ? (
+              <div className="hint">
+                选中 {(Math.abs(ui.heightRect.x1 - ui.heightRect.x0) + 1)}×{(Math.abs(ui.heightRect.y1 - ui.heightRect.y0) + 1)} 格
+                <div className="tools">
+                  <button className="tool" onClick={() => {
+                    const n = setHeightArea(ui.mapId, ui.heightRect!, ui.heightValue ?? 1);
+                    toast(`整片设成 ${ui.heightValue ?? 1} 格，改了 ${n} 格`);
+                    setUI({ heightRect: null });
+                  }}>应用</button>
+                  <button className="tool" onClick={() => {
+                    const n = nudgeHeight(ui.mapId, allCellsIn(ui.heightRect!), 1);
+                    toast(`抬高 1 格，改了 ${n} 格`);
+                  }}>全部 +1</button>
+                  <button className="tool" onClick={() => {
+                    const n = nudgeHeight(ui.mapId, allCellsIn(ui.heightRect!), -1);
+                    toast(`压低 1 格，改了 ${n} 格`);
+                  }}>全部 −1</button>
+                  <button className="tool" onClick={() => {
+                    const n = setHeightArea(ui.mapId, ui.heightRect!, 0);
+                    toast(`压平了 ${n} 格`);
+                    setUI({ heightRect: null });
+                  }}>压平</button>
+                  <button className="tool" onClick={() => setUI({ heightRect: null })}>取消</button>
+                </div>
+              </div>
+            ) : (
+              <div className="hint">还没框选。</div>
+            )}
+          </>
+        )}
         {ui.mode === 'edit' && <Check label="显示迷雾" value={ui.showFogInEdit} onChange={(v) => setUI({ showFogInEdit: v })} />}
         {ui.mode === 'edit' && <Check label="规则书视野" value={ui.visionAlgo === 'rulebook'} onChange={(v) => setVisionAlgo(v ? 'rulebook' : 'legacy')} />}
         {ui.mode === 'edit' && (

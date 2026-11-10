@@ -191,7 +191,11 @@ export const useWorld = () => useSyncExternalStore(subscribe, getWorld);
 export type Tool =
   | 'select' | 'pan' | 'paint' | 'fill' | 'erase' | 'object' | 'zone' | 'conn' | 'token'
   | 'subdivide' | 'unsubdivide' | 'wall' | 'glass' | 'archDoor' | 'archErase'
-  | 'd100' | 'room' | 'fogReveal' | 'fogHide' | 'fogBlack';
+  | 'd100' | 'room' | 'fogReveal' | 'fogHide' | 'fogBlack'
+  /** 高度：单格抬高。左键 +1，Shift +左键 −1，拖动连续。 */
+  | 'heightBrush'
+  /** 高度：拖矩形设整片高度。 */
+  | 'heightRect';
 
 export type Selection =
   | { type: 'object'; mapId: string; id: string }
@@ -213,6 +217,10 @@ export interface UIState {
   materialId: string;
   paintLayer: 'terrain' | 'material'; // 画笔/矩形/橡皮写哪一层
   roomId: string; // 房间笔刷：'' = 擦掉房间
+  /** 高度工具：框选出来的矩形，松手后留在这里，等侧栏输入数值再应用。 */
+  heightRect?: { mapId: string; x0: number; y0: number; x1: number; y1: number } | null;
+  /** 高度工具用的目标高度，侧栏输入框绑这个。 */
+  heightValue?: number;
   brush: number;
   wallThickness: number;
   doorWidth: number;

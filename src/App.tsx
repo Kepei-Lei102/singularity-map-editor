@@ -4,14 +4,15 @@ import { JudgmentPanel } from './components/JudgmentPanel';
 import { SessionAI } from './components/SessionAI';
 import { SkillPanel } from './components/SkillPanel';
 import { listenPlayerDecisions } from './rules/consent';
-import { canEditMap, getRealWorld, getUI, getWorld, redo, setUI, undo, update, useUI, useWorld, type Mode, type Tab } from './core/store';
+import { canEditMap, getRealWorld, getUI, getWorld, redo, setUI, toast, undo, update, useUI, useWorld, type Mode, type Tab } from './core/store';
 import { exportWorldJson, autoLoadFromLauncher, checkDiskTarget, deleteMapObject, exportProject, findMap, hasBackup, importAnyFile, restoreBackup, saveToDisk, startFreshWorld } from './runtime/actions';
 import { demoWorld, emptyWorld } from './core/defaults';
 import { broadcastWorld, listenAsEditor, openPlayerWindow, send } from './runtime/sync';
 import { storageOK } from './core/store';
 import { MapCanvas } from './components/MapCanvas';
 import { cellName } from './core/util';
-import { Sidebar, TOOL_KEYS, toolsFor } from './components/Sidebar';
+import { Sidebar } from './components/Sidebar';
+import { pickToolForKey, toolsFor } from './components/toolGroups';
 import { Inspector } from './components/Inspector';
 import { RecordPanel } from './components/RecordPanel';
 import { FlowPanel } from './components/FlowPanel';
@@ -103,10 +104,13 @@ function Editor() {
       if (e.key === ']') { const p = panels.current.right; p.setOpen(!p.open); return; }
       if (e.key === 'Escape') setUI({ pendingConn: null, selection: null, tool: 'select' });
       else if (e.key === 'Delete' || e.key === 'Backspace') deleteSelection();
-      else if (TOOL_KEYS[e.key.toLowerCase()]) {
-        const t = TOOL_KEYS[e.key.toLowerCase()];
-        if (!toolsFor(getUI()).includes(t)) return;
-        setUI({ tool: t, pendingConn: null });
+      else {
+        // 一个字母可能带两个工具：按一下用上次的，再按一下切到另一个。
+        const picked = pickToolForKey(e.key.toLowerCase(), getUI().tool);
+        if (!picked) return;
+        if (!toolsFor(getUI()).includes(picked.tool)) return;
+        setUI({ tool: picked.tool, pendingConn: null });
+        if (picked.hint) toast(picked.hint);
       }
     };
     window.addEventListener('keydown', onKey);

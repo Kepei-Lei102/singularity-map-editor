@@ -415,6 +415,29 @@ export function render(
       }
     }
 
+  // 高度：整层平就不用画。有高度的地方叠一层暖色，越高越亮，右上角标数字。
+  if (!player && map.heights && map.heights.some((v) => v)) {
+    const max = Math.max(1, ...map.heights.map((v) => v || 0));
+    for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) {
+      const h = map.heights[y * W + x] || 0;
+      if (!h) continue;
+      // 越高越亮、越偏橙。0 层不画，所以平地保持原样。
+      const t = Math.min(1, h / Math.max(4, max));
+      ctx.globalAlpha = .18 + t * .38;
+      ctx.fillStyle = `hsl(${42 - t * 22}, ${70 + t * 20}%, ${52 + t * 18}%)`;
+      ctx.fillRect(x * CS, y * CS, CS + .1, CS + .1);
+      ctx.globalAlpha = 1;
+      // 数字标在右上角，字号跟着格子走
+      ctx.fillStyle = 'rgba(20,16,10,.85)';
+      ctx.font = `${Math.max(7, CS * .26)}px system-ui, sans-serif`;
+      ctx.textAlign = 'right';
+      ctx.textBaseline = 'top';
+      ctx.fillText(String(h), x * CS + CS - 2, y * CS + 1);
+    }
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'alphabetic';
+  }
+
   // 网格
   ctx.strokeStyle = 'rgba(0,0,0,0.16)';
   ctx.lineWidth = 1 / view.zoom;

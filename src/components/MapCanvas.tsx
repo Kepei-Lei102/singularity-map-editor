@@ -1,7 +1,7 @@
 import { effectiveLayer } from '../scene/vision';
 import { objectEnabled } from '../core/objectData.js';
 import { architectureWalls, architectureDoors, isArchitectureObject, characterPathClear, furnitureSweepBlocked, isSubdivided, tokenPosition, objectRect, anchorFromPoint } from '../scene/architecture';
-import { addArchitectureDoor, addArchitectureWall, eraseArchitecture, moveMapToken, paintFog, paintMaterialCells, paintMaterialSubcells, paintTerrainCells, paintTerrainSubcells, subdivideRegion, toggleArchitectureDoor } from '../runtime/actions';
+import { addArchitectureDoor, addArchitectureWall, eraseArchitecture, moveMapToken, paintFog, paintMaterialCells, paintMaterialSubcells, paintTerrainCells, paintTerrainSubcells, subdivideRegion, toggleArchitectureDoor, nudgeHeight } from '../runtime/actions';
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { GameMap, World } from '../core/types';
 import { CS, cellLine, uid } from '../core/util';
@@ -15,6 +15,10 @@ type Drag =
   | { k: 'wall'; ax: number; ay: number; bx: number; by: number }
   | { k: 'pan'; sx: number; sy: number; px: number; py: number }
   | { k: 'paint'; lx: number; ly: number; fx: number; fy: number; value: number }
+  /** 高度：单格抬高。delta 是每一步加多少（Shift 时为 −1）。 */
+  | { k: 'height'; lx: number; ly: number; fx: number; fy: number; delta: number }
+  /** 高度：框选一片，松手后留矩形，等侧栏输入数值再应用。 */
+  | { k: 'heightRect'; x0: number; y0: number; x1: number; y1: number }
   | { k: 'rect'; x0: number; y0: number; x1: number; y1: number; ax: number; ay: number; fine?: boolean; fx0?: number; fy0?: number; fx1?: number; fy1?: number }
   | { k: 'obj'; id: string; ox: number; oy: number; moved: boolean; next: Selection }
   | { k: 'tok'; id: string; fx: number; fy: number; moved: boolean; next: Selection }
@@ -230,6 +234,20 @@ export function MapCanvas({ world, map, mode, playerNumbers = false, follow, vie
     const inMap = cx >= 0 && cy >= 0 && cx < m.width && cy < m.height;
     const tool = s.tool;
 
+    // 高度：左键抬高、Shift 左键压低。单格拖动连续改；框选拖出矩形松手设整片。
+    if (tool === 'heightBrush' || tool === 'heightRect') {
+      if (!inMap) return startPan();
+      const delta = e.shiftKey ? -1 : 1;
+      beginBatch();
+      if (tool === 'heightRect') {
+        drag.current = { k: 'heightRect', x0: cx, y0: cy, x1: cx, y1: cy };
+        setPreview({ x: cx, y: cy, w: 1, h: 1 });
+      } else {
+        drag.current = { k: 'height', lx: cx, ly: cy, fx: cx, fy: cy, delta };
+        nudgeHeight(m.id, [[cx, cy]], delta);
+      }
+      return;
+    }
     if (tool === 'wall' || tool === 'glass') {
       const { gx, gy } = toCell(e), ax = Math.round(gx * 3), ay = Math.round(gy * 3);
       drag.current = { k: 'wall', ax, ay, bx: ax, by: ay }; return;
@@ -357,6 +375,15 @@ export function MapCanvas({ world, map, mode, playerNumbers = false, follow, vie
       if (Math.abs(bx - dr.ax) >= Math.abs(by - dr.ay)) by = dr.ay; else bx = dr.ax;
       dr.bx = bx; dr.by = by;
       setPreview({ x: Math.min(dr.ax, bx) / 3, y: Math.min(dr.ay, by) / 3, w: Math.max(.05, Math.abs(bx - dr.ax) / 3), h: Math.max(.05, Math.abs(by - dr.ay) / 3) });
+    } else if (dr.k === 'height') {
+      // 单格抬高：拖动时沿着线把经过的格子都调一次
+      if (cx === dr.lx && cy === dr.ly) return;
+      nudgeHeight(map.id, cellLine(dr.lx, dr.ly, cx, cy), dr.delta);
+      dr.lx = cx; dr.ly = cy;
+    } else if (dr.k === 'heightRect') {
+      dr.x1 = clampX(cx); dr.y1 = clampY(cy);
+      setPreview({ x: Math.min(dr.x0, dr.x1), y: Math.min(dr.y0, dr.y1),
+        w: Math.abs(dr.x1 - dr.x0) + 1, h: Math.abs(dr.y1 - dr.y0) + 1 });
     } else if (dr.k === 'paint') {
       const { gx, gy } = toCell(e);
       const fx = Math.floor(gx * 3), fy = Math.floor(gy * 3);
@@ -440,6 +467,14 @@ export function MapCanvas({ world, map, mode, playerNumbers = false, follow, vie
       setPreview(null);
     }
     if (dr.k === 'wall') { const error = addArchitectureWall(map.id, { x: dr.ax, y: dr.ay }, { x: dr.bx, y: dr.by }, getUI().tool === 'glass' ? 'glass' : 'wall', getUI().wallThickness); if (error) toast(error); setPreview(null); }
+    // 高度：单格拖动收尾；框选只记下矩形，侧栏输入数值再应用。
+    if (dr.k === 'height') { endBatch(); setPreview(null); }
+    if (dr.k === 'heightRect' && preview) {
+      endBatch();
+      setPreview(null);
+      setUI({ heightRect: { mapId: map.id, x0: preview.x, y0: preview.y,
+        x1: preview.x + preview.w - 1, y1: preview.y + preview.h - 1 } });
+    }
     if (dr.k === 'paint' || dr.k === 'obj') endBatch();
     if (dr.k === 'tok') {
       endBatch();
