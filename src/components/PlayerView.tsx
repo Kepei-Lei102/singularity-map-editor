@@ -7,6 +7,7 @@ import { UTTERANCE_MAX } from '../rules/dialogue';
 import { MediaView } from './MediaPanel';
 import { DiceTray, type DiceTrayRecord } from './DiceTray';
 import { hpOf } from '../rules/combat';
+import { damageLanded } from '../runtime/trial';
 
 /** 玩家窗口：主持人共享这个窗口的屏幕给玩家。只显示玩家该看到的东西。 */
 export function PlayerView() {
@@ -140,7 +141,9 @@ export function PlayerView() {
           <b>{notice.role === 'attacker' ? `你打 ${notice.targetName}` : `${notice.attackerName} 打你`}</b>
           {notice.kind === 'miss'
             ? <span>没打中</span>
-            : <span>命中，掉了 {notice.damage} 点血{notice.hpAfter !== null && notice.hpMax ? ` → ${notice.hpAfter} / ${notice.hpMax}` : ''}</span>}
+            : damageLanded(notice)
+              ? <span>命中，掉了 {notice.damage} 点血{notice.hpAfter !== null && notice.hpMax ? ` → ${notice.hpAfter} / ${notice.hpMax}` : ''}</span>
+              : <span>命中，但数值没有变化{notice.hpAfter !== null && notice.hpMax ? `（${notice.hpAfter} / ${notice.hpMax}）` : ''}</span>}
           {notice.downed === 'dying' && <span className="tag">濒死</span>}
           {notice.downed === 'down' && <span className="tag">昏厥</span>}
         </div>

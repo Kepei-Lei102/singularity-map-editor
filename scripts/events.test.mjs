@@ -166,6 +166,32 @@ test('攻击事件的 check 用的是 kind/band，不再拿 dc:0 当哨兵', () 
   assert.equal(c.outcome, '命中');
 });
 
+test('卡片口径：没真扣到血就不算「伤害落地」，别显示 −N', () => {
+  // 正常命中掉血
+  fight();
+  api.trialAttack('tb', { roll: 50, roller: () => 3 });
+  assert.equal(api.damageLanded(api.getUI().trial.event), true);
+
+  // 落空：伤害 0
+  fight();
+  api.trialAttack('tb', { roll: 3, roller: () => 3 });
+  assert.equal(api.damageLanded(api.getUI().trial.event), false);
+
+  // 打已经昏厥、hp 已 0 的人：0 → 0
+  fight({ targetHp: 0, targetToken: { down: true } });
+  api.trialAttack('tb', { roll: 50, roller: () => 3 });
+  assert.equal(api.damageLanded(api.getUI().trial.event), false);
+
+  // 打没血条的 NPC：hpBefore/hpAfter 都是 null
+  const { m } = fight();
+  api.update((d) => {
+    const t = api.findMap(d, m.id).tokens.find((x) => x.id === 'tb');
+    delete t.pcId; delete t.hp; delete t.hpMax;
+  });
+  assert.equal(api.trialAttack('tb', { roll: 50, roller: () => 3 }), null);
+  assert.equal(api.damageLanded(api.getUI().trial.event), false);
+});
+
 test('锐器是「这一击的选择」：打完自动回钝器，勾了没用掉也会在结束回合时清掉', () => {
   fight();
   api.update((d) => { d.party.find((p) => p.id === 'a').sharp = true; }); // 角色卡上带着锐器

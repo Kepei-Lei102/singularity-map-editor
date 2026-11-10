@@ -846,6 +846,14 @@ export function settleAttack(
   return null;
 }
 
+/**
+ * 这一击真的扣到血了吗：落空、打已经 0 血的人、打没血条的 NPC，都不算。
+ * 卡片/玩家窗口用它决定要不要显示「−N 伤害」——账本不记的变化，卡片也不该报。
+ */
+export function damageLanded(ev: { damage: number; hpBefore: number | null; hpAfter: number | null }): boolean {
+  return ev.damage > 0 && ev.hpBefore !== null && ev.hpAfter !== null && ev.hpAfter !== ev.hpBefore;
+}
+
 /** 关掉大事卡片。 */
 export function clearTrialEvent() {
   const t = tr();

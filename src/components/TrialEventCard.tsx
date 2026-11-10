@@ -1,6 +1,6 @@
 import { useEffect } from 'react';
 import { useUI, useWorld } from '../core/store';
-import { clearTrialEvent } from '../runtime/trial';
+import { clearTrialEvent, damageLanded } from '../runtime/trial';
 
 /** 试玩里的大事（攻击、伤害、濒死）：单独一张大卡片浮在地图上方，不跟下面那排小字挤在一起。 */
 export function TrialEventCard() {
@@ -16,6 +16,8 @@ export function TrialEventCard() {
   }, [at]);
   if (!ev || !ui.trial) return null;
   const isHit = ev.kind === 'hit';
+  // 没真扣到血就别报伤害数字：打已经倒地的人、打没血条的 NPC，账本都记「没变化」。
+  const landed = isHit && damageLanded(ev);
   const color = (pcId: string | null) => (pcId ? w.party.find((p) => p.id === pcId)?.color ?? '#fff' : '#fff');
   return (
     <div className={`trial-event ${ev.kind}`} role="status">
@@ -31,7 +33,7 @@ export function TrialEventCard() {
         {(ev.dice ?? 1) > 1 && <span className="dice-crit">{(ev.dice ?? 1) === 4 ? '特大成功 ×4' : '大成功 ×2'}</span>}
         {!isHit && <span className="dice-miss-tag">大失败 · 落空</span>}
       </div>
-      {isHit ? (
+      {landed ? (
         <div className="trial-event-damage">
           <span className="damage-num">−{ev.damage}</span>
           <span className="damage-label">伤害</span>
@@ -46,6 +48,7 @@ export function TrialEventCard() {
         </div>
       ) : null}
       {ev.note && <div className="trial-event-note">{ev.note}</div>}
+      {isHit && !landed && !ev.note && <div className="trial-event-note">命中，但数值没有变化</div>}
       <div className="trial-event-foot">1 行动点已用 · 按空格结束回合<a onClick={clearTrialEvent}>收起</a></div>
     </div>
   );
