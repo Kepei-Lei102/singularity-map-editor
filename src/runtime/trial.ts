@@ -398,7 +398,7 @@ function beginUpClimb(
   if (!plan.allowed) return setTr({ msg: plan.reason });
   const req: JumpRequest = {
     tokenId: tok.id, dx, dy, kind: 'up', cells: climb, fall: climb,
-    attr: plan.check?.attr ?? null, landing, injury: plan.injury, moveMultiplier: plan.moveMultiplier,
+    attr: plan.check?.attr ?? null, dice: plan.check?.dice, landing, injury: plan.injury, moveMultiplier: plan.moveMultiplier,
     usesAction: plan.usesAction,
   };
   req.landingStep = 1;
@@ -433,7 +433,7 @@ function beginDownJump(
   const plan = planJump('down', fall, skills, fall);
   const req: JumpRequest = {
     tokenId: tok.id, dx, dy, kind: 'down', cells: fall, fall,
-    attr: plan.check?.attr ?? null, landing, injury: plan.injury, moveMultiplier: plan.moveMultiplier,
+    attr: plan.check?.attr ?? null, dice: plan.check?.dice, landing, injury: plan.injury, moveMultiplier: plan.moveMultiplier,
   };
   req.landingStep = 1;
   req.unitPrice = unitPrice;
@@ -477,7 +477,7 @@ function beginGapJump(
   const landing = { x: from.x + dx * ahead.landingStep, y: from.y + dy * ahead.landingStep };
   const req: JumpRequest = {
     tokenId: tok.id, dx, dy, kind: 'across', cells: ahead.width, fall,
-    attr: plan.check?.attr ?? null, landing, injury: plan.injury, moveMultiplier: plan.moveMultiplier,
+    attr: plan.check?.attr ?? null, dice: plan.check?.dice, landing, injury: plan.injury, moveMultiplier: plan.moveMultiplier,
   };
   req.landingStep = ahead.landingStep;
   req.unitPrice = unitPrice;
@@ -532,7 +532,7 @@ export function settleJump(req: JumpRequest, values: number[]): string {
 
   let roll: JumpRoll | null = null;
   if (req.attr) {
-    const check: JumpCheck = { attr: req.attr, mode: 'single', why: '' };
+    const check: JumpCheck = { attr: req.attr, dice: req.dice ?? 'single', why: '' };
     roll = judgeValue(check, pc ?? ({ attributes: {} } as never), values);
   }
   const landed = roll === null || roll.success;

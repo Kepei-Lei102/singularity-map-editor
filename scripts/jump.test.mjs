@@ -40,7 +40,7 @@ test('平行跳：2 格要敏捷检定', () => {
   const p = api.planJump('across', 2, NO);
   assert.equal(p.allowed, true);
   assert.equal(p.check.attr, '敏捷');
-  assert.equal(p.check.mode, 'single');
+  assert.equal(p.check.dice, 'single');
 });
 
 test('平行跳：3 格是长跳，没技能不行', () => {
@@ -170,11 +170,11 @@ test('摔伤骰：1D4 / 1D8 / 1D12 / 1D20', () => {
 test('往下没技能：≤2 格单敏捷，3–5 格劣势敏捷，6 格以上必摔', () => {
   const a = api.planJump('down', 2, NO);
   assert.equal(a.check.attr, '敏捷');
-  assert.equal(a.check.mode, 'single');
+  assert.equal(a.check.dice, 'single');
   assert.equal(a.injury, 'light');
 
   const b = api.planJump('down', 4, NO);
-  assert.equal(b.check.mode, 'disadvantage');
+  assert.equal(b.check.dice, 'disadvantage');
   assert.equal(b.injury, 'medium');
 
   const c = api.planJump('down', 6, NO);
@@ -245,28 +245,32 @@ test('区值 = 属性 ÷ 5 向下取整，DC 是 20', () => {
 });
 
 test('优势取高的那个', () => {
-  const p = pc({ 敏捷: 10 }); // 区值 2，DC 20 → 骰点要 > 18
-  // 优势取高：掷 5 和 18，取 18 → 2+18 = 20，只是平 DC，不算过
-  assert.equal(api.rollJumpCheck(p, { attr: '敏捷', mode: 'advantage', why: '' }, dice(5, 18)).success, false);
-  assert.equal(api.rollJumpCheck(p, { attr: '敏捷', mode: 'advantage', why: '' }, dice(18, 5)).success, false);
-  // 取 19 → 21 > 20，过了
-  assert.equal(api.rollJumpCheck(p, { attr: '敏捷', mode: 'advantage', why: '' }, dice(19, 5)).success, true);
-  assert.equal(api.rollJumpCheck(p, { attr: '敏捷', mode: 'advantage', why: '' }, dice(5, 19)).success, true);
+  const p = pc({ 敏捷: 10 }); // 区值 2，DC 20 → 骰点要 ≥ 18
+  // 取 17 → 19，差一格
+  assert.equal(api.rollJumpCheck(p, { attr: '敏捷', dice: 'advantage', why: '' }, dice(5, 17)).success, false);
+  assert.equal(api.rollJumpCheck(p, { attr: '敏捷', dice: 'advantage', why: '' }, dice(17, 5)).success, false);
+  // 取 18 → 20，正好到 DC，算过
+  assert.equal(api.rollJumpCheck(p, { attr: '敏捷', dice: 'advantage', why: '' }, dice(18, 5)).success, true);
+  assert.equal(api.rollJumpCheck(p, { attr: '敏捷', dice: 'advantage', why: '' }, dice(5, 18)).success, true);
 });
 
 test('劣势取低的那个', () => {
   const p = pc({ 敏捷: 50 }); // 区值 10，DC 20 → 骰点要 > 10
-  assert.equal(api.rollJumpCheck(p, { attr: '敏捷', mode: 'disadvantage', why: '' }, dice(20, 15)).success, true);
-  assert.equal(api.rollJumpCheck(p, { attr: '敏捷', mode: 'disadvantage', why: '' }, dice(15, 20)).success, true);
+  assert.equal(api.rollJumpCheck(p, { attr: '敏捷', dice: 'disadvantage', why: '' }, dice(20, 15)).success, true);
+  assert.equal(api.rollJumpCheck(p, { attr: '敏捷', dice: 'disadvantage', why: '' }, dice(15, 20)).success, true);
   // 取低 = 2 → 12 ≤ 20，没过
-  assert.equal(api.rollJumpCheck(p, { attr: '敏捷', mode: 'disadvantage', why: '' }, dice(20, 2)).success, false);
+  assert.equal(api.rollJumpCheck(p, { attr: '敏捷', dice: 'disadvantage', why: '' }, dice(20, 2)).success, false);
 });
 
-test('D20 区骰 20 是大成功，但一样要过总数', () => {
-  // 区值 0 时 0+20 = 20 只是平 DC，不算过——「大于」才是过。
-  assert.equal(api.rollJumpCheck(pc({ 敏捷: 0 }), { attr: '敏捷', mode: 'single', why: '' }, dice(20)).success, false);
-  // 区值 2 时 2+20 = 22 > 20，过。
-  assert.equal(api.rollJumpCheck(pc({ 敏捷: 10 }), { attr: '敏捷', mode: 'single', why: '' }, dice(20)).success, true);
+test('极值覆盖总数：掷 20 必过，掷 1 必不过', () => {
+  // 区值 0 的人掷 20 也过——大成功不看总数。
+  const r = api.rollJumpCheck(pc({ 敏捷: 0 }), { attr: '敏捷', dice: 'single', why: '' }, dice(20));
+  assert.equal(r.success, true);
+  assert.equal(r.tier, 'crit');
+  // 属性再高，掷 1 也是大失败。
+  const f = api.rollJumpCheck(pc({ 敏捷: 100 }), { attr: '敏捷', dice: 'single', why: '' }, dice(1));
+  assert.equal(f.success, false);
+  assert.equal(f.tier, 'fumble');
 });
 
 // ---------- 高度恐惧 ----------
@@ -280,9 +284,9 @@ test('高度恐惧四档', () => {
 
 test('恐惧检定的掷法跟着档位走', () => {
   assert.equal(api.fearCheck('none'), null);
-  assert.equal(api.fearCheck('advantage').mode, 'advantage');
-  assert.equal(api.fearCheck('normal').mode, 'single');
-  assert.equal(api.fearCheck('disadvantage').mode, 'disadvantage');
+  assert.equal(api.fearCheck('advantage').dice, 'advantage');
+  assert.equal(api.fearCheck('normal').dice, 'single');
+  assert.equal(api.fearCheck('disadvantage').dice, 'disadvantage');
   assert.equal(api.fearCheck('normal').attr, '意志');
 });
 
@@ -453,30 +457,30 @@ test('坑宽超过 3 格就跳不过去', () => {
 // ---------- 判定流程掷完拿到的点数 ----------
 
 test('judgeValue：单掷只用一颗，优势取高，劣势取低', () => {
-  const chk = { attr: '敏捷', mode: 'single', why: '' };
+  const chk = { attr: '敏捷', dice: 'single', why: '' };
   const pc50 = pc({ 敏捷: 50 }); // 区值 10 → DC 20
   assert.equal(api.judgeValue(chk, pc50, [20]).used, 20);
-  assert.equal(api.judgeValue({ ...chk, mode: 'advantage' }, pc50, [8, 20]).used, 20, '优势取高');
-  assert.equal(api.judgeValue({ ...chk, mode: 'disadvantage' }, pc50, [20, 8]).used, 8, '劣势取低');
+  assert.equal(api.judgeValue({ ...chk, dice: 'advantage' }, pc50, [8, 20]).used, 20, '优势取高');
+  assert.equal(api.judgeValue({ ...chk, dice: 'disadvantage' }, pc50, [20, 8]).used, 8, '劣势取低');
 });
 
-test('judgeValue：区值 2 掷 18 正好平 DC，不算过', () => {
+test('judgeValue：区值 2 掷 18 正好到 DC，算过', () => {
   const pc10 = pc({ 敏捷: 10 }); // 区值 2
-  const r = api.judgeValue({ attr: '敏捷', mode: 'single', why: '' }, pc10, [18]);
+  const r = api.judgeValue({ attr: '敏捷', dice: 'single', why: '' }, pc10, [18]);
   assert.equal(r.dc, 20);
   assert.equal(r.total, 20);
-  assert.equal(r.success, false);
-  assert.equal(api.judgeValue({ attr: '敏捷', mode: 'single', why: '' }, pc10, [19]).success, true);
+  assert.equal(r.success, true, '到 DC 就算过（≥）');
+  assert.equal(api.judgeValue({ attr: '敏捷', dice: 'single', why: '' }, pc10, [17]).success, false);
 });
 
 test('judgeValue：D20 区的骰点不会超过 20', () => {
-  const r = api.judgeValue({ attr: '敏捷', mode: 'single', why: '' }, pc({ 敏捷: 10 }), [100]);
+  const r = api.judgeValue({ attr: '敏捷', dice: 'single', why: '' }, pc({ 敏捷: 10 }), [100]);
   assert.equal(r.used, 20, '超过面数的点数要夹到 20');
   assert.equal(r.success, true);
 });
 
 test('优势采信的是高的那颗，不是被丢掉的那颗', () => {
-  const r = api.judgeValue({ attr: '敏捷', mode: 'advantage', why: '' }, pc({ 敏捷: 50 }), [5, 20]);
+  const r = api.judgeValue({ attr: '敏捷', dice: 'advantage', why: '' }, pc({ 敏捷: 50 }), [5, 20]);
   assert.equal(r.used, 20);
   assert.match(api.describeRoll(r), /骰点 5\/20/);
 });

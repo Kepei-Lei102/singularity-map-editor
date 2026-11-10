@@ -13,7 +13,7 @@ await build({
   stdin: { contents: `export * from './src/rules/interaction'; export { blocksMovement } from './src/scene/perception';`, resolveDir: root },
   outfile: bundle, bundle: true, platform: 'node', format: 'cjs', logLevel: 'silent',
 });
-const { attrValue, pickRoll, tierOfRoll, resolve, resolveContest, finalDC, sideAdvantage, planEffects, resolveOutcomes, materialize, applyTransitions, parseAdHoc, applyAdHoc, meCost, checkForSource, checkPreconditions, describeUnmet, resolveLuck, luckThreshold, applyKnowledge, effectKind, blocksMovement } = await import(bundle);
+const { attrValue, pickRoll, tierOfRoll, resolveChecks, rollSpec, resolve, resolveContest, finalDC, sideAdvantage, planEffects, resolveOutcomes, materialize, applyTransitions, parseAdHoc, applyAdHoc, meCost, checkForSource, checkPreconditions, describeUnmet, resolveLuck, luckThreshold, applyKnowledge, effectKind, blocksMovement } = await import(bundle);
 after(() => rm(temp, { recursive: true, force: true }));
 
 const sheet = (o = {}) => ({ 力量: 50, 敏捷: 50, 意志: 50, 观察: 50, 智慧: 50, 魅力: 50, ...o });
@@ -299,4 +299,41 @@ test('applyKnowledge 按角色记下发现，返回条数', () => {
   assert.equal(map.objects[0].secrets[0].discoveries.a.at, 7);
   assert.equal(map.objects[0].secrets[0].discoveries.b.tier, 'success');
   assert.equal(applyKnowledge(map, [{ kind: 'state', mapId: 'm', objectId: 'clue', from: 0, to: 1, rev: 0 }]), 0);
+});
+
+// ---------- 新判定入口：每项属性各带自己的骰 ----------
+
+test('优劣势挂在哪项属性上：魅力有优势、智慧只掷一次', () => {
+  const spec = { attrs: [{ attr: '魅力', dice: 'advantage' }, { attr: '智慧' }], merge: 'all' };
+  const calls = [];
+  const rolls = rollSpec(spec, () => { calls.push(1); return 10; });
+  assert.equal(calls.length, 3, '魅力掷两次、智慧掷一次');
+  assert.deepEqual(rolls.map((r) => r.length), [2, 1]);
+});
+
+test('与：两项都要过；取高只对魅力那一项生效', () => {
+  const spec = { attrs: [{ attr: '魅力', dice: 'advantage' }, { attr: '智慧' }], merge: 'all' };
+  const sheetBoth = sheet({ 魅力: 50, 智慧: 50 }); // 两项区值都是 10 → DC 20 要骰点 ≥10
+  // 魅力 5/20 取高 = 20（大成功）；智慧 18 也过 → 整体过
+  const pass = resolveChecks(spec, sheetBoth, [[5, 20], [18]]);
+  assert.equal(pass.success, true);
+  assert.equal(pass.tier, 'success');
+  // 智慧只掷一次，掷 5 → 15 < 20 → 整体不过
+  const fail = resolveChecks(spec, sheetBoth, [[5, 20], [5]]);
+  assert.equal(fail.success, false);
+});
+
+test('或：一项大失败只判死它自己，另一项过了照样算过', () => {
+  const spec = { attrs: [{ attr: '敏捷' }, { attr: '观察' }], merge: 'any' };
+  const res = resolveChecks(spec, sheet(), [[1], [18]]); // 敏捷掷 1，观察掷 18
+  assert.equal(res.checks[0].success, false, '敏捷大失败');
+  assert.equal(res.checks[1].success, true, '观察正常过');
+  assert.equal(res.success, true, '「或」只要一项过就过');
+  assert.equal(res.tier, 'success', '有项大失败但整体成功，档位仍是成功');
+});
+
+test('单项检定掷 20 必过、掷 1 必不过（极值覆盖总数）', () => {
+  const low = sheet({ 敏捷: 0 }); // 区值 0
+  assert.equal(resolveChecks({ attrs: [{ attr: '敏捷' }] }, low, [[20]]).success, true);
+  assert.equal(resolveChecks({ attrs: [{ attr: '敏捷' }] }, sheet({ 敏捷: 100 }), [[1]]).success, false);
 });

@@ -24,7 +24,7 @@
 // 高度恐惧：往下看和跳上去都算（作者说两样都有）。四档见 height.ts。
 import type { PC } from '../core/types';
 import { fearTier, fearRollMode, type FearTier } from '../scene/height';
-import { attrValue, DEFAULT_DC, resolveCheck, type AttributeCheck, type Scale } from './interaction';
+import { attrValue, DEFAULT_DC, resolveChecks, rollSpec, type AttributeCheck, type DiceMode, type Scale } from './interaction';
 
 /** 一格多少米。跟 height.ts 保持一致。 */
 const CELL_M = 0.75;
@@ -39,8 +39,8 @@ export type JumpAttr = '敏捷' | '力量' | '意志';
 /** 一个跳跃动作要掷什么。 */
 export interface JumpCheck {
   attr: JumpAttr;
-  /** 优势掷两次取高，劣势掷两次取低。 */
-  mode: 'single' | 'advantage' | 'disadvantage';
+  /** 这项属性的骰：一颗／优势骰（两次取高）／劣势骰（两次取低）。 */
+  dice: DiceMode;
   /** 给人看的理由，比如「往下 5 格，劣势敏捷」。 */
   why: string;
   /**
@@ -71,19 +71,17 @@ export interface JumpRoll extends Omit<AttributeCheck, 'attr'> { attr: JumpAttr 
  * 真正的判定口径在 interaction.resolveCheck()，全项目只有那一处。
  */
 export function judgeValue(check: JumpCheck, pc: PC, values: number[]): JumpRoll {
-  const { scale, dc } = jumpScale(check);
-  const c = resolveCheck({
-    attributes: pc.attributes, attr: check.attr, rolls: values, scale, dc,
-    mode: check.mode === 'single' ? 'normal' : check.mode,
-  });
-  return { ...c, attr: check.attr as JumpAttr };
+  const res = resolveChecks(
+    { attrs: [{ attr: check.attr, dice: check.dice }], scale: check.scale, merge: 'single' },
+    pc.attributes, [values],
+  );
+  return { ...res.checks[0], attr: check.attr as JumpAttr };
 }
 
 export function rollJumpCheck(pc: PC, check: JumpCheck, roll: (sides: number) => number = rollDie): JumpRoll {
-  const { sides } = jumpScale(check);
+  const spec = { attrs: [{ attr: check.attr, dice: check.dice }], scale: check.scale };
   // 单掷只抽一颗：多抽的随机数会打乱可复现的骰子序列。
-  const a = roll(sides);
-  return judgeValue(check, pc, check.mode === 'single' ? [a] : [a, roll(sides)]);
+  return judgeValue(check, pc, rollSpec(spec, roll)[0]);
 }
 
 export function describeRoll(r: JumpRoll): string {
@@ -202,10 +200,10 @@ export function planJump(kind: JumpKind, cells: number, skills: JumpSkills = NO_
     // 掉进坑里摔多重，看坑有多深——不是一律中伤。
     const hurt = { ...base, injury: injuryTier(base.fall) };
     if (n <= 1) return { ...hurt, check: null, allowed: true, reason: '一格，不用检定' };
-    if (n === 2) return { ...hurt, check: { attr: '敏捷', mode: 'single', why: '两格（1.5 米）' }, allowed: true, reason: '要敏捷检定' };
+    if (n === 2) return { ...hurt, check: { attr: '敏捷', dice: 'single', why: '两格（1.5 米）' }, allowed: true, reason: '要敏捷检定' };
     if (n === 3) {
       if (!skills.longJump) return { ...hurt, check: null, allowed: false, reason: '三格是长跳，要有【跳远】技能' };
-      return { ...hurt, check: { attr: '力量', mode: 'single', why: '三格长跳（2.25 米）' }, allowed: true, reason: '长跳，力量检定' };
+      return { ...hurt, check: { attr: '力量', dice: 'single', why: '三格长跳（2.25 米）' }, allowed: true, reason: '长跳，力量检定' };
     }
     return { ...hurt, check: null, allowed: false, reason: `四格以上跳不过去（${(n * CELL_M).toFixed(2)} 米）` };
   }
@@ -216,7 +214,7 @@ export function planJump(kind: JumpKind, cells: number, skills: JumpSkills = NO_
     const hurt = { ...base, injury: injuryTier(n) };
     if (n <= 3) {
       // 2–3 格：攀跳。有【攀爬】就不占行动点。
-      return { ...hurt, check: { attr: '力量', mode: 'single', why: `往上 ${n} 格` },
+      return { ...hurt, check: { attr: '力量', dice: 'single', why: `往上 ${n} 格` },
         allowed: true, usesAction: !skills.climb, moveMultiplier: 2,
         reason: skills.climb ? '攀跳，有【攀爬】不占行动点' : '攀跳，要【力量】，占行动点' };
     }
@@ -225,25 +223,25 @@ export function planJump(kind: JumpKind, cells: number, skills: JumpSkills = NO_
     }
     if (n >= 12) {
       // 12 格以上：有【攀爬】才能爬，但依旧占行动点。
-      return { ...hurt, check: { attr: '敏捷', mode: 'single', why: `攀爬 ${n} 格` },
+      return { ...hurt, check: { attr: '敏捷', dice: 'single', why: `攀爬 ${n} 格` },
         allowed: true, usesAction: true, moveMultiplier: 2,
         reason: `爬到 ${n} 格这么高，就算有【攀爬】也占行动点` };
     }
-    return { ...hurt, check: { attr: '敏捷', mode: 'single', why: `攀爬 ${n} 格` },
+    return { ...hurt, check: { attr: '敏捷', dice: 'single', why: `攀爬 ${n} 格` },
       allowed: true, usesAction: false, moveMultiplier: 2, reason: '攀爬，有【攀爬】不占行动点' };
   }
 
   // 往下
   if (skills.climb) {
     // 有【攀爬】就爬下去，不用摔。12 格以上依旧占行动点。
-    return { ...base, check: { attr: '敏捷', mode: 'single', why: `往下爬 ${n} 格` },
+    return { ...base, check: { attr: '敏捷', dice: 'single', why: `往下爬 ${n} 格` },
       allowed: true, usesAction: n >= 12, moveMultiplier: 2,
       reason: n >= 12 ? `往下爬 ${n} 格，太高了，占行动点` : '往下爬，有【攀爬】不占行动点' };
   }
   // 没技能就是跳下去：≤5 格掷敏捷，6 格以上必摔。
   const tier = injuryTier(n);
-  const check: JumpCheck | null = n <= 2 ? { attr: '敏捷', mode: 'single', why: `往下 ${n} 格` }
-    : n <= 5 ? { attr: '敏捷', mode: 'disadvantage', why: `往下 ${n} 格` }
+  const check: JumpCheck | null = n <= 2 ? { attr: '敏捷', dice: 'single', why: `往下 ${n} 格` }
+    : n <= 5 ? { attr: '敏捷', dice: 'disadvantage', why: `往下 ${n} 格` }
     : null;
   return { ...base, check, allowed: true, usesAction: n >= 12, moveMultiplier: 1,
     injury: tier, reason: check ? `跳下去，${n} 格` : `往下 ${n} 格：必摔` };
@@ -339,7 +337,7 @@ export function resolveJump(pc: PC, plan: JumpPlan, roll: (sides: number) => num
 /** 高度恐惧要不要单独过。跟跳跃成败无关，是心理层面的事。 */
 export function fearCheck(fear: FearTier): JumpCheck | null {
   if (fear === 'none') return null;
-  return { attr: '意志', mode: fearRollMode(fear) === 'advantage' ? 'advantage'
+  return { attr: '意志', dice: fearRollMode(fear) === 'advantage' ? 'advantage'
     : fearRollMode(fear) === 'disadvantage' ? 'disadvantage' : 'single', why: '高度恐惧' };
 }
 

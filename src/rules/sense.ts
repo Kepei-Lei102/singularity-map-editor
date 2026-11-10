@@ -10,7 +10,7 @@
 // 现在的实现是规则版（从物件的 secrets 里挑），
 // 以后换成本地模型或者因果图，只换实现，调用方一行都不用改。
 import type { GameMap, MapObject, PC, Secret, Tier } from '../core/types';
-import { attrValue, resolveCheck } from './interaction';
+import { attrValue, resolveChecks, rollSpec, type JudgeSpec } from './interaction';
 
 /** 感知动作的四种。 */
 export type SenseKind = 'observe' | 'search' | 'smell' | 'listen';
@@ -22,20 +22,16 @@ export const SENSE_LABEL: Record<SenseKind, string> = {
   listen: '倾听',
 };
 
-/** 每个感知动作要掷什么骰。 */
-export type SenseCheck = {
-  /** 属性名，跟 PC.attributes 的键一致。 */
-  attr: string;
-  /** 这一项是「都要过」里的一个：搜索是两项都过，其它都是一项。 */
-  required: boolean;
-};
-
-export const SENSE_CHECKS: Record<SenseKind, SenseCheck[]> = {
-  observe: [{ attr: '观察', required: true }],
-  // 双属性劣势由作者定义成「都要过」：敏捷掷一次、观察掷一次，两个都成功才算成功。
-  search: [{ attr: '敏捷', required: true }, { attr: '观察', required: true }],
-  smell: [{ attr: '观察', required: true }],
-  listen: [{ attr: '观察', required: true }],
+/**
+ * 每个感知动作要过什么。只写「哪项属性、怎么合并」，
+ * 骰面优劣势挂在每项属性自己的 dice 上，判定口径在 interaction.resolveChecks()。
+ */
+export const SENSE_SPECS: Record<SenseKind, JudgeSpec> = {
+  observe: { attrs: [{ attr: '观察' }] },
+  // 搜索＝「与 2 项」：敏捷、观察各掷一颗，都要过。
+  search: { attrs: [{ attr: '敏捷' }, { attr: '观察' }], merge: 'all' },
+  smell: { attrs: [{ attr: '观察' }] },
+  listen: { attrs: [{ attr: '观察' }] },
 };
 
 /** 默认骰：D20 区掷 1..20。 */
@@ -43,7 +39,7 @@ const defaultRoll = (sides: number) => 1 + Math.floor(Math.random() * sides);
 
 /**
  * 一次感知判定的结果。
- * 每个属性一次骰；全部 required 的都成功，才算整体成功。
+ * 每项属性各掷自己的骰；按「或／与」合并成一个成败。
  */
 export interface SenseRoll {
   kind: SenseKind;
@@ -63,17 +59,11 @@ export function senseZone(value: number | undefined): number {
 
 /** 掷一次。roll 可以指定（测试、桌面骰用）。 */
 export function rollSense(kind: SenseKind, pc: PC, roll: (sides: number) => number = defaultRoll): SenseRoll {
-  const checks = SENSE_CHECKS[kind];
-  // 这里只负责「这项感知过哪项属性」；判定口径在 interaction.resolveCheck()。
-  const rolls = checks.map((c) => {
-    const r = resolveCheck({ attributes: pc.attributes, attr: c.attr, rolls: [roll(20)] });
-    return { attr: c.attr, value: r.used, zone: r.value, success: r.success, crit: r.tier === 'crit', fumble: r.tier === 'fumble' };
-  });
-  const success = rolls.every((r) => r.success);
-  const tier: Tier = !success
-    ? (rolls.some((r) => r.fumble) ? 'fumble' : 'fail')
-    : (rolls.every((r) => r.crit) ? 'crit' : 'success');
-  return { kind, rolls, success, tier };
+  const spec = SENSE_SPECS[kind];
+  // 这里只负责「这项感知过哪项属性」；判定口径在 interaction.resolveChecks()。
+  const res = resolveChecks(spec, pc.attributes, rollSpec(spec, roll));
+  const rolls = res.checks.map((c) => ({ attr: c.attr, value: c.used, zone: c.value, success: c.success, crit: c.tier === 'crit', fumble: c.tier === 'fumble' }));
+  return { kind, rolls, success: res.success, tier: res.tier };
 }
 
 /** 把一次感知判定说成人话，写进日志用。 */

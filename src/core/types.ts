@@ -482,6 +482,8 @@ export interface JumpRequest {
   fall: number;
   /** 检定属性；null = 不用掷。 */
   attr: '敏捷' | '力量' | '意志' | null;
+  /** 这项属性的骰：一颗／优势骰／劣势骰。不写就是一颗。 */
+  dice?: 'single' | 'advantage' | 'disadvantage';
   /** 落点：成功就把棋子挪到这。 */
   landing: { x: number; y: number };
   /** 落点在往前第几格（坑宽 + 1），用来算移动点。 */

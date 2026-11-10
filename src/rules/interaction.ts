@@ -95,8 +95,9 @@ export function pickRoll(rolls: number[], advantage: Advantage = 'normal'): numb
 
 /**
  * 一次检定的结果。判定口径只有这一套，所有模块都走它：
- * 骰点 ＋ 属性值 严格大于 DC 才算过。D20 区：值 = 属性÷5、骰 D20、DC 20；
+ * 骰点 ＋ 属性值 达到 DC（≥）就算过。D20 区：值 = 属性÷5、骰 D20、DC 20；
  * D100 区：值 = 属性、骰 D100、DC 100。优势取高、劣势取低。
+ * 极值覆盖总数：D20 掷 20 必过、掷 1 必不过（D100 区走 000 补投链）。
  */
 export interface AttributeCheck {
   scale: Scale;
@@ -142,7 +143,77 @@ export function resolveCheck(opts: {
   const dc = opts.dc ?? DEFAULT_DC[scale];
   const total = value + used;
   const ext = tierOfRoll(scale, used, undefined, opts.attack ? { attack: true } : undefined);
-  return { scale, attr: opts.attr, rolls, used, value, adjust, dc, total, success: total > dc, tier: ext.tier, level: ext.level, mode };
+  // 极值只作用于自己那一项：掷 20 直接算过，掷 1 直接算不过，其余按总数对 DC。
+  const success = ext.tier === 'crit' ? true : ext.tier === 'fumble' ? false : total >= dc;
+  return { scale, attr: opts.attr, rolls, used, value, adjust, dc, total, success, tier: ext.tier, level: ext.level, mode };
+}
+
+/** 骰面优劣势：只决定「骰两次取高／取低」，跟多属性合并没关系。 */
+export type DiceMode = 'single' | 'advantage' | 'disadvantage';
+
+/** 多属性合并：或 = 过一个就好；与／和 = 都要过。单项就写 single。 */
+export type MergeMode = 'single' | 'any' | 'all';
+
+/** 一项属性：过哪项，以及它自己那颗骰有没有优劣势。 */
+export interface AttrSpec {
+  attr: string;
+  /**
+   * 这项自己的骰。作者口径：优劣势是按属性挂的——
+   * 「一段时间内魅力检定有优势」要过魅力＋智慧时，魅力掷两次取高，智慧只掷一次。
+   */
+  dice?: DiceMode;
+}
+
+/** 一次判定的完整描述。各模块只拼这个，不算自己的门槛。 */
+export interface JudgeSpec {
+  attrs: AttrSpec[];
+  scale?: Scale;
+  /** 不写就按属性项数：1 项 single，多项 all。 */
+  merge?: MergeMode;
+  dc?: number;
+  adjust?: number;
+}
+
+export function mergeModeOf(spec: JudgeSpec): MergeMode {
+  return spec.merge ?? (spec.attrs.length > 1 ? 'all' : 'single');
+}
+
+/** 这项属性要掷几颗骰。 */
+export function diceCountOf(a: AttrSpec): number {
+  return a.dice && a.dice !== 'single' ? 2 : 1;
+}
+
+/** 按 spec 掷骰，返回和 attrs 对齐的点数组。 */
+export function rollSpec(spec: JudgeSpec, roller: (sides: number) => number): number[][] {
+  const sides = (spec.scale ?? 'd20') === 'd20' ? 20 : 100;
+  return spec.attrs.map((a) => Array.from({ length: diceCountOf(a) }, () => roller(sides)));
+}
+
+/**
+ * 按「或／与」把多项属性合成一个成败。
+ * 极值只作用于自己那一项：一项掷 1 只判死自己，另一项过了，「或」照样算过。
+ */
+export function resolveChecks(
+  spec: JudgeSpec,
+  attributes: Record<string, number> | undefined,
+  rolls: number[][],
+): { checks: AttributeCheck[]; success: boolean; tier: Tier } {
+  const scale = spec.scale ?? 'd20';
+  const dc = spec.dc ?? DEFAULT_DC[scale];
+  const merge = mergeModeOf(spec);
+  const checks = spec.attrs.map((a, i) => resolveCheck({
+    attributes, attr: a.attr, rolls: rolls[i] ?? [], scale, dc,
+    mode: a.dice === 'advantage' || a.dice === 'disadvantage' ? a.dice : 'normal',
+    adjust: spec.adjust,
+  }));
+  const success = checks.length === 0 ? false
+    : merge === 'any' ? checks.some((c) => c.success)
+      : merge === 'all' ? checks.every((c) => c.success)
+        : checks[0].success;
+  const tier: Tier = !success
+    ? (checks.some((c) => c.tier === 'fumble') ? 'fumble' : 'fail')
+    : (checks.every((c) => c.tier === 'crit') ? 'crit' : 'success');
+  return { checks, success, tier };
 }
 
 export type CritLevel = 'normal' | '特大' | null;
