@@ -57,13 +57,18 @@ function circleSweep(a: Point, b: Point, r: { x: number; y: number; w: number; h
   const distRect = (p: Point) => Math.hypot(Math.max(r.x - p.x, 0, p.x - r.x - r.w), Math.max(r.y - p.y, 0, p.y - r.y - r.h));
   return Math.min(distRect(a), distRect(b), ...corners.map(p => distPoint(p, a, b))) < radius - 1e-8;
 }
-export function characterPathClear(w: World, m: GameMap, a: Point, b: Point, id?: string) {
+/**
+ * @param id 忽略这个棋子自己（它就在起点上）
+ * @param opts.skipTerrain 跳过地形阻挡。只给「人已经在坑底、要横向走出坑」这一种情况用：
+ *   有坑底的坑那格地形是「能跨过去的不可通行」，平时算坑，人站在坑底时算地面。
+ */
+export function characterPathClear(w: World, m: GameMap, a: Point, b: Point, id?: string, opts: { skipTerrain?: boolean } = {}) {
   const radius = 1 / 3; // 0.50m 直径 / 0.75m 主格
   if (Math.min(a.x, b.x) < radius || Math.min(a.y, b.y) < radius || Math.max(a.x, b.x) > m.width - radius || Math.max(a.y, b.y) > m.height - radius) return false;
   if (architectureGeometry(m).some(r => r.blocksMove && circleSweep(a, b, r, radius))) return false;
   const area = { x: Math.min(a.x, b.x) - radius, y: Math.min(a.y, b.y) - radius,
     w: Math.abs(b.x - a.x) + radius * 2, h: Math.abs(b.y - a.y) + radius * 2 };
-  for (const r of terrainBlockers(w, m, area)) if (circleSweep(a, b, r, radius)) return false;
+  if (!opts.skipTerrain) for (const r of terrainBlockers(w, m, area)) if (circleSweep(a, b, r, radius)) return false;
   if (m.objects.some(o => o.enabled !== false && o.kind === 'object' && !isArchitectureObject(o) && (o.physical?.blocksMove ?? (o.blocksWhen ? o.blocksWhen.includes(o.state) : o.height >= 0.5)) && circleSweep(a, b, objectRect(o), radius))) return false;
   return !m.tokens.some(t => t.id !== id && circleSweep(a, b, { ...tokenPosition(t), w: 0, h: 0 }, radius * 2));
 }

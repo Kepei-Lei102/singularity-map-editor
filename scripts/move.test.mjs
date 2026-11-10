@@ -344,3 +344,32 @@ test('用掉一格蓄力后重新蓄满', () => {
   s = api.tickCharge(b, s);
   assert.equal(s.cells, 1, '两回合后又蓄满');
 });
+
+// ---------- 蓄力什么时候算「用掉」 ----------
+
+test('没吃到蓄的那一格：还剩 125 点，蓄的 75 没动', () => {
+  const b = api.moveBudget({ attributes: { 敏捷: 50, 力量: 50, 意志: 50 } }); // 425
+  // 池子 425 + 75 = 500，走 5 格花 375，剩 125 ≥ 75
+  assert.equal(api.chargeUsedThisTurn(b, 125, 1), false);
+});
+
+test('走进蓄来的那一段：剩 50 点，蓄力用掉', () => {
+  const b = api.moveBudget({ attributes: { 敏捷: 50, 力量: 50, 意志: 50 } });
+  // 走 6 格花 450，剩 50 < 75
+  assert.equal(api.chargeUsedThisTurn(b, 50, 1), true);
+});
+
+test('没有蓄好的格子就不会「用掉」', () => {
+  const b = api.moveBudget({ attributes: { 敏捷: 50, 力量: 50, 意志: 50 } });
+  assert.equal(api.chargeUsedThisTurn(b, 0, 0), false);
+});
+
+test('没有角色卡也不会「用掉」', () => {
+  assert.equal(api.chargeUsedThisTurn(null, 0, 1), false);
+});
+
+test('用掉之后清零，从头重新蓄', () => {
+  const spent = api.spendCharge({ progress: 0.5, cells: 1 });
+  assert.equal(spent.cells, 0);
+  assert.equal(spent.progress, 0);
+});

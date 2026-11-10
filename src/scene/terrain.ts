@@ -6,6 +6,7 @@
 // 渲染、碰撞、视线、迷雾、玩家同步都必须从这里拿地形，不要各自拼 key。
 
 import type { GameMap, Terrain, World } from '../core/types';
+import { heightAt } from './height';
 
 export const SUB = 3;
 export const subKey = (m: GameMap, x3: number, y3: number) => y3 * (m.width * SUB) + x3;
@@ -86,6 +87,25 @@ export function terrainVisionCoef(world: Pick<World, 'terrains'>, m: GameMap, x:
  * - gap：挡住，但能跳过去（坑 / 楼间空隙）
  */
 export type CellFloor = 'open' | 'wall' | 'gap';
+
+/**
+ * 这一格有没有坑底。
+ *
+ * 判据：它比旁边能站的地面低——那就是有底的坑（沟、浅坑），人掉下去是站在坑底的。
+ * 跟旁边一样高＝没建模坑底（天井、楼间空隙），掉下去是下一层。
+ */
+export function hasPitBottom(world: Pick<World, 'terrains'>, m: GameMap, x: number, y: number): boolean {
+  const terrains = terrainMap(world);
+  const h = heightAt(m, x, y);
+  for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]] as const) {
+    const nx = x + dx, ny = y + dy;
+    if (nx < 0 || ny < 0 || nx >= m.width || ny >= m.height) continue;
+    const t = terrains.get(m.cells[ny * m.width + nx] ?? '');
+    if (!t || t.blocksMove) continue;
+    if (heightAt(m, nx, ny) > h) return true;
+  }
+  return false;
+}
 
 export function cellFloor(world: Pick<World, 'terrains'>, m: GameMap, x: number, y: number): CellFloor {
   if (x < 0 || y < 0 || x >= m.width || y >= m.height) return 'wall';

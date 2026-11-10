@@ -13,14 +13,14 @@ import { slidingPuzzleForObject } from '../scene/sliding';
 import { viewerOf, visiblePoint } from '../scene/sight';
 import { describeSense, rollSense, senseHints, type SenseKind } from '../rules/sense';
 import {
-  describeInjury, describeStepDrop, FALL_TO_NEXT_FLOOR, gapAhead, INJURY_DICE, INJURY_LABEL, injuryTier,
-  judgeValue, jumpSkillsOf, planJump, rollInjury, stepDrop,
+  describeInjury, describePitFall, describeStepDrop, gapAhead, INJURY_DICE, INJURY_LABEL, injuryTier,
+  judgeValue, jumpSkillsOf, pitFall, planJump, rollInjury, rollPitFall, stepDrop,
   type JumpCheck, type JumpRoll,
 } from '../rules/jump';
 import { openJudgment } from '../rules/judgments';
 import { CELL_METERS, heightAt } from '../scene/height';
-import { cellFloor } from '../scene/terrain';
-import { canAffordStep, canTurn, moveBudgetOn, movePool, RUN_MODES, runMeShort, stepPrice, tickCharge, STAND_UP_COST, ROLL_OVER_COST, type ChargeState, type RunMode } from '../rules/move';
+import { cellFloor, hasPitBottom } from '../scene/terrain';
+import { canAffordStep, canTurn, chargeUsedThisTurn, moveBudgetOn, movePool, RUN_MODES, runMeShort, spendCharge, stepPrice, tickCharge, STAND_UP_COST, ROLL_OVER_COST, type ChargeState, type RunMode } from '../rules/move';
 import { ATTACK_RANGE, DYING_LABEL, DYING_ROUNDS, ENGAGE_RANGE, RESCUED_HP, ROBOT_LABEL, attackTargets, canRescue, canUseSharp, downedBy, downedLabel, hpOf, opportunityTriggers, robotArrived, robotIncoming, rollAttack, rollRescue, settleDeath, stepLimitNear, type AttackTarget, type Downed, type Roller } from '../rules/combat';
 
 // 试玩：放白板玩家进去，用 WASD 走，体验视野。退出时一切恢复原样（沙盒）。
@@ -274,7 +274,15 @@ export function trialMove(dx: number, dy: number) {
   // 跳跃不能误触，掉下去是要扣血的。
   const from = { x: Math.floor(step.a.x), y: Math.floor(step.a.y) };
   const skills = jumpSkillsOf(w.party.find((p) => p.id === pl.pcId)?.skills ?? []);
-  const ahead = gapAhead((x, y) => cellFloor(now, m2, x, y), from, dx, dy, skills);
+  // 坑要分两种：有坑底的（沟、浅坑）人掉下去是站在坑底的，站在坑里时这格就能走；
+  // 没坑底的天井永远是坑。
+  const here = heightAt(m2, from.x, from.y);
+  const floorAt = (x: number, y: number) => {
+    const f = cellFloor(now, m2, x, y);
+    if (f !== 'gap') return f;
+    return hasPitBottom(now, m2, x, y) && heightAt(m2, x, y) >= here ? 'open' : 'gap';
+  };
+  const ahead = gapAhead(floorAt, from, dx, dy, skills);
   if (ahead.kind === 'gap') {
     if (!ahead.landing) return setTr({ msg: ahead.reason });
     const armed = getUI().pendingGap;
@@ -291,7 +299,15 @@ export function trialMove(dx: number, dy: number) {
     return beginGapJump(now, m2, tok, from, { width: ahead.width, landingStep: ahead.landingStep, check: ahead.check },
       dx, dy, pl.pcId, price);
   }
-  if (!characterPathClear(now, m2, step.a, step.b, tok.id)) return setTr({ msg: '人物或墙体挡住了路径' });
+  // 人在坑底的时候，坑格的地形不该挡：那格是「能跨过去的不可通行」，
+  // 但有底就说明它是能站的地面。起步那格（自己脚下）和落脚那格都要放行。
+  const destX = Math.floor(step.b.x), destY = Math.floor(step.b.y);
+  const standingInPit = hasPitBottom(now, m2, from.x, from.y) && heightAt(m2, from.x, from.y) === here;
+  const intoPitBottom = cellFloor(now, m2, destX, destY) === 'gap'
+    && hasPitBottom(now, m2, destX, destY) && heightAt(m2, destX, destY) >= here;
+  if (!characterPathClear(now, m2, step.a, step.b, tok.id, { skipTerrain: standingInPit || intoPitBottom })) {
+    return setTr({ msg: '人物或墙体挡住了路径' });
+  }
   // 落差：上一步台阶能走（双倍点数），再高就得上攀跳/攀爬；往下就是跳，会摔。
   const drop = stepDrop(heightAt(m2, Math.floor(step.a.x), Math.floor(step.a.y)), heightAt(m2, landing.x, landing.y));
   // 上面比自己高 2 格以上：不是走上去的，是攀上去。同方向按第二下才攀。
@@ -338,13 +354,18 @@ export function trialMove(dx: number, dy: number) {
     dt.facing = dir; // 自由行动：朝向跟着移动；战斗中这时朝向已经等于 dir
   });
   // 战斗模式才扣移动点数；自由行动不限步数。
+  const poolStart = t.movePoints?.[pl.tokenId] ?? movePool(budget, stored);
   const pointsLeft = t.combat
-    ? Math.max(0, (t.movePoints?.[pl.tokenId] ?? movePool(budget, stored)) - price - extraPrice)
+    ? Math.max(0, poolStart - price - extraPrice)
     : t.movePoints?.[pl.tokenId];
+  // 蓄的那一格用掉就清零，得重新蓄。
+  // 「用掉」= 这回合花掉的点数超过本身移动值——池子里超出的那部分就是蓄来的。
+  const chargeUsed = t.combat && chargeUsedThisTurn(budget, pointsLeft ?? 0, stored);
   if (getUI().pendingGap) setUI({ pendingGap: null });
   setTr({
     moved: { ...t.moved, [pl.tokenId]: used + step.cost },
     movePoints: t.combat ? { ...(t.movePoints ?? {}), [pl.tokenId]: pointsLeft! } : t.movePoints,
+    ...(chargeUsed ? { charge: { ...(t.charge ?? {}), [pl.tokenId]: spendCharge(t.charge?.[pl.tokenId] ?? { progress: 0, cells: stored }) } } : {}),
     msg: '',
     opportunity: opp?.leaving && opp.enemies.length
       ? { moverTokenId: tok.id, enemies: opp.enemies, from: opp.from, to: opp.to }
@@ -435,11 +456,11 @@ function beginDownJump(
   setTr({ msg: '往下跳的判定已开出。他掷完你点「按结果执行」' });
 }
 
-/** 坑深：坑底比脚下低就按落差；坑底根本没面（同高）就当掉一层。 */
-function pitFallOf(m: GameMap, from: { x: number; y: number }, dx: number, dy: number): number {
-  const cur = heightAt(m, from.x, from.y);
-  const bottom = heightAt(m, from.x + dx, from.y + dy);
-  return cur > bottom ? cur - bottom : FALL_TO_NEXT_FLOOR;
+/** 坑深：有坑底按落差算，没坑底（天井）就当掉一层。 */
+function pitFallOf(w: World, m: GameMap, from: { x: number; y: number }, dx: number, dy: number): number {
+  const x = from.x + dx, y = from.y + dy;
+  const bottom = hasPitBottom(w, m, x, y) ? heightAt(m, x, y) : null;
+  return pitFall(heightAt(m, from.x, from.y), bottom).cells;
 }
 
 /** 玩家按了第二下：算这次跳跃。不用掷就直接过去，要掷就开一个判定等他掷。 */
@@ -450,7 +471,7 @@ function beginGapJump(
 ) {
   const t = tr();
   if (!t) return;
-  const fall = pitFallOf(m, from, dx, dy);
+  const fall = pitFallOf(w, m, from, dx, dy);
   const skills = jumpSkillsOf(w.party.find((p) => p.id === pcId)?.skills ?? []);
   const plan = planJump('across', ahead.width, skills, fall);
   const landing = { x: from.x + dx * ahead.landingStep, y: from.y + dy * ahead.landingStep };
@@ -478,6 +499,21 @@ function beginGapJump(
   if (err) return setTr({ msg: err });
   pushJudgmentRequest(pcId);
   setTr({ msg: '跳跃判定已开出。他掷完你点「按结果执行」' });
+}
+
+/** 扣血：扣到 0 就倒下。没有血条（没填六维的白板）就什么也不做。 */
+function hurt(mapId: string, tokenId: string, damage: number): void {
+  update((d) => {
+    const dm = findMap(d, mapId);
+    const dt = dm?.tokens.find((x) => x.id === tokenId);
+    if (!dm || !dt) return;
+    const p = dt.pcId ? d.party.find((x) => x.id === dt.pcId) : null;
+    const pool = p ? hpOf(p) : (dt.hpMax ?? 0) > 0 ? { hp: dt.hp ?? dt.hpMax!, max: dt.hpMax! } : null;
+    if (!pool) return;
+    const next = Math.max(0, pool.hp - damage);
+    if (p) { p.hp = next; p.hpMax ??= pool.max; } else { dt.hp = next; }
+    if (next <= 0) { dt.down = true; delete dt.status; }
+  });
 }
 
 /**
@@ -532,20 +568,33 @@ export function settleJump(req: JumpRequest, values: number[]): string {
   }
 
   // 没跳过去：摔。
-  // 横跨失败＝掉进坑里，棋子留在原地（见证者想让他真的掉进坑里可以手动拖）；
-  // 往下跳失败＝已经在下面了，落点照落，只是带着伤。
+  if (req.kind === 'across') {
+    // 横跨失败＝掉进坑里。坑底有高度就落到坑底；
+    // 没建模坑底（坑格高度跟脚下一样）就当掉一层，见证者手动把人挪去下一层。
+    const start = { x: Math.floor(before.x), y: Math.floor(before.y) };
+    const pit = { x: start.x + req.dx, y: start.y + req.dy };
+    const bottom = hasPitBottom(w, m, pit.x, pit.y) ? heightAt(m, pit.x, pit.y) : null;
+    const fall = pitFall(heightAt(m, start.x, start.y), bottom);
+    const damage = rollPitFall(fall);
+    hurt(t.mapId, req.tokenId, damage);
+    if (!fall.nextFloor) {
+      update((d) => {
+        const dm = findMap(d, t.mapId)!;
+        const dt = dm.tokens.find((x) => x.id === req.tokenId)!;
+        setTokenPosition(dm, dt, { x: pit.x + 0.5, y: pit.y + 0.5 });
+        dt.facing = dir;
+      });
+      checkEnterTriggers(t.mapId, req.tokenId, before.x, before.y);
+      autoReveal(t.mapId);
+    }
+    setTr({ msg: describePitFall(fall, damage) });
+    return '';
+  }
+
+  // 往上攀失败＝留在原地，按已攀的高度摔；往下跳失败＝人已经在下面了，落点照落，只是带着伤。
   const tier = req.injury ?? injuryTier(req.fall);
   const damage = rollInjury(tier);
-  update((d) => {
-    const dm = findMap(d, t.mapId)!;
-    const dt = dm.tokens.find((x) => x.id === req.tokenId)!;
-    const p = dt.pcId ? d.party.find((x) => x.id === dt.pcId) : null;
-    const pool = p ? hpOf(p) : (dt.hpMax ?? 0) > 0 ? { hp: dt.hp ?? dt.hpMax!, max: dt.hpMax! } : null;
-    if (!pool) return;
-    const next = Math.max(0, pool.hp - damage);
-    if (p) { p.hp = next; p.hpMax ??= pool.max; } else { dt.hp = next; }
-    if (next <= 0) { dt.down = true; delete dt.status; }
-  });
+  hurt(t.mapId, req.tokenId, damage);
   if (req.kind === 'down') {
     update((d) => {
       const dm = findMap(d, t.mapId)!;

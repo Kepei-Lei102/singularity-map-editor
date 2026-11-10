@@ -128,6 +128,21 @@ export function spendCharge(s: ChargeState): ChargeState {
   return { progress: 0, cells: Math.max(0, Math.min(MAX_CHARGE_CELLS, s.cells) - 1) };
 }
 
+/**
+ * 这一回合有没有吃到蓄的那一格。
+ *
+ * 回合开始的点数池 = 本身移动值 + 蓄好的格数×75。
+ * 池子是混合扣的，看不出「这一步花的是谁的钱」——
+ * 但蓄的那部分固定在池子末尾，所以只要「剩下的点数少于 蓄的格数×75」，
+ * 就说明已经走进蓄来的那段了。这时候蓄力算用掉，重新从 0 蓄。
+ */
+export function chargeUsedThisTurn(
+  b: MoveBudget | null, pointsLeft: number, storedCells: number,
+): boolean {
+  if (!b || storedCells <= 0) return false;
+  return pointsLeft < storedCells * POINTS_PER_CELL - 1e-9;
+}
+
 /** 性别没填时按默认身高算。 */
 export const DEFAULT_HEIGHT: Record<Sex, number> = { 男: 170, 女: 160, 其他: 170 };
 
