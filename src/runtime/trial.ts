@@ -291,15 +291,20 @@ export function trialMove(dx: number, dy: number) {
     return beginGapJump(now, m2, tok, from, { width: ahead.width, landingStep: ahead.landingStep, check: ahead.check },
       dx, dy, pl.pcId, price);
   }
-  if (getUI().pendingGap) setUI({ pendingGap: null });
   if (!characterPathClear(now, m2, step.a, step.b, tok.id)) return setTr({ msg: '人物或墙体挡住了路径' });
   // 落差：上一步台阶能走（双倍点数），再高就得上攀跳/攀爬；往下就是跳，会摔。
   const drop = stepDrop(heightAt(m2, Math.floor(step.a.x), Math.floor(step.a.y)), heightAt(m2, landing.x, landing.y));
   if (drop.kind === 'blocked') return setTr({ msg: drop.reason });
-  // 往下 2 格以上不是走着下去的，是跳下去——会摔。这里先拦住，
-  // 跳跃动作接进来之前不能让人静默走掉。
+  // 往下 2 格以上不是走着下去的，是跳下去——会摔。同方向按第二下才跳。
   if (drop.kind === 'stepDown' && !drop.safe) {
-    return setTr({ msg: describeStepDrop(drop) });
+    const armed = getUI().pendingGap;
+    const confirmed = !!armed && armed.tokenId === tok.id && armed.dx === dx && armed.dy === dy;
+    if (!confirmed) {
+      setUI({ pendingGap: { tokenId: tok.id, dx, dy } });
+      return setTr({ msg: `${describeStepDrop(drop)}。再按一次同方向就跳下去` });
+    }
+    setUI({ pendingGap: null });
+    return beginDownJump(now, m2, tok, landing, drop.height, dx, dy, pl.pcId, price);
   }
   const extraPrice = drop.kind === 'stepUp' ? price : 0; // 上台阶再付一份
   if (t.combat && drop.kind !== 'flat') {
@@ -318,6 +323,7 @@ export function trialMove(dx: number, dy: number) {
   const pointsLeft = t.combat
     ? Math.max(0, (t.movePoints?.[pl.tokenId] ?? movePool(budget, stored)) - price - extraPrice)
     : t.movePoints?.[pl.tokenId];
+  if (getUI().pendingGap) setUI({ pendingGap: null });
   setTr({
     moved: { ...t.moved, [pl.tokenId]: used + step.cost },
     movePoints: t.combat ? { ...(t.movePoints ?? {}), [pl.tokenId]: pointsLeft! } : t.movePoints,
@@ -338,6 +344,40 @@ export function trialMove(dx: number, dy: number) {
 function attributesFilled(pc: World['party'][number] | null | undefined): boolean {
   const a = pc?.attributes;
   return !!a && ['力量', '敏捷', '意志', '观察', '智慧', '魅力'].some((k) => (a[k] ?? 0) > 0);
+}
+
+/** 往下跳：落到下面那格，摔不摔看检定。 */
+function beginDownJump(
+  w: World, m: GameMap, tok: GameMap['tokens'][number], landing: { x: number; y: number },
+  fall: number, dx: number, dy: number, pcId: string, unitPrice: number,
+) {
+  const t = tr();
+  if (!t) return;
+  const skills = jumpSkillsOf(w.party.find((p) => p.id === pcId)?.skills ?? []);
+  const plan = planJump('down', fall, skills, fall);
+  const req: JumpRequest = {
+    tokenId: tok.id, dx, dy, kind: 'down', cells: fall, fall,
+    attr: plan.check?.attr ?? null, landing, injury: plan.injury, moveMultiplier: plan.moveMultiplier,
+  };
+  req.landingStep = 1;
+  req.unitPrice = unitPrice;
+  if (!plan.check) { settleJump(req, []); return; }
+  const pc = w.party.find((p) => p.id === pcId);
+  if (!attributesFilled(pc)) {
+    return setTr({ msg: `${tok.name} 还没填六维（右上角角色面板 → 六维与 HP）。没填的话任何检定都是必败，先填上再跳` });
+  }
+  const tier = plan.injury ?? injuryTier(fall);
+  const err = openJudgment({
+    title: `跳下去：落差 ${fall} 格`,
+    ruling: `${tok.name} 从 ${fall} 格（${(fall * CELL_METERS).toFixed(2)} 米）跳下去，过【${plan.check.attr}】。`
+      + `没过就摔：${INJURY_LABEL[tier]} 1D${INJURY_DICE[tier]}。`,
+    sides: 100, subjectId: pcId,
+    place: { mapId: m.id, x: landing.x + 0.5, y: landing.y + 0.5 },
+    jump: req,
+  });
+  if (err) return setTr({ msg: err });
+  pushJudgmentRequest(pcId);
+  setTr({ msg: '往下跳的判定已开出。他掷完你点「按结果执行」' });
 }
 
 /** 坑深：坑底比脚下低就按落差；坑底根本没面（同高）就当掉一层。 */
@@ -427,7 +467,9 @@ export function settleJump(req: JumpRequest, values: number[]): string {
     return '';
   }
 
-  // 没跳过去：摔。棋子留在原地，见证者想让他真的掉进坑里可以手动拖。
+  // 没跳过去：摔。
+  // 横跨失败＝掉进坑里，棋子留在原地（见证者想让他真的掉进坑里可以手动拖）；
+  // 往下跳失败＝已经在下面了，落点照落，只是带着伤。
   const tier = req.injury ?? injuryTier(req.fall);
   const damage = rollInjury(tier);
   update((d) => {
@@ -440,6 +482,14 @@ export function settleJump(req: JumpRequest, values: number[]): string {
     if (p) { p.hp = next; p.hpMax ??= pool.max; } else { dt.hp = next; }
     if (next <= 0) { dt.down = true; delete dt.status; }
   });
+  if (req.kind === 'down') {
+    update((d) => {
+      const dm = findMap(d, t.mapId)!;
+      const dt = dm.tokens.find((x) => x.id === req.tokenId)!;
+      setTokenPosition(dm, dt, { x: req.landing.x + 0.5, y: req.landing.y + 0.5 });
+      dt.facing = dir;
+    });
+  }
   setTr({ msg: `没跳过去，${describeInjury(req.fall, damage)}` });
   return '';
 }
