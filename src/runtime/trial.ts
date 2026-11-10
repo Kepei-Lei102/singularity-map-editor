@@ -1,10 +1,10 @@
-import { clearTrialWindows, openPlayerWindow, registerTrialMove, selectTrialViewer } from './sync';
+import { clearTrialWindows, openPlayerWindow, pushJudgmentRequest, registerTrialMove, selectTrialViewer } from './sync';
 import { playerObject } from '../scene/identity';
 import { effectiveLayer } from '../scene/vision';
 import { objectEnabled } from '../core/objectData.js';
 import { beginSandbox, endSandbox, getUI, getWorld, setUI, toast, update, type UIState } from '../core/store';
 import { addMark, autoReveal, cancelPendingPlay, checkEnterTriggers, findMap, ioBusy } from './actions';
-import type { Facing, GameMap, MapObject, Stance, World } from '../core/types';
+import type { Facing, GameMap, JumpRequest, MapObject, Stance, World } from '../core/types';
 import { gridDist, uid } from '../core/util';
 import { blocksMovement, ROUND_MINUTES } from '../scene/perception';
 import { characterPathClear, furnitureSweepBlocked, nextTokenStep, setTokenPosition, tokenPosition } from '../scene/architecture';
@@ -12,7 +12,12 @@ import { terrainBlocksPoint, terrainBlocksRect } from '../scene/terrain';
 import { slidingPuzzleForObject } from '../scene/sliding';
 import { viewerOf, visiblePoint } from '../scene/sight';
 import { describeSense, rollSense, senseHints, type SenseKind } from '../rules/sense';
-import { describeStepDrop, gapAhead, stepDrop } from '../rules/jump';
+import {
+  describeInjury, describeStepDrop, FALL_TO_NEXT_FLOOR, gapAhead, INJURY_DICE, INJURY_LABEL, injuryTier,
+  judgeValue, jumpSkillsOf, planJump, rollInjury, stepDrop,
+  type JumpCheck, type JumpRoll,
+} from '../rules/jump';
+import { openJudgment } from '../rules/judgments';
 import { CELL_METERS, heightAt } from '../scene/height';
 import { cellFloor } from '../scene/terrain';
 import { canAffordStep, canTurn, moveBudgetOn, movePool, RUN_MODES, runMeShort, stepPrice, tickCharge, STAND_UP_COST, ROLL_OVER_COST, type ChargeState, type RunMode } from '../rules/move';
@@ -265,18 +270,28 @@ export function trialMove(dx: number, dy: number) {
   const landing = { x: Math.floor(step.b.x), y: Math.floor(step.b.y) };
   const occupied = t.combat && m2.tokens.find((k) => k.id !== tok.id && Math.floor(tokenPosition(k).x) === landing.x && Math.floor(tokenPosition(k).y) === landing.y);
   if (occupied) return setTr({ msg: `${occupied.name} 在这里，不能停在同一个格子上` });
-  // 前面是坑？走路撞上去就给跳的提示；是墙就还是「挡住了」。
-  // 技能还没接进来，先按「什么都不会」算。
+  // 前面是坑？不是走着能过去的。第一下给提示并记住方向，第二下同方向才真的起跳——
+  // 跳跃不能误触，掉下去是要扣血的。
   const from = { x: Math.floor(step.a.x), y: Math.floor(step.a.y) };
-  const ahead = gapAhead((x, y) => cellFloor(now, m2, x, y), from, dx, dy);
+  const skills = jumpSkillsOf(w.party.find((p) => p.id === pl.pcId)?.skills ?? []);
+  const ahead = gapAhead((x, y) => cellFloor(now, m2, x, y), from, dx, dy, skills);
   if (ahead.kind === 'gap') {
     if (!ahead.landing) return setTr({ msg: ahead.reason });
-    const m = (ahead.width * CELL_METERS).toFixed(2);
-    const need = ahead.check
-      ? `跳过去要过【${ahead.check.attr}】（${ahead.check.why}）`
-      : '一格宽的坑，直接跳过去，不用掷骰';
-    return setTr({ msg: `前面是坑（宽 ${ahead.width} 格，${m} 米）。${need}` });
+    const armed = getUI().pendingGap;
+    const confirmed = !!armed && armed.tokenId === tok.id && armed.dx === dx && armed.dy === dy;
+    if (!confirmed) {
+      setUI({ pendingGap: { tokenId: tok.id, dx, dy } });
+      const m = (ahead.width * CELL_METERS).toFixed(2);
+      const need = ahead.check
+        ? `跳过去要过【${ahead.check.attr}】（${ahead.check.why}）`
+        : '一格宽的坑，直接跳过去，不用掷骰';
+      return setTr({ msg: `前面是坑（宽 ${ahead.width} 格，${m} 米）。${need}。再按一次同方向才起跳` });
+    }
+    setUI({ pendingGap: null });
+    return beginGapJump(now, m2, tok, from, { width: ahead.width, landingStep: ahead.landingStep, check: ahead.check },
+      dx, dy, pl.pcId, price);
   }
+  if (getUI().pendingGap) setUI({ pendingGap: null });
   if (!characterPathClear(now, m2, step.a, step.b, tok.id)) return setTr({ msg: '人物或墙体挡住了路径' });
   // 落差：上一步台阶能走（双倍点数），再高就得上攀跳/攀爬；往下就是跳，会摔。
   const drop = stepDrop(heightAt(m2, Math.floor(step.a.x), Math.floor(step.a.y)), heightAt(m2, landing.x, landing.y));
@@ -313,6 +328,105 @@ export function trialMove(dx: number, dy: number) {
   });
   checkEnterTriggers(t.mapId, pl.tokenId, step.a.x, step.a.y); // 和正式带团一样：走进触发区就播，范围里的线索自动浮现（试玩结束都会复原）
   autoReveal(t.mapId);
+}
+
+/** 坑深：坑底比脚下低就按落差；坑底根本没面（同高）就当掉一层。 */
+function pitFallOf(m: GameMap, from: { x: number; y: number }, dx: number, dy: number): number {
+  const cur = heightAt(m, from.x, from.y);
+  const bottom = heightAt(m, from.x + dx, from.y + dy);
+  return cur > bottom ? cur - bottom : FALL_TO_NEXT_FLOOR;
+}
+
+/** 玩家按了第二下：算这次跳跃。不用掷就直接过去，要掷就开一个判定等他掷。 */
+function beginGapJump(
+  w: World, m: GameMap, tok: GameMap['tokens'][number], from: { x: number; y: number },
+  ahead: { width: number; landingStep: number; check: JumpCheck | null },
+  dx: number, dy: number, pcId: string, unitPrice: number,
+) {
+  const t = tr();
+  if (!t) return;
+  const fall = pitFallOf(m, from, dx, dy);
+  const skills = jumpSkillsOf(w.party.find((p) => p.id === pcId)?.skills ?? []);
+  const plan = planJump('across', ahead.width, skills, fall);
+  const landing = { x: from.x + dx * ahead.landingStep, y: from.y + dy * ahead.landingStep };
+  const req: JumpRequest = {
+    tokenId: tok.id, dx, dy, kind: 'across', cells: ahead.width, fall,
+    attr: plan.check?.attr ?? null, landing, injury: plan.injury, moveMultiplier: plan.moveMultiplier,
+  };
+  req.landingStep = ahead.landingStep;
+  req.unitPrice = unitPrice;
+  if (!plan.check) { settleJump(req, []); return; }
+  const tier = plan.injury ?? injuryTier(fall);
+  const err = openJudgment({
+    title: `跳跃：坑宽 ${ahead.width} 格`,
+    ruling: `${tok.name} 跳过 ${ahead.width} 格宽的坑（${(ahead.width * CELL_METERS).toFixed(2)} 米），过【${plan.check.attr}】。`
+      + `没过就摔下去：${INJURY_LABEL[tier]} 1D${INJURY_DICE[tier]}。`,
+    sides: 100, subjectId: pcId,
+    place: { mapId: m.id, x: from.x + 0.5, y: from.y + 0.5 },
+    jump: req,
+  });
+  if (err) return setTr({ msg: err });
+  pushJudgmentRequest(pcId);
+  setTr({ msg: '跳跃判定已开出。他掷完你点「按结果执行」' });
+}
+
+/**
+ * 按掷出来的点数结算一次跳跃。见证者点「按结果执行」时调它。
+ * @param values 玩家掷的点数：单掷一颗，不用掷就传空数组。
+ */
+export function settleJump(req: JumpRequest, values: number[]): string {
+  const t = tr();
+  if (!t) return '不在试玩里';
+  const w = getWorld();
+  const m = findMap(w, t.mapId);
+  if (!m) return '找不到地图';
+  const tok = m.tokens.find((x) => x.id === req.tokenId);
+  if (!tok) return '找不到棋子';
+  const pc = tok.pcId ? w.party.find((p) => p.id === tok.pcId) : null;
+
+  let roll: JumpRoll | null = null;
+  if (req.attr) {
+    const check: JumpCheck = { attr: req.attr, mode: 'single', why: '' };
+    roll = judgeValue(check, pc ?? ({ attributes: {} } as never), values);
+  }
+  const landed = roll === null || roll.success;
+  const dir = dirOf(req.dx, req.dy);
+  const landingStep = req.landingStep ?? Math.abs(req.landing.x - Math.floor(tok.x)) + Math.abs(req.landing.y - Math.floor(tok.y));
+
+  if (landed) {
+    update((d) => {
+      const dm = findMap(d, t.mapId)!;
+      const dt = dm.tokens.find((x) => x.id === req.tokenId)!;
+      setTokenPosition(dm, dt, { x: req.landing.x + 0.5, y: req.landing.y + 0.5 });
+      dt.facing = dir;
+    });
+    // 跳过去的那几格照样花移动点（战斗中才扣）。
+    if (t.combat) {
+      const cost = (req.unitPrice ?? 75) * req.moveMultiplier * landingStep;
+      const left = Math.max(0, (t.movePoints?.[req.tokenId] ?? 0) - cost);
+      setTr({ movePoints: { ...(t.movePoints ?? {}), [req.tokenId]: left },
+        msg: `跳过去了${roll ? `：${roll.used} / ${roll.target}` : ''}` });
+    } else {
+      setTr({ msg: roll ? `跳过去了：${roll.used} / ${roll.target}` : '跳过去了' });
+    }
+    return '';
+  }
+
+  // 没跳过去：摔。棋子留在原地，见证者想让他真的掉进坑里可以手动拖。
+  const tier = req.injury ?? injuryTier(req.fall);
+  const damage = rollInjury(tier);
+  update((d) => {
+    const dm = findMap(d, t.mapId)!;
+    const dt = dm.tokens.find((x) => x.id === req.tokenId)!;
+    const p = dt.pcId ? d.party.find((x) => x.id === dt.pcId) : null;
+    const pool = p ? hpOf(p) : (dt.hpMax ?? 0) > 0 ? { hp: dt.hp ?? dt.hpMax!, max: dt.hpMax! } : null;
+    if (!pool) return;
+    const next = Math.max(0, pool.hp - damage);
+    if (p) { p.hp = next; p.hpMax ??= pool.max; } else { dt.hp = next; }
+    if (next <= 0) { dt.down = true; delete dt.status; }
+  });
+  setTr({ msg: `没跳过去，${describeInjury(req.fall, damage)}` });
+  return '';
 }
 
 /** 空格（只在战斗中）：结束这一回合。重置每人的移动力；"暂时不能行动"的回合数减一，减到 0 就恢复。 */

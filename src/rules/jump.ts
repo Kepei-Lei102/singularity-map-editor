@@ -55,6 +55,8 @@ export interface JumpRoll {
   attr: JumpAttr;
   /** 掷出来的点数（优势/劣势各两个）。 */
   rolls: number[];
+  /** 实际采信的那个点数。文案和特大成功都按它判，不是按 rolls 里有没有 100。 */
+  used: number;
   /** 门槛（区值 × 10）。 */
   target: number;
   success: boolean;
@@ -63,7 +65,9 @@ export interface JumpRoll {
 
 export function rollJumpCheck(pc: PC, check: JumpCheck, roll?: () => number): JumpRoll {
   const r = roll ?? rollD100;
-  const a = r(), b = r();
+  const a = r();
+  // 单掷只抽一颗：多抽的随机数会打乱可复现的骰子序列。
+  const b = check.mode === 'single' ? a : r();
   const rolls = check.mode === 'single' ? [a] : [a, b];
   const target = zoneOf(pc.attributes, check.attr) * 10;
   // D100 是「掷得越小越好」（掷 ≤ 门槛算过）。
@@ -73,7 +77,18 @@ export function rollJumpCheck(pc: PC, check: JumpCheck, roll?: () => number): Ju
   const used = check.mode === 'advantage' ? best : check.mode === 'disadvantage' ? worst : a;
   // 100（= 00）算特大成功，直接过。
   const success = used === 100 || (target > 0 && used <= target);
-  return { attr: check.attr, rolls, target, success, mode: check.mode };
+  return { attr: check.attr, rolls, used, target, success, mode: check.mode };
+}
+
+/**
+ * 玩家在窗口里已经掷完了，把那个点数直接变成 JumpRoll。
+ * 优势/劣势的两颗骰在掷的时候就定了，这里只判采信哪颗。
+ */
+export function judgeValue(check: JumpCheck, pc: PC, values: number[]): JumpRoll {
+  const rolls = values.length ? values.map((v) => Math.max(1, Math.min(100, Math.round(v)))) : [1];
+  const target = zoneOf(pc.attributes, check.attr) * 10;
+  const used = check.mode === 'advantage' ? Math.min(...rolls) : check.mode === 'disadvantage' ? Math.max(...rolls) : rolls[0];
+  return { attr: check.attr, rolls, used, target, success: used === 100 || (target > 0 && used <= target), mode: check.mode };
 }
 
 export function describeRoll(r: JumpRoll): string {
@@ -81,7 +96,7 @@ export function describeRoll(r: JumpRoll): string {
   const dice = r.rolls.join('/');
   const head = `【${r.attr}】${mode}检定 ${dice}（门槛 ${r.target}）`;
   if (!r.success) return `${head}：没过`;
-  return r.rolls.includes(100) ? `${head}：特大成功` : `${head}：过了`;
+  return r.used === 100 ? `${head}：特大成功` : `${head}：过了`;
 }
 
 // ---------- 摔伤 ----------
@@ -128,6 +143,25 @@ export interface JumpSkills {
 
 export const NO_JUMP_SKILLS: JumpSkills = { climb: false, longJump: false };
 
+/** 哪些技能给【攀爬】。运动模块（人形机器人）那条。 */
+export const CLIMB_GRANTS = ['003-9-104'] as const;
+
+/**
+ * 哪些技能给【跳远】（3 格长跳）。
+ * 作者口径：编舞师、具身游戏大师这种身体系途径能解锁。
+ * 但动作解锁表还只填了 10/194，对应技能 id 还没进去，先留空——
+ * 填了 id 这里自动生效，不用改别的。
+ */
+export const LONG_JUMP_GRANTS: readonly string[] = [];
+
+/** 这个人解锁的技能里，跟跳跃有关的有哪些。 */
+export function jumpSkillsOf(unlocked: readonly string[]): JumpSkills {
+  return {
+    climb: CLIMB_GRANTS.some((id) => unlocked.includes(id)),
+    longJump: LONG_JUMP_GRANTS.some((id) => unlocked.includes(id)),
+  };
+}
+
 export type JumpKind = 'across' | 'up' | 'down';
 
 export interface JumpPlan {
@@ -149,6 +183,8 @@ export interface JumpPlan {
   reason: string;
   /** 摔伤档。null = 不摔。 */
   injury: InjuryTier | null;
+  /** 失败会掉几格（平行跳＝坑深，往上＝要攀的高度）。用来算摔伤档。 */
+  fall: number;
   /** 高度恐惧这一档。 */
   fear: FearTier;
 }
@@ -157,27 +193,36 @@ export interface JumpPlan {
  * 算一次跳跃要什么都摆在明面上，先不掷骰。
  * 掷骰和结算在 trial 层做。
  */
-export function planJump(kind: JumpKind, cells: number, skills: JumpSkills = NO_JUMP_SKILLS): JumpPlan {
+/**
+ * @param cells 平行跳＝坑的宽；往上/往下＝落差几格
+ * @param fall 跳失败会掉几格（平行跳＝坑深，往上＝要攀的高度）。
+ *   作者口径：失败该摔就摔，按落差算摔伤档。
+ */
+export function planJump(kind: JumpKind, cells: number, skills: JumpSkills = NO_JUMP_SKILLS, fall = 0): JumpPlan {
   const n = Math.abs(cells);
   const fear = fearTier(n);
   const base = { kind, distance: kind === 'across' ? n : 0, height: kind === 'across' ? 0 : n, skills, fear,
-    injury: null as InjuryTier | null, moveMultiplier: 1, usesAction: false };
+    injury: null as InjuryTier | null, fall: kind === 'up' ? n : Math.abs(fall), moveMultiplier: 1, usesAction: false };
 
   if (kind === 'across') {
-    if (n <= 1) return { ...base, check: null, allowed: true, reason: '一格，不用检定' };
-    if (n === 2) return { ...base, check: { attr: '敏捷', mode: 'single', why: '两格（1.5 米）' }, allowed: true, reason: '要敏捷检定' };
+    // 掉进坑里摔多重，看坑有多深——不是一律中伤。
+    const hurt = { ...base, injury: injuryTier(base.fall) };
+    if (n <= 1) return { ...hurt, check: null, allowed: true, reason: '一格，不用检定' };
+    if (n === 2) return { ...hurt, check: { attr: '敏捷', mode: 'single', why: '两格（1.5 米）' }, allowed: true, reason: '要敏捷检定' };
     if (n === 3) {
-      if (!skills.longJump) return { ...base, check: null, allowed: false, reason: '三格是长跳，要有【跳远】技能' };
-      return { ...base, check: { attr: '力量', mode: 'single', why: '三格长跳（2.25 米）' }, allowed: true, reason: '长跳，力量检定' };
+      if (!skills.longJump) return { ...hurt, check: null, allowed: false, reason: '三格是长跳，要有【跳远】技能' };
+      return { ...hurt, check: { attr: '力量', mode: 'single', why: '三格长跳（2.25 米）' }, allowed: true, reason: '长跳，力量检定' };
     }
-    return { ...base, check: null, allowed: false, reason: `四格以上跳不过去（${(n * CELL_M).toFixed(2)} 米）` };
+    return { ...hurt, check: null, allowed: false, reason: `四格以上跳不过去（${(n * CELL_M).toFixed(2)} 米）` };
   }
 
   if (kind === 'up') {
     if (n <= 1) return { ...base, check: null, allowed: true, reason: '一格：普通移动，双倍消耗', moveMultiplier: 2 };
+    // 往上失败是掉下来，按已攀的高度算摔伤档（作者口径）。
+    const hurt = { ...base, injury: injuryTier(n) };
     if (n <= 3) {
       // 2–3 格：攀跳。有【攀爬】就不占行动点。
-      return { ...base, check: { attr: '力量', mode: 'single', why: `往上 ${n} 格` },
+      return { ...hurt, check: { attr: '力量', mode: 'single', why: `往上 ${n} 格` },
         allowed: true, usesAction: !skills.climb, moveMultiplier: 2,
         reason: skills.climb ? '攀跳，有【攀爬】不占行动点' : '攀跳，要【力量】，占行动点' };
     }
@@ -186,11 +231,11 @@ export function planJump(kind: JumpKind, cells: number, skills: JumpSkills = NO_
     }
     if (n >= 12) {
       // 12 格以上：有【攀爬】才能爬，但依旧占行动点。
-      return { ...base, check: { attr: '敏捷', mode: 'single', why: `攀爬 ${n} 格` },
+      return { ...hurt, check: { attr: '敏捷', mode: 'single', why: `攀爬 ${n} 格` },
         allowed: true, usesAction: true, moveMultiplier: 2,
         reason: `爬到 ${n} 格这么高，就算有【攀爬】也占行动点` };
     }
-    return { ...base, check: { attr: '敏捷', mode: 'single', why: `攀爬 ${n} 格` },
+    return { ...hurt, check: { attr: '敏捷', mode: 'single', why: `攀爬 ${n} 格` },
       allowed: true, usesAction: false, moveMultiplier: 2, reason: '攀爬，有【攀爬】不占行动点' };
   }
 
@@ -244,10 +289,10 @@ export function resolveJump(pc: PC, plan: JumpPlan, roll?: () => number, injuryR
   if (plan.kind === 'across') {
     landed = check === null || check.success;
     if (!landed) {
-      // 平行跳失败：掉进空隙。按落差算——空隙按掉落算，至少中伤。
-      const tier: InjuryTier = 'medium';
+      // 平行跳失败：掉进坑里。摔多重看坑有多深（作者口径：按落差算）。
+      const tier = plan.injury ?? injuryTier(plan.fall);
       damage = rollInjury(tier, injuryRoll);
-      text = `${describeRoll(check!)}。没跳过去，掉下去了：${INJURY_LABEL[tier]} 1D${INJURY_DICE[tier]}，扣 ${damage} HP`;
+      text = `${describeRoll(check!)}。没跳过去，${describeInjury(plan.fall, damage)}`;
     } else {
       text = check ? `${describeRoll(check)}。跳过去了` : '一格，直接过去了';
     }
@@ -257,9 +302,10 @@ export function resolveJump(pc: PC, plan: JumpPlan, roll?: () => number, injuryR
   if (plan.kind === 'up') {
     landed = check === null || check.success;
     if (!landed) {
-      // 攀跳没过就是没上去，停在原地不摔（往上失败掉回原处）。
-      text = `${describeRoll(check!)}。没攀上去，掉回原地`;
-      landed = false;
+      // 往上失败：没攀住，从已攀的高度掉下来（作者口径：按已攀的高度摔）。
+      const tier = plan.injury ?? injuryTier(plan.fall);
+      damage = rollInjury(tier, injuryRoll);
+      text = `${describeRoll(check!)}。没攀住，${describeInjury(plan.fall, damage)}`;
     } else {
       text = check ? `${describeRoll(check)}。上去了` : '一格，直接上去';
     }

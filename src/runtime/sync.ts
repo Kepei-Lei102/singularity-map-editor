@@ -296,10 +296,13 @@ export function send(body: SyncBody, to?: string) {
 /** 开出判定后，直接把「轮到你了」推到对应玩家的窗口。 */
 export function pushJudgmentRequest(pcId: string): void {
   const p = pendingFor(pcId);
+  if (!p) return;
+  // 只发「要掷什么」，不发主持端内部的结算数据：
+  // jump 里带着落点、摔伤档，推给玩家等于把结果提前告诉他。
+  const judgment: PendingJudgment = { ...p, jump: null };
   for (const [binding, entry] of players) {
     if (entry.pcId !== pcId || !entry.win || entry.win.closed) continue;
-    const msg: SyncMsg = { type: 'judge-request', judgment: p ?? ({ ...(getUI().pendingJudgment as PendingJudgment) }), __ts: 'ts-map', seq: rand(), from: SESSION, inst: INST, born: BORN };
-    if (!p) continue;
+    const msg: SyncMsg = { type: 'judge-request', judgment, __ts: 'ts-map', seq: rand(), from: SESSION, inst: INST, born: BORN };
     try { entry.win.postMessage(msg, target()); } catch { /* closed */ }
     void binding;
   }

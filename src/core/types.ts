@@ -466,6 +466,34 @@ export interface Npc {
  * 开出来、等玩家自己掷的判定。见证者只宣告（名称 / 骰子 / 发生角色 / 预先写好的裁定），
  * 骰子由玩家在自己的窗口里掷；玩家不能拒掷，只有见证者能整个取消。
  */
+/**
+ * 一次跳跃的请求。判定掷完，见证者点「按结果执行」时按它结算。
+ * 只在主持端用，推给玩家窗口时不带这个字段。
+ */
+export interface JumpRequest {
+  tokenId: Id;
+  /** 起跳方向。 */
+  dx: number;
+  dy: number;
+  kind: 'across' | 'up' | 'down';
+  /** 平行跳＝坑宽；往上/往下＝落差格数。 */
+  cells: number;
+  /** 失败会掉几格。 */
+  fall: number;
+  /** 检定属性；null = 不用掷。 */
+  attr: '敏捷' | '力量' | '意志' | null;
+  /** 落点：成功就把棋子挪到这。 */
+  landing: { x: number; y: number };
+  /** 落点在往前第几格（坑宽 + 1），用来算移动点。 */
+  landingStep?: number;
+  /** 起跳时的每格单价，结算时按它扣移动点。 */
+  unitPrice?: number;
+  /** 失败摔伤档；默认按 fall 算。 */
+  injury: 'light' | 'medium' | 'heavy' | 'brutal' | null;
+  /** 移动点单价倍数。 */
+  moveMultiplier: number;
+}
+
 export interface PendingJudgment {
   id: Id;
   title: string;
@@ -477,6 +505,8 @@ export interface PendingJudgment {
   session: number;
   /** 见证者代掷：玩家不在电脑前，或者用的是实体骰时走这条。 */
   standIn?: boolean;
+  /** 这一发判定是为一次跳跃开的：掷完要按结果真的挪棋子/扣血。 */
+  jump?: JumpRequest | null;
 }
 
 /**

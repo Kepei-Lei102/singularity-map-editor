@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { getUI, getWorld, setUI, useUI, useWorld, worldContext } from '../core/store';
 import { cancelJudgment, openJudgment, publishJudgment, standInForJudgment } from '../rules/judgments';
 import { pushJudgmentRequest } from '../runtime/sync';
+import { settleJump } from '../runtime/trial';
 import { tokenPosition } from '../scene/architecture';
 import type { Id } from '../core/types';
 import { DiceTray, type DiceSides, type DiceTrayRecord } from './DiceTray';
@@ -84,9 +85,22 @@ function PendingJudgmentPanel({ context }: { context: string }) {
     {!standIn && (result
       ? <div>
           他掷出了：D{result.sides} = {result.value === 100 ? '000' : result.value}
+          {p.jump && (
+            <button onClick={() => {
+              // 跳跃走「骰出即生效、生什么效见证者确认」：你按结果执行，再广播。
+              const err = settleJump(p.jump!, [result.value]);
+              if (err) setMessage(err);
+              broadcast();
+            }}>按结果执行（挪棋子 / 扣血）</button>
+          )}
           <button onClick={broadcast}>确认并广播给全队</button>
         </div>
       : <div className="muted">等结果…</div>)}
+    {standIn && p.jump && result && (
+      <div>
+        <button onClick={() => { const err = settleJump(p.jump!, [result.value]); if (err) setMessage(err); broadcast(); }}>按结果执行（挪棋子 / 扣血）</button>
+      </div>
+    )}
     <div className="btns">
       {!standIn && <button onClick={() => { const e = standInForJudgment(); if (e) setMessage(e); }}>代掷（玩家不在电脑前 / 实体骰）</button>}
       <button onClick={() => setMessage(cancelJudgment() ?? '已取消这个判定')}>取消整个判定</button>

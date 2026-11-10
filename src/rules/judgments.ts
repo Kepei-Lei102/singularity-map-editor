@@ -36,6 +36,7 @@ import type { PendingJudgment } from '../core/types';
 export function openJudgment(input: {
   title: string; ruling: string; sides: PendingJudgment['sides']; subjectId: string;
   place?: { mapId: string; x: number; y: number } | null;
+  jump?: import('../core/types').JumpRequest | null;
 }): string | null {
   const w = getWorld();
   if (!input.title.trim()) return '请填写判定名称';
@@ -49,6 +50,7 @@ export function openJudgment(input: {
     pendingJudgment: {
       id: uid(), title: input.title.trim(), ruling: input.ruling, sides: input.sides,
       subjectId: input.subjectId, place: input.place ?? null, at: Date.now(), session: getWorld().session,
+      jump: input.jump ?? null,
     },
   });
   return null;

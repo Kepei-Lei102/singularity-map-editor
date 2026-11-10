@@ -59,13 +59,22 @@ test('平行跳：4 格以上跳不过去', () => {
   assert.match(p.reason, /四格以上/);
 });
 
-test('平行跳失败：掉下去，按中伤摔', () => {
+test('平行跳失败：摔伤按坑深算', () => {
   // 敏捷区值 = floor(20/5) = 4 → 门槛 40。掷 90 必败。
-  const plan = api.planJump('across', 2, NO);
+  // 作者口径：平行跳失败按落差算，不是一律中伤。
+  const plan = api.planJump('across', 2, NO, 3); // 坑深 3 格
   const out = api.resolveJump(pc({ 敏捷: 20 }), plan, dice(90, 90));
   assert.equal(out.landed, false);
+  assert.equal(plan.injury, 'medium', '3 格落差是中伤');
   assert.ok(out.damage >= 1 && out.damage <= 8, '中伤 1D8');
   assert.match(out.text, /没跳过去/);
+});
+
+test('平行跳失败：浅坑轻伤，掉一层重伤', () => {
+  assert.equal(api.planJump('across', 2, NO, 1).injury, 'light', '1 格轻伤');
+  assert.equal(api.planJump('across', 2, NO, 6).injury, 'heavy', '6 格重伤');
+  assert.equal(api.planJump('across', 2, NO, 8).injury, 'heavy', '掉一层 8 格重伤');
+  assert.equal(api.planJump('across', 2, NO, 12).injury, 'brutal', '12 格以上 1D20');
 });
 
 test('平行跳成功：过去了，不摔', () => {
@@ -121,12 +130,21 @@ test('往上：12 格以上有【攀爬】才能爬，但依旧占行动点', ()
   assert.equal(yes.check.attr, '敏捷');
 });
 
-test('往上失败：没攀上去，掉回原地，不摔', () => {
+test('往上失败：没攀住，按已攀的高度摔', () => {
+  // 作者口径：往上失败不是掉回原地不摔，是按已攀的高度摔。
   const plan = api.planJump('up', 2, NO);
-  const out = api.resolveJump(pc({ 力量: 20 }), plan, dice(90, 90));
+  assert.equal(plan.injury, 'light', '2 格落差轻伤');
+  const out = api.resolveJump(pc({ 力量: 20 }), plan, dice(90, 90), () => 3);
   assert.equal(out.landed, false);
-  assert.equal(out.damage, 0, '往上失败不摔');
-  assert.match(out.text, /掉回原地/);
+  assert.equal(out.damage, 3);
+  assert.match(out.text, /摔下来/);
+});
+
+test('往上失败：攀得越高摔得越重', () => {
+  assert.equal(api.planJump('up', 2, BOTH).injury, 'light');
+  assert.equal(api.planJump('up', 3, BOTH).injury, 'medium');
+  assert.equal(api.planJump('up', 6, BOTH).injury, 'heavy');
+  assert.equal(api.planJump('up', 12, BOTH).injury, 'brutal');
 });
 
 // ---------- 往下 ----------
@@ -434,4 +452,48 @@ test('坑宽超过 3 格就跳不过去', () => {
   const a = api.gapAhead(floorOf(many), { x: 0, y: 0 }, 1, 0);
   assert.equal(a.kind, 'gap');
   assert.equal(a.landing, false);
+});
+
+// ---------- 判定流程掷完拿到的点数 ----------
+
+test('judgeValue：单掷只用一颗，优势取小，劣势取大', () => {
+  const chk = { attr: '敏捷', mode: 'single', why: '' };
+  const pc50 = pc({ 敏捷: 50 }); // 区值 10 → 门槛 100
+  assert.equal(api.judgeValue(chk, pc50, [20]).used, 20);
+  assert.equal(api.judgeValue({ ...chk, mode: 'advantage' }, pc50, [80, 20]).used, 20, '优势取小');
+  assert.equal(api.judgeValue({ ...chk, mode: 'disadvantage' }, pc50, [20, 80]).used, 80, '劣势取大');
+});
+
+test('judgeValue：30 对 10 点敏捷必败（门槛 20）', () => {
+  const pc10 = pc({ 敏捷: 10 });
+  const r = api.judgeValue({ attr: '敏捷', mode: 'single', why: '' }, pc10, [30]);
+  assert.equal(r.target, 20);
+  assert.equal(r.success, false);
+});
+
+test('judgeValue：100 算特大成功', () => {
+  const r = api.judgeValue({ attr: '敏捷', mode: 'single', why: '' }, pc({ 敏捷: 10 }), [100]);
+  assert.equal(r.success, true);
+});
+
+test('优势掷出 100/5 别说成特大成功', () => {
+  // 采信的是 5，不是被丢掉的那颗 100。
+  const r = api.judgeValue({ attr: '敏捷', mode: 'advantage', why: '' }, pc({ 敏捷: 50 }), [100, 5]);
+  assert.equal(r.used, 5);
+  assert.doesNotMatch(api.describeRoll(r), /特大成功/);
+});
+
+// ---------- 技能 ----------
+
+test('运动模块给【攀爬】，别的技能不给', () => {
+  assert.equal(api.jumpSkillsOf(['003-9-104']).climb, true);
+  assert.equal(api.jumpSkillsOf([]).climb, false);
+  assert.equal(api.jumpSkillsOf(['011-9-102']).climb, false);
+  assert.equal(api.jumpSkillsOf(['003-9-104']).longJump, false, '运动模块不给跳远');
+});
+
+test('有【攀爬】之后，3 格坑还是过不去（那是跳远的事）', () => {
+  const withClimb = api.jumpSkillsOf(['003-9-104']);
+  const plan = api.planJump('across', 3, withClimb);
+  assert.equal(plan.allowed, false, '攀爬管上下，不管横跨');
 });

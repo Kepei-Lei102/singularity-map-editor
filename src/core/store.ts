@@ -284,6 +284,8 @@ export interface UIState {
   /** 开出来等玩家掷的判定；同一时间只开一个。 */
   pendingJudgment: PendingJudgment | null;
   /** 玩家窗口掷完回传的结果，等见证者确认后广播。 */
+  /** 前面是坑，等玩家再按一次同方向确认起跳。 */
+  pendingGap: { tokenId: string; dx: number; dy: number } | null;
   judgmentResult: { id: string; title: string; sides: number; value: number; tens: number | null; units: number | null; material: string; seed: number; rollId: string; byStandIn: boolean } | null;
   flowId: string | null;
   connKind: 'stairs' | 'portal' | 'door' | 'other';
@@ -318,6 +320,7 @@ let ui: UIState = {
   views: {},
   pendingConn: null,
   pendingJudgment: null,
+  pendingGap: null,
   judgmentResult: null,
   pick: null,
   trial: null,
