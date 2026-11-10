@@ -268,7 +268,7 @@ test('救治：解锁急救技能才能做，D100 投 1 失败', () => {
   // 投 1 失败（结果写在 HUD 的 msg 里）
   assert.equal(api.trialRescue('tb', { roll: 1 }), null);
   assert.match(api.getUI().trial.msg, /失败/);
-  api.setUI({ trial: { ...api.getUI().trial, acted: false } });
+  api.setUI({ trial: { ...api.getUI().trial, acted: {} } });
   assert.equal(api.trialRescue('tb', { roll: 60 }), null);
   assert.match(api.getUI().trial.msg, /成功/);
   const tb = api.findMap(api.getWorld(), m.id).tokens.find((k) => k.id === 'tb');
@@ -480,4 +480,22 @@ test('尸体能搬，搬了位置记录跟着走', () => {
   assert.equal(api.moveMapToken(m.id, 'tb', { x: 7, y: 6 }), null, '尸体可以直接抬走');
   const world = api.getWorld();
   assert.deepEqual(world.party.find((p) => p.id === 'b').deathPlace, { mapId: m.id, x: 7, y: 6 }, '记录位置跟着尸体');
+});
+
+test('行动点按人记：一个人用掉不影响另一个人', () => {
+  // actionsLeft 只看账本，不碰地图；给个占位 mapId 就够。
+  api.setUI({ trial: {
+    mapId: 'x', combat: true, current: 0, moved: {}, turned: {}, turn: 1,
+    msg: '', markSymbol: '!', markText: '', markMode: false,
+    players: [
+      { tokenId: 'ta', pcId: 'a', name: '医生' },
+      { tokenId: 'tb', pcId: 'b', name: '伤员' },
+    ],
+    acted: { ta: true },
+  } });
+  // 甲用掉了行动点
+  assert.equal(api.actionsLeft(api.getUI().trial), 0);
+  // 轮到乙：乙这一回合还没动过，点数得是满的
+  api.setUI({ trial: { ...api.getUI().trial, current: 1 } });
+  assert.equal(api.actionsLeft(api.getUI().trial), 1);
 });

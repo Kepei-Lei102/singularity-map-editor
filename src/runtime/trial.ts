@@ -214,11 +214,12 @@ export function trialMove(dx: number, dy: number) {
   // 朝向：战斗中第一次按方向＝原地转身，再按同方向才走（回合制下等于一次确认）。
   // 自由行动不确认，朝向跟着走；转身不占行动点；被缠斗时一回合只能转一次。
   const dir = dirOf(dx, dy);
-  const runSpec = t.runMode ? RUN_MODES[t.runMode] : null;
+  const runModeNow = runModeOf(t, pl.tokenId);
+  const runSpec = runModeNow ? RUN_MODES[runModeNow] : null;
   if (t.combat && tok.facing !== dir) {
     if (t.combat && isEngaged(m, tok) && t.turned?.[pl.tokenId]) return setTr({ msg: '被缠斗住了：这回合只能转一次身' });
     // 跑起来拐弯有限：奔跑整回合只能拐一次，爆跑一次都不准。
-    if (runSpec && !canTurn(runSpec, t.runTurns ?? 0)) {
+    if (runSpec && !canTurn(runSpec, runTurnsOf(t, pl.tokenId))) {
       return setTr({ msg: runSpec.turns === 0 ? `【${runSpec.label}】不能拐弯，往${dir}得先停下来` : `【${runSpec.label}】这一回合已经拐过弯了` });
     }
     update((d) => {
@@ -228,7 +229,7 @@ export function trialMove(dx: number, dy: number) {
     setTr({
       msg: `转向${dir}`,
       turned: t.combat ? { ...(t.turned ?? {}), [pl.tokenId]: true } : t.turned,
-      runTurns: runSpec ? (t.runTurns ?? 0) + 1 : t.runTurns,
+      runTurns: runSpec ? { ...(t.runTurns ?? {}), [pl.tokenId]: runTurnsOf(t, pl.tokenId) + 1 } : t.runTurns,
     });
     return;
   }
@@ -241,7 +242,7 @@ export function trialMove(dx: number, dy: number) {
   const prone = tok.stance === '趴';
   // 战斗模式才花移动点数；自由行动不限步数。
   // 这一回合的点池在回合开始时建好，这里只查够不够、走完扣掉。
-  const price = stepPrice(t.runMode ?? null, prone);
+  const price = stepPrice(runModeNow, prone);
   if (t.combat) {
     const left = t.movePoints?.[pl.tokenId] ?? movePool(budget, stored);
     if (!canAffordStep(left, price)) return setTr({ msg: '这回合的移动点数用完了，按空格结束回合' });
@@ -562,10 +563,10 @@ export function settleJump(req: JumpRequest, values: number[]): string {
         ?? movePool(pc ? moveBudgetOn(pc, m.layer) : null, t.charge?.[req.tokenId]?.cells ?? 0);
       const left = Math.max(0, pool - cost);
       setTr({ movePoints: { ...(t.movePoints ?? {}), [req.tokenId]: left },
-        ...(req.usesAction ? { acted: true } : {}),
+        ...(req.usesAction ? { acted: { ...(t.acted ?? {}), [req.tokenId]: true } } : {}),
         msg: `${done}了${roll ? `：骰点 ${roll.used} + 区值 ${roll.value} = ${roll.total} / DC ${roll.dc}` : ''}` });
     } else {
-      setTr({ ...(req.usesAction ? { acted: true } : {}),
+      setTr({ ...(req.usesAction ? { acted: { ...(t.acted ?? {}), [req.tokenId]: true } } : {}),
         msg: roll ? `${done}了：骰点 ${roll.used} + 区值 ${roll.value} = ${roll.total} / DC ${roll.dc}` : `${done}了` });
     }
     // 跳过去也是走过去了：触发区和自动揭图照常。
@@ -672,14 +673,29 @@ export function trialEndTurn() {
   })();
   // 换回合要把这一回合的账本清干净：跑了什么、拐了几次都是「本回合」的。
   // 不清的话「奔跑只准拐一次」会变成整场只准拐一次，下一回合还会白送一个跑法。
-  setTr({ moved: {}, turned: {}, turn: t.turn + 1, acted: false, runMode: null, runTurns: 0,
-    opportunity: null, msg: '', charge, movePoints });
+  setTr({ moved: {}, turned: {}, turn: t.turn + 1, acted: {}, runMode: {}, runTurns: {},
+    sharpAttack: {}, opportunity: null, msg: '', charge, movePoints });
 }
+
+/** 当前该谁行动（试玩里同一时间只有一个角色能动）。 */
+export function currentTokenId(t: Trial | null | undefined): string | null {
+  return t?.players[t.current]?.tokenId ?? null;
+}
+/** 这一回合的行动点用掉没有——按人记，不是全队一份。 */
+const actedOf = (t: Trial, tokenId: string | null): boolean => !!(tokenId && t.acted?.[tokenId]);
+/** 这个棋子这一回合选的跑法。 */
+export const runModeOf = (t: Trial | null | undefined, tokenId: string | null): RunMode | null =>
+  (tokenId && t?.runMode?.[tokenId]) || null;
+/** 这一回合拐了几次弯。 */
+const runTurnsOf = (t: Trial, tokenId: string | null): number => (tokenId ? t.runTurns?.[tokenId] ?? 0 : 0);
+/** 这次攻击是不是用锐器。 */
+export const sharpOf = (t: Trial | null | undefined, tokenId: string | null): boolean =>
+  !!(tokenId && t?.sharpAttack?.[tokenId]);
 
 /** 这一回合还有几点行动点：每回合 1 点，攻击/主动技能花掉就算用完。 */
 export const actionsLeft = (t: Trial | null | undefined): number => {
   if (!t?.combat) return 1;
-  return t.acted ? 0 : 1;
+  return actedOf(t, currentTokenId(t)) ? 0 : 1;
 };
 
 /**
@@ -691,7 +707,7 @@ function attackContext(targetTokenId: string, sharp: boolean) {
   const pl = t?.players[t.current];
   if (!t || !pl) return '没有正在试玩的角色';
   if (!t.combat) return '先打开战斗模式再攻击';
-  if (t.acted) return '这回合的行动点已经用掉了，按空格结束回合';
+  if (actedOf(t, pl.tokenId)) return '这回合的行动点已经用掉了，按空格结束回合';
   const w = getWorld();
   const m = findMap(w, t.mapId);
   const attacker = m?.tokens.find((x) => x.id === pl.tokenId);
@@ -769,7 +785,7 @@ export function settleAttack(targetTokenId: string, roll: number, opts: { roller
     } else downed = already;
   });
   setTr({
-    acted: true,
+    acted: { ...(t.acted ?? {}), [pl.tokenId]: true },
     msg: '',
     event: {
       kind: r.hit ? 'hit' : 'miss',
@@ -801,7 +817,7 @@ export function toggleCombat() {
       if (!toCombat && st.roundsLeft !== undefined) { st.endsAt = now + st.roundsLeft * ROUND_MINUTES * 60000; delete st.roundsLeft; }
     }
   });
-  setTr({ combat: toCombat, moved: {}, acted: false, turn: 1, msg: '' });
+  setTr({ combat: toCombat, moved: {}, turned: {}, acted: {}, runMode: {}, runTurns: {}, turn: 1, msg: '' });
 }
 
 /** 让当前角色暂时不能行动（晕厥、泡温泉……），时长按分钟给；战斗中自动换算成回合。 */
@@ -937,7 +953,7 @@ export function trialRescue(targetTokenId: string, opts: { roll?: number } = {})
   const pl = t?.players[t.current];
   if (!t || !pl) return '没有正在试玩的角色';
   if (!t.combat) return '先打开战斗模式';
-  if (t.acted) return '这回合的行动点已经用掉了，按空格结束回合';
+  if (actedOf(t, pl.tokenId)) return '这回合的行动点已经用掉了，按空格结束回合';
   const w = getWorld();
   const m = findMap(w, t.mapId);
   const rescuer = m?.tokens.find((x) => x.id === pl.tokenId);
@@ -952,7 +968,7 @@ export function trialRescue(targetTokenId: string, opts: { roll?: number } = {})
   const roll = opts.roll ?? 1 + Math.floor(Math.random() * 100);
   const r = rollRescue(roll);
   if (!r.success) {
-    setTr({ acted: true, msg: `救治失败（D100=${roll === 100 ? '00' : roll}）：${target.name} 还是没醒过来` });
+    setTr({ acted: { ...(t.acted ?? {}), [pl.tokenId]: true }, msg: `救治失败（D100=${roll === 100 ? '00' : roll}）：${target.name} 还是没醒过来` });
     return null;
   }
   update((d) => {
@@ -967,7 +983,7 @@ export function trialRescue(targetTokenId: string, opts: { roll?: number } = {})
       dt.hp = Math.max(dt.hp ?? 0, RESCUED_HP);
     }
   });
-  setTr({ acted: true, msg: `救治成功（D100=${roll === 100 ? '00' : roll}${r.crit ? '，特大成功' : ''}）：${target.name} 被拉起来了，1 HP` });
+  setTr({ acted: { ...(t.acted ?? {}), [pl.tokenId]: true }, msg: `救治成功（D100=${roll === 100 ? '00' : roll}${r.crit ? '，特大成功' : ''}）：${target.name} 被拉起来了，1 HP` });
   return null;
 }
 
@@ -1008,7 +1024,7 @@ export function trialSense(kind: SenseKind, opts: { targetObjectId?: string | nu
   const t = tr();
   const pl = t?.players[t.current];
   if (!t || !pl) return '没有正在试玩的角色';
-  if (t.combat && t.acted) return '这回合的行动点已经用掉了，按空格结束回合';
+  if (t.combat && actedOf(t, pl.tokenId)) return '这回合的行动点已经用掉了，按空格结束回合';
   const w = getWorld();
   const m = findMap(w, t.mapId);
   const tok = m?.tokens.find((x) => x.id === pl.tokenId);
@@ -1021,7 +1037,7 @@ export function trialSense(kind: SenseKind, opts: { targetObjectId?: string | nu
   const hints = senseHints({ pc, pcName: pl.name, map: m, at: { x: tok.x, y: tok.y }, targetObjectId: opts.targetObjectId, roll });
   const useful = hints.filter((h) => h.from !== 'none');
 
-  setTr({ acted: t.combat ? true : t.acted, sense: { kind, roll, hints: useful, at: Date.now() }, msg: describeSense(roll, pl.name) });
+  setTr({ acted: t.combat ? { ...(t.acted ?? {}), [pl.tokenId]: true } : t.acted, sense: { kind, roll, hints: useful, at: Date.now() }, msg: describeSense(roll, pl.name) });
   update((d) => {
     d.log.push({ id: uid(), at: Date.now(), session: d.session, kind: 'note', text: describeSense(roll, pl.name) });
   });
@@ -1039,21 +1055,24 @@ export function trialRun(mode: RunMode | null): string | null {
   const w = getWorld();
   const pc = w.party.find((p) => p.id === pl.pcId);
   if (!pc) return '找不到角色卡';
-  if (mode === null) { setTr({ runMode: null, runTurns: 0, msg: '' }); return null; }
+  if (mode === null) {
+    setTr({ runMode: { ...(t.runMode ?? {}), [pl.tokenId]: null }, runTurns: { ...(t.runTurns ?? {}), [pl.tokenId]: 0 }, msg: '' });
+    return null;
+  }
 
   const spec = RUN_MODES[mode];
   // 作者口径：扣 ME 换跑法只能在本回合还没挪步的时候做，一旦动了这回合就只能走路。
   if ((t.moved?.[pl.tokenId] ?? 0) > 0) return '这回合已经动过了，只能走路';
-  if (t.combat && spec.usesAction && t.acted) return `【${spec.label}】要占行动点，这回合已经用掉了`;
+  if (t.combat && spec.usesAction && actedOf(t, pl.tokenId)) return `【${spec.label}】要占行动点，这回合已经用掉了`;
   if (runMeShort(pc, spec)) return `ME 不够：【${spec.label}】要 ${spec.meCost} ME，现在只有 ${pc.me}`;
 
   if (spec.meCost > 0) {
     update((d) => { const p = d.party.find((x) => x.id === pl.pcId); if (p && p.me != null) p.me -= spec.meCost; });
   }
   setTr({
-    runMode: mode,
-    runTurns: 0,
-    acted: t.combat && spec.usesAction ? true : t.acted,
+    runMode: { ...(t.runMode ?? {}), [pl.tokenId]: mode },
+    runTurns: { ...(t.runTurns ?? {}), [pl.tokenId]: 0 },
+    acted: t.combat && spec.usesAction ? { ...(t.acted ?? {}), [pl.tokenId]: true } : t.acted,
     msg: spec.usesAction ? `换【${spec.label}】` : '',
   });
   return null;

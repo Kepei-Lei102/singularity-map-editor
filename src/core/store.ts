@@ -246,14 +246,18 @@ export interface UIState {
     movePoints?: Record<string, number>;
     /** 蓄力进度：移动力够高的人每回合攒一点，攒满多一格。用完才重新蓄。 */
     charge?: Record<string, { progress: number; cells: number }>;
-    /** 这一回合按的跑法。没写＝正常走。 */
-    runMode?: 'jog' | 'run' | 'sprint' | null;
+    /**
+     * 下面这几个都按 tokenId 记：一场试玩里可能有两个人轮流动，
+     * 「全队一份」会让 A 攻击完 B 也不能攻击（切角色串味）。
+     */
+    /** 这一回合按的跑法。没这一项＝正常走。 */
+    runMode?: Record<string, 'jog' | 'run' | 'sprint' | null>;
     /** 这一回合已经拐了几次弯。奔跑只准拐一次，爆跑一次都不准。 */
-    runTurns?: number;
+    runTurns?: Record<string, number>;
     turned?: Record<string, boolean>; // 本回合已经原地转身过的棋子（缠斗限制用）
-    acted?: boolean; // 这一回合的行动点已经用掉（攻击/技能）
+    acted?: Record<string, boolean>; // 这一回合的行动点已经用掉（攻击/技能）
     /** 这次攻击用锐器（默认钝器）。只有身上带锐器的角色才勾得动。 */
-    sharpAttack?: boolean;
+    sharpAttack?: Record<string, boolean>;
     /** 借机攻击提示：这一步触发了，等主持人决定打不打。 */
     opportunity?: { moverTokenId: string; enemies: string[]; from: { x: number; y: number }; to: { x: number; y: number } } | null;
     /** 刚发生的大事（攻击、伤害、濒死）：单独一张大卡片显示，不塞进底部小字。 */

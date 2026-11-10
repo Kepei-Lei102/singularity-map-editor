@@ -25,6 +25,7 @@ import {
   MOVE_PER_TURN, actionsLeft, addTrialPlayer, clearTrialStatus, endTrial, setTrialStatus, statusLeft, switchTrialPlayer, toggleTrialPause,
   tickRobots, trialRun, trialSense, trialStance,
   toggleCombat, toggleMarkMode, trialAttack, trialAttackTargets, trialRescue, trialOpportunityAttack, trialSkipOpportunity,
+  runModeOf, sharpOf,
 } from '../runtime/trial';
 
 const SYMBOLS = ['!', '?', '★', '✕', '→'];
@@ -120,7 +121,7 @@ export function TrialHud() {
           <span className="muted">攻击</span>
           {(() => {
             const sharp = !!w.party.find((p) => p.id === cur?.pcId)?.sharp;
-            const bluntMode = !(t.sharpAttack ?? false);
+            const bluntMode = !sharpOf(t, cur?.tokenId ?? null);
             const targets = trialAttackTargets().filter((x) => x.canHit);
             const label = (x: typeof targets[number]) => `${x.name}${x.hp === null ? '' : ` · HP ${x.hp}`}`;
             return <>
@@ -135,11 +136,11 @@ export function TrialHud() {
               {/* 钝器默认；只有身上带锐器的角色才给这个勾选 */}
               <label className={`check ${sharp ? '' : 'off'}`} title={sharp ? '勾上就是用锐器：打倒的人进入濒死' : '这个角色身上没有锐器，只能用钝器'}>
                 <input type="checkbox" disabled={!sharp || !targets.length} checked={sharp && !bluntMode}
-                  onChange={(e) => set({ sharpAttack: e.target.checked })} /> 锐器
+                  onChange={(e) => set({ sharpAttack: { ...(t.sharpAttack ?? {}), [cur?.tokenId ?? '']: e.target.checked } })} /> 锐器
               </label>
             </>;
           })()}
-          <span className="muted">D100；伤害 1D8；00＝特大成功 ×4；投 1 没打中</span>
+          <span className="muted">D100 攻击口径：000 特大（4 颗伤害骰）／1–5 落空／95–99 大成功（2 颗）／其余命中；伤害 1D8</span>
           {(() => {
             const down = m?.tokens.filter((k) => k.id !== cur?.tokenId && (k.status?.label === '濒死' || k.down)) ?? [];
             if (!down.length) return null;
@@ -173,13 +174,13 @@ export function TrialHud() {
       <div className="trial-row">
         <span className="muted">跑法</span>
         {([['jog', '慢跑'], ['run', '奔跑'], ['sprint', '爆跑']] as const).map(([m, label]) => (
-          <button key={m} className={`small chip ${t.runMode === m ? 'on' : ''}`}
+          <button key={m} className={`small chip ${runModeOf(t, cur?.tokenId ?? null) === m ? 'on' : ''}`}
             title={m === 'jog' ? '1.5 倍，不耗 ME，不限拐弯，不占行动点'
               : m === 'run' ? '2 倍，耗 1 ME，整回合只能拐一次弯，占行动点'
               : '3 倍，耗 1 ME，不能拐弯，占行动点（能解锁的职业很少）'}
             onClick={() => { const e = trialRun(m); if (e) set({ msg: e }); }}>{label}</button>
         ))}
-        <button className={`small chip ${t.runMode ? '' : 'on'}`} onClick={() => { const e = trialRun(null); if (e) set({ msg: e }); }}>正常走</button>
+        <button className={`small chip ${runModeOf(t, cur?.tokenId ?? null) ? '' : 'on'}`} onClick={() => { const e = trialRun(null); if (e) set({ msg: e }); }}>正常走</button>
         {(() => {
           // 这一行解释「为什么是这么多格」，挡掉猜不到的疑问。
           const card = w.party.find((p) => p.id === cur?.pcId);
