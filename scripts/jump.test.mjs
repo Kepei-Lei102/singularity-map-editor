@@ -321,13 +321,15 @@ test('上一格台阶：能走，双倍移动点', () => {
 
 test('往上 2 格：走不上去，要攀跳', () => {
   const d = api.stepDrop(0, 2);
-  assert.equal(d.kind, 'blocked');
+  assert.equal(d.kind, 'climb');
+  assert.equal(d.height, 2);
   assert.match(d.reason, /攀跳/);
 });
 
 test('往上 5 格：要攀爬', () => {
   const d = api.stepDrop(0, 5);
-  assert.equal(d.kind, 'blocked');
+  assert.equal(d.kind, 'climb');
+  assert.equal(d.height, 5);
   assert.match(d.reason, /攀爬/);
 });
 
@@ -508,13 +510,44 @@ test('挖坑：地面 0、坑底 -3 → 往下 3 格，会摔', () => {
   assert.equal(d.injury, 'medium');
 });
 
-test('挖坑：从坑底爬回地面是往上，拦住', () => {
+test('挖坑：从坑底爬回地面是往上 3 格，要攀', () => {
   const d = api.stepDrop(-3, 0);
-  assert.equal(d.kind, 'blocked');
+  assert.equal(d.kind, 'climb');
+  assert.equal(d.height, 3);
 });
 
 test('台阶：下一格还是正常走', () => {
   const d = api.stepDrop(1, 0);
   assert.equal(d.kind, 'stepDown');
   assert.equal(d.safe, true);
+});
+
+// ---------- 往上攀：分档 ----------
+
+test('往上 2–3 格：掷力量，没【攀爬】就占行动点', () => {
+  const two = api.planJump('up', 2, NO);
+  assert.equal(two.check.attr, '力量');
+  assert.equal(two.usesAction, true, '没攀爬要占行动点');
+  assert.equal(two.moveMultiplier, 2);
+  const withClimb = api.planJump('up', 2, api.jumpSkillsOf(['003-9-104']));
+  assert.equal(withClimb.usesAction, false, '有攀爬就不占行动点');
+});
+
+test('往上 4 格：没【攀爬】根本上不去', () => {
+  const plan = api.planJump('up', 4, NO);
+  assert.equal(plan.allowed, false);
+  assert.match(plan.reason, /攀爬/);
+});
+
+test('往上 4 格有【攀爬】：掷敏捷，不占行动点', () => {
+  const plan = api.planJump('up', 4, api.jumpSkillsOf(['003-9-104']));
+  assert.equal(plan.allowed, true);
+  assert.equal(plan.check.attr, '敏捷');
+  assert.equal(plan.usesAction, false);
+});
+
+test('往上 12 格：有【攀爬】也要占行动点', () => {
+  const plan = api.planJump('up', 12, api.jumpSkillsOf(['003-9-104']));
+  assert.equal(plan.allowed, true);
+  assert.equal(plan.usesAction, true, '技能也不能免');
 });

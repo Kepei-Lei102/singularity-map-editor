@@ -294,6 +294,24 @@ export function trialMove(dx: number, dy: number) {
   if (!characterPathClear(now, m2, step.a, step.b, tok.id)) return setTr({ msg: '人物或墙体挡住了路径' });
   // 落差：上一步台阶能走（双倍点数），再高就得上攀跳/攀爬；往下就是跳，会摔。
   const drop = stepDrop(heightAt(m2, Math.floor(step.a.x), Math.floor(step.a.y)), heightAt(m2, landing.x, landing.y));
+  // 上面比自己高 2 格以上：不是走上去的，是攀上去。同方向按第二下才攀。
+  if (drop.kind === 'climb') {
+    const climber = w.party.find((p) => p.id === pl.pcId);
+    const climbPlan = planJump('up', drop.height, jumpSkillsOf(climber?.skills ?? []), drop.height);
+    // 根本没资格攀（4 格以上没【攀爬】）：别让他按第二下，直接说明白。
+    if (!climbPlan.allowed) return setTr({ msg: climbPlan.reason });
+    const armed = getUI().pendingGap;
+    const confirmed = !!armed && armed.tokenId === tok.id && armed.dx === dx && armed.dy === dy;
+    if (!confirmed) {
+      setUI({ pendingGap: { tokenId: tok.id, dx, dy } });
+      const need = climbPlan.check
+        ? `要过【${climbPlan.check.attr}】`
+        : '一格台阶，双倍移动点';
+      return setTr({ msg: `${drop.reason}。${need}${climbPlan.usesAction ? '，占行动点' : ''}。再按一次同方向就攀上去` });
+    }
+    setUI({ pendingGap: null });
+    return beginUpClimb(now, m2, tok, landing, drop.height, dx, dy, pl.pcId, price);
+  }
   if (drop.kind === 'blocked') return setTr({ msg: drop.reason });
   // 往下 2 格以上不是走着下去的，是跳下去——会摔。同方向按第二下才跳。
   if (drop.kind === 'stepDown' && !drop.safe) {
@@ -344,6 +362,43 @@ export function trialMove(dx: number, dy: number) {
 function attributesFilled(pc: World['party'][number] | null | undefined): boolean {
   const a = pc?.attributes;
   return !!a && ['力量', '敏捷', '意志', '观察', '智慧', '魅力'].some((k) => (a[k] ?? 0) > 0);
+}
+
+/** 往上攀：爬到上面那格。爬不上去就按已攀的高度摔。 */
+function beginUpClimb(
+  w: World, m: GameMap, tok: GameMap['tokens'][number], landing: { x: number; y: number },
+  climb: number, dx: number, dy: number, pcId: string, unitPrice: number,
+) {
+  const t = tr();
+  if (!t) return;
+  const pc = w.party.find((p) => p.id === pcId);
+  const skills = jumpSkillsOf(pc?.skills ?? []);
+  const plan = planJump('up', climb, skills, climb);
+  if (!plan.allowed) return setTr({ msg: plan.reason });
+  const req: JumpRequest = {
+    tokenId: tok.id, dx, dy, kind: 'up', cells: climb, fall: climb,
+    attr: plan.check?.attr ?? null, landing, injury: plan.injury, moveMultiplier: plan.moveMultiplier,
+    usesAction: plan.usesAction,
+  };
+  req.landingStep = 1;
+  req.unitPrice = unitPrice;
+  if (!plan.check) { settleJump(req, []); return; }
+  if (!attributesFilled(pc)) {
+    return setTr({ msg: `${tok.name} 还没填六维（右上角角色面板 → 六维与 HP）。没填的话任何检定都是必败，先填上再攀` });
+  }
+  const tier = plan.injury ?? injuryTier(climb);
+  const err = openJudgment({
+    title: `往上攀：${climb} 格`,
+    ruling: `${tok.name} 爬到上面 ${climb} 格（${(climb * CELL_METERS).toFixed(2)} 米）高处，过【${plan.check.attr}】。`
+      + `没攀住就从 ${climb} 格摔下来：${INJURY_LABEL[tier]} 1D${INJURY_DICE[tier]}。`
+      + (plan.usesAction ? '这一下占掉行动点。' : ''),
+    sides: 100, subjectId: pcId,
+    place: { mapId: m.id, x: landing.x + 0.5, y: landing.y + 0.5 },
+    jump: req,
+  });
+  if (err) return setTr({ msg: err });
+  pushJudgmentRequest(pcId);
+  setTr({ msg: '往上攀的判定已开出。他掷完你点「按结果执行」' });
 }
 
 /** 往下跳：落到下面那格，摔不摔看检定。 */
@@ -446,6 +501,10 @@ export function settleJump(req: JumpRequest, values: number[]): string {
   }
   const landed = roll === null || roll.success;
   const dir = dirOf(req.dx, req.dy);
+  const before = tokenPosition(tok);
+  // 跳、攀、跳下去是三个动作，别都叫「跳」。
+  const done = { across: '跳过去', up: '攀上去', down: '跳下去' }[req.kind];
+  const fail = { across: '没跳过去', up: '没攀上去', down: '没跳下去' }[req.kind];
   const landingStep = req.landingStep ?? Math.abs(req.landing.x - Math.floor(tok.x)) + Math.abs(req.landing.y - Math.floor(tok.y));
 
   if (landed) {
@@ -460,10 +519,15 @@ export function settleJump(req: JumpRequest, values: number[]): string {
       const cost = (req.unitPrice ?? 75) * req.moveMultiplier * landingStep;
       const left = Math.max(0, (t.movePoints?.[req.tokenId] ?? 0) - cost);
       setTr({ movePoints: { ...(t.movePoints ?? {}), [req.tokenId]: left },
-        msg: `跳过去了${roll ? `：${roll.used} / ${roll.target}` : ''}` });
+        ...(req.usesAction ? { acted: true } : {}),
+        msg: `${done}了${roll ? `：${roll.used} / ${roll.target}` : ''}` });
     } else {
-      setTr({ msg: roll ? `跳过去了：${roll.used} / ${roll.target}` : '跳过去了' });
+      setTr({ ...(req.usesAction ? { acted: true } : {}),
+        msg: roll ? `${done}了：${roll.used} / ${roll.target}` : `${done}了` });
     }
+    // 跳过去也是走过去了：触发区和自动揭图照常。
+    checkEnterTriggers(t.mapId, req.tokenId, before.x, before.y);
+    autoReveal(t.mapId);
     return '';
   }
 
@@ -489,8 +553,10 @@ export function settleJump(req: JumpRequest, values: number[]): string {
       setTokenPosition(dm, dt, { x: req.landing.x + 0.5, y: req.landing.y + 0.5 });
       dt.facing = dir;
     });
+    checkEnterTriggers(t.mapId, req.tokenId, before.x, before.y);
+    autoReveal(t.mapId);
   }
-  setTr({ msg: `没跳过去，${describeInjury(req.fall, damage)}` });
+  setTr({ msg: `${fail}，${describeInjury(req.fall, damage)}` });
   return '';
 }
 

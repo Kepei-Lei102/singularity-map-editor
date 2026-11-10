@@ -492,6 +492,8 @@ export interface JumpRequest {
   injury: 'light' | 'medium' | 'heavy' | 'brutal' | null;
   /** 移动点单价倍数。 */
   moveMultiplier: number;
+  /** 做完要不要占掉这回合的行动点（往上 2 格以上、没【攀爬】、以及 12 格以上都要占）。 */
+  usesAction?: boolean;
 }
 
 export interface PendingJudgment {

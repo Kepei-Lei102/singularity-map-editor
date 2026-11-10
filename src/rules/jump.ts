@@ -360,7 +360,9 @@ export type StepDrop =
   | { kind: 'stepUp'; height: number }
   /** 往下走。一格的台阶是正常下台阶（safe），再高就是跳下去，会摔。 */
   | { kind: 'stepDown'; height: number; injury: InjuryTier; safe: boolean }
-  /** 高差太大，走不过去：得用【攀跳】或【攀爬】，或者跳下去。 */
+  /** 上面比脚下高 2 格以上：得攀上去（2–3 格攀跳、4 格以上攀爬）。 */
+  | { kind: 'climb'; height: number; reason: string }
+  /** 走不过去（留给真正的阻挡用）。 */
   | { kind: 'blocked'; reason: string };
 
 /**
@@ -377,7 +379,7 @@ export function stepDrop(fromHeight: number, toHeight: number): StepDrop {
   if (diff === 1) return { kind: 'stepUp', height: 1 };
   if (diff > 1) {
     const need = diff <= 3 ? '【攀跳】' : '【攀爬】';
-    return { kind: 'blocked', reason: `这里比脚下高 ${diff} 格（${(diff * CELL_M).toFixed(2)} 米），得用${need}上去` };
+    return { kind: 'climb', height: diff, reason: `这里比脚下高 ${diff} 格（${(diff * CELL_M).toFixed(2)} 米），得用${need}上去` };
   }
   // 往下
   const drop = -diff;
