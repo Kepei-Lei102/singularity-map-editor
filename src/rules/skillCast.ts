@@ -97,9 +97,11 @@ export function resolveSkillCast(d20: number, target?: string): string | null {
   if (!c) return '没有正在发动的技能';
   if (c.step !== 'confirm') return '还没到掷骰这一步';
   const skill = skillById(c.skillId)!;
-  if (!getWorld().party.some((p) => p.id === c.actorPcId)) return '找不到这个角色';
-  // 试点：角色卡上的六维还没进编辑器，先按 0 走，判定只反映骰面
-  const attrs = Object.fromEntries(ATTRS.map((a) => [a, 0])) as Record<Attr, number>;
+  const actor = getWorld().party.find((p) => p.id === c.actorPcId);
+  if (!actor) return '找不到这个角色';
+  // 六维读角色卡（编辑器里早就有 0–100 了）。以前这里写死 0，等于所有技能的成功率恒为 5%，
+  // 跟角色属性无关——注释说的「六维还没进编辑器」已经过期。
+  const attrs = Object.fromEntries(ATTRS.map((a) => [a, actor.attributes?.[a] ?? 0])) as Record<Attr, number>;
   // 试点阶段：技能还没接动作卡，先按 D20、默认 DC 20、智慧判定走一遍
   const result = resolve({
     check: skill.check ?? { attributes: ['智慧'], mode: 'single' },

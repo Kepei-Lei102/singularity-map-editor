@@ -1,14 +1,14 @@
 // 战斗：攻击结算、HP、濒死，以及战斗状态（流血/中毒/眩晕）。
 //
 // 规则出处（AI见证者知识库/02-核心规则.md）：
-// - 攻击命中一律 D100；只要不是大失败（投 1）就命中；投 00（记作 100）＝特大成功，伤害 ×4。
+// - 攻击命中一律 D100：000 特大成功（伤害 ×4）、1–5 落空、95–99 大成功（×2）、其余命中。
 // - 没有特殊说明的伤害 = 1D8。
 // - HP 归零触发濒死结算，不直接死。
 // - 1 回合 = 5 分钟；状态按回合倒计时，脱离战斗后换算成现实时间。
 //
 // 纯函数为主：结算不碰 store。真正改世界的只有 applyAttack / resolveRoundStart。
 
-import { attrValue, ATTRS, type Attr } from './interaction';
+import { attrValue, ATTRS, tierOfRoll, type Attr } from './interaction';
 import type { GameMap, Token, World } from '../core/types';
 
 /** 默认伤害骰：没有特殊说明就是 1D8。 */
@@ -34,11 +34,14 @@ export const ATTACK_DICE: Record<AttackBand, number> = { miss: 0, hit: 1, great:
 
 export const ATTACK_BAND_LABEL: Record<AttackBand, string> = { miss: '落空', hit: '命中', great: '大成功', super: '特大成功' };
 
-/** 按 D100 点数定档。100 就是 00。 */
+/**
+ * 按 D100 点数定档。100 就是 00。
+ * 阈值只有一份：这里转调 `tierOfRoll` 的攻击分支，别在两处各写一遍。
+ */
 export function attackBand(roll: number): AttackBand {
-  if (roll === 100) return 'super';
-  if (roll <= 5) return 'miss';
-  if (roll >= 95) return 'great';
+  const t = tierOfRoll('d100', roll, undefined, { attack: true });
+  if (t.tier === 'crit') return t.level === '特大' ? 'super' : 'great';
+  if (t.tier === 'fumble') return 'miss';
   return 'hit';
 }
 
