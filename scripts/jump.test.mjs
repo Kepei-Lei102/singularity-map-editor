@@ -385,24 +385,33 @@ test('前面能站：正常走', () => {
   assert.equal(a.kind, 'clear');
 });
 
-test('前面是坑，隔 1 格能站：要跳 2 格', () => {
+test('坑宽 1 格：直接跳过去，不用掷骰', () => {
   const a = api.gapAhead(floorOf(['1,0']), { x: 0, y: 0 }, 1, 0);
   assert.equal(a.kind, 'gap');
-  assert.equal(a.distance, 2, '隔 1 格 + 1 = 跳 2 格');
+  assert.equal(a.width, 1, '作者口径的「几格」是坑的宽');
+  assert.equal(a.landingStep, 2, '落点在往前第 2 格');
   assert.equal(a.landing, true);
-  assert.equal(a.check.attr, '敏捷', '2 格是敏捷');
+  assert.equal(a.check, null, '一格宽不掷骰');
 });
 
-test('隔 2 格：要跳 3 格，没【跳远】跳不了', () => {
+test('坑宽 2 格（1.5 米）：要敏捷', () => {
   const a = api.gapAhead(floorOf(['1,0', '2,0']), { x: 0, y: 0 }, 1, 0);
   assert.equal(a.kind, 'gap');
-  assert.equal(a.distance, 3);
-  assert.equal(a.landing, false, '没技能跳不了 3 格');
+  assert.equal(a.width, 2);
+  assert.equal(a.landingStep, 3);
+  assert.equal(a.landing, true);
+  assert.equal(a.check.attr, '敏捷');
+});
+
+test('坑宽 3 格：没【跳远】跳不了', () => {
+  const a = api.gapAhead(floorOf(['1,0', '2,0', '3,0']), { x: 0, y: 0 }, 1, 0);
+  assert.equal(a.width, 3);
+  assert.equal(a.landing, false);
   assert.match(a.reason, /跳远/);
 });
 
-test('有【跳远】就能跳 3 格', () => {
-  const a = api.gapAhead(floorOf(['1,0', '2,0']), { x: 0, y: 0 }, 1, 0, BOTH);
+test('坑宽 3 格 + 有【跳远】就能跳，掷力量', () => {
+  const a = api.gapAhead(floorOf(['1,0', '2,0', '3,0']), { x: 0, y: 0 }, 1, 0, BOTH);
   assert.equal(a.landing, true);
   assert.equal(a.check.attr, '力量');
 });
@@ -420,7 +429,7 @@ test('前面直接是墙：不是坑', () => {
   assert.equal(a.kind, 'blocked');
 });
 
-test('坑太多（超过 3 格）就跳不过去', () => {
+test('坑宽超过 3 格就跳不过去', () => {
   const many = ['1,0', '2,0', '3,0', '4,0'];
   const a = api.gapAhead(floorOf(many), { x: 0, y: 0 }, 1, 0);
   assert.equal(a.kind, 'gap');

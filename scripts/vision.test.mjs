@@ -277,9 +277,12 @@ test('trial opens its own player, isolates formal results and clears only that w
   assert.equal(trial.messages.at(-1).world.viewerId,first);
   assert.equal(trial.messages.at(-1).world.playerMapId,m.id);
   api.addTrialPlayer(); const second=api.getUI().trial.players[1].pcId;
-  assert.equal(trial.messages.at(-1).world.viewerId,second);
-  assert.equal(trial.messages.at(-1).world.judgments.length,0);
-  api.switchTrialPlayer(0); assert.equal(trial.messages.at(-1).world.viewerId,first);
+  assert.notEqual(second,first);
+  // 作者口径：一个玩家一个窗口，窗口开出去就绑死那个角色。
+  // 加人、切人都不许改这个窗口的身份——pcId 同时是鉴权键，改了等于改身份。
+  assert.equal(trial.messages.at(-1).world.viewerId,first,'加人之后这个窗口还是第一个角色');
+  assert.equal(trial.messages.at(-1).world.judgments.length,1,'判定还在（视角没被切走）');
+  api.switchTrialPlayer(0); assert.equal(trial.messages.at(-1).world.viewerId,first,'切人也不改身份');
   api.endTrial(); api.send({type:'world',world:api.getWorld()});
   assert.equal(trial.messages.at(-1).type,'clear');
   assert.equal(real.messages.at(-1).type,'world');

@@ -13,7 +13,7 @@ import { slidingPuzzleForObject } from '../scene/sliding';
 import { viewerOf, visiblePoint } from '../scene/sight';
 import { describeSense, rollSense, senseHints, type SenseKind } from '../rules/sense';
 import { describeStepDrop, gapAhead, stepDrop } from '../rules/jump';
-import { heightAt } from '../scene/height';
+import { CELL_METERS, heightAt } from '../scene/height';
 import { cellFloor } from '../scene/terrain';
 import { canAffordStep, canTurn, moveBudgetOn, movePool, RUN_MODES, runMeShort, stepPrice, tickCharge, STAND_UP_COST, ROLL_OVER_COST, type ChargeState, type RunMode } from '../rules/move';
 import { ATTACK_RANGE, DYING_LABEL, DYING_ROUNDS, ENGAGE_RANGE, RESCUED_HP, ROBOT_LABEL, attackTargets, canRescue, canUseSharp, downedBy, downedLabel, hpOf, opportunityTriggers, robotArrived, robotIncoming, rollAttack, rollRescue, settleDeath, stepLimitNear, type AttackTarget, type Downed, type Roller } from '../rules/combat';
@@ -270,10 +270,12 @@ export function trialMove(dx: number, dy: number) {
   const from = { x: Math.floor(step.a.x), y: Math.floor(step.a.y) };
   const ahead = gapAhead((x, y) => cellFloor(now, m2, x, y), from, dx, dy);
   if (ahead.kind === 'gap') {
-    const need = ahead.check ? `要跳 ${ahead.distance} 格，${ahead.check.why}：过【${ahead.check.attr}】` : '';
-    return setTr({ msg: ahead.landing
-      ? `前面是坑（隔 ${ahead.distance - 1} 格）。${need}`
-      : ahead.reason });
+    if (!ahead.landing) return setTr({ msg: ahead.reason });
+    const m = (ahead.width * CELL_METERS).toFixed(2);
+    const need = ahead.check
+      ? `跳过去要过【${ahead.check.attr}】（${ahead.check.why}）`
+      : '一格宽的坑，直接跳过去，不用掷骰';
+    return setTr({ msg: `前面是坑（宽 ${ahead.width} 格，${m} 米）。${need}` });
   }
   if (!characterPathClear(now, m2, step.a, step.b, tok.id)) return setTr({ msg: '人物或墙体挡住了路径' });
   // 落差：上一步台阶能走（双倍点数），再高就得上攀跳/攀爬；往下就是跳，会摔。

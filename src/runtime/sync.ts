@@ -106,8 +106,14 @@ export function clearTrialWindows() {
     players.delete(id);
   }
 }
-export function selectTrialViewer(pcId: string) {
-  for (const p of players.values()) if (p.trialContext === worldContext()) p.pcId = pcId;
+/**
+ * 试玩里刷新一遍玩家窗口。
+ *
+ * 注意：这里**不改** p.pcId。一个玩家窗口开出去就绑死那个角色，
+ * pcId 同时是身份（鉴权用）和视角（裁剪世界用），改它等于改身份——
+ * 那样「不是你的回合」这条守卫永远不成立，被暂停的人也能操作别人的棋子。
+ */
+export function selectTrialViewer(_pcId?: string) {
   send({ type: 'world', world: getWorld() });
 }
 
@@ -262,7 +268,7 @@ export function send(body: SyncBody, to?: string) {
       const out: SyncBody = !valid
         ? { type: 'clear' }
         : body.type === 'world'
-          ? { type: 'world', world: { ...playerWorld(w, mapId, p.pcId), pendingJudgment: pendingFor(p.pcId), combatNotice: combatNoticeFor(p.pcId), utterances: utterancesFor(p.pcId) } as World, focus: getUI().focus ?? null, cast: getUI().cast ?? null, you: p.pcId, skills: publicSkillsOf(w.party.find((pc) => pc.id === p.pcId)?.skills ?? []),
+          ? { type: 'world', world: { ...playerWorld(w, mapId, p.pcId), pendingJudgment: pendingFor(p.pcId), combatNotice: combatNoticeFor(p.pcId), utterances: utterancesFor(p.pcId), trialFlags: trialFlagsFor(p.pcId) } as World, focus: getUI().focus ?? null, cast: getUI().cast ?? null, you: p.pcId, skills: publicSkillsOf(w.party.find((pc) => pc.id === p.pcId)?.skills ?? []),
             pathway: currentPathwayOf(w.party.find((pc) => pc.id === p.pcId) ?? { skills: [] }),
             avatar: w.party.find((pc) => pc.id === p.pcId)?.avatar ?? null }
           : body;
@@ -313,6 +319,15 @@ function onSay(m: Extract<SyncMsg, { type: 'say' }>, source: MessageEventSource 
   const pl = t.players.find((x) => x.pcId === p.pcId);
   if (!pl) return;
   say(m.text, m.targetTokenId, { pcId: p.pcId, tokenId: pl.tokenId, mapId: t.mapId, name: pl.name });
+}
+
+/** 试玩里这个角色自己的处境：被暂停了吗、轮到他了吗。 */
+function trialFlagsFor(pcId: string): { paused: boolean; isCurrent: boolean } | null {
+  const t = getUI().trial;
+  if (!t) return null;
+  const idx = t.players.findIndex((x) => x.pcId === pcId);
+  if (idx < 0) return null;
+  return { paused: !!t.players[idx].paused, isCurrent: idx === t.current };
 }
 
 /** 试玩执行一步移动。trial 和 sync 互相 import，用注册回调避开直接依赖。 */

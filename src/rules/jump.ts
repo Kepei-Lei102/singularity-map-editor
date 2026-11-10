@@ -411,8 +411,10 @@ export type GapAhead =
   /** 前面是坑。 */
   | {
       kind: 'gap';
-      /** 要跳几格（中间隔几格 + 1）。 */
-      distance: number;
+      /** 坑有多宽：连着几格。作者口径的「跳几格」说的是这个宽度。 */
+      width: number;
+      /** 落点在往前第几格（= 宽度 + 1）。 */
+      landingStep: number;
       /** 要掷的检定；null = 不用掷。 */
       check: JumpCheck | null;
       /** 落点能不能站；不能就是跳不过去。 */
@@ -436,15 +438,19 @@ export function gapAhead(
   if (first === 'open') return { kind: 'clear' };
   if (first === 'wall') return { kind: 'blocked', by: 'wall' };
 
-  // 一格是坑：往后数，找到第一个能站的地方
-  for (let n = 2; n <= 4; n++) {
+  // 一格是坑：往后数它有多宽，再往后找落点。
+  // 作者口径：平行跳说的「几格」是坑的宽，不是起跳到落点的距离。
+  let width = 0;
+  for (let n = 1; n <= 5; n++) {
     const f = floor(from.x + dx * n, from.y + dy * n);
-    if (f === 'gap') continue; // 连着好几格坑，继续往后看
-    if (f === 'wall') return { kind: 'gap', distance: n, check: null, landing: false, skills,
-      reason: `前面连着 ${n - 1} 格坑，后面是墙，跳不过去` };
-    // 找到能站的地方了
-    const plan = planJump('across', n, skills);
-    return { kind: 'gap', distance: n, check: plan.check, landing: plan.allowed, skills, reason: plan.reason };
+    if (f === 'gap') { width++; continue; }
+    const landingStep = n;
+    if (f === 'wall') {
+      return { kind: 'gap', width, landingStep, check: null, landing: false, skills,
+        reason: `前面 ${width} 格坑，再往后是墙，跳不过去` };
+    }
+    const plan = planJump('across', width, skills);
+    return { kind: 'gap', width, landingStep, check: plan.check, landing: plan.allowed, skills, reason: plan.reason };
   }
-  return { kind: 'gap', distance: 5, check: null, landing: false, skills, reason: '前面坑太多，跳不过去' };
+  return { kind: 'gap', width, landingStep: 0, check: null, landing: false, skills, reason: '前面坑太多，跳不过去' };
 }

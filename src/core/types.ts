@@ -528,6 +528,8 @@ export interface World {
   combatNotice?: CombatNotice | null;
   /** 这一场这个角色说过的所有话，按时间正序。 */
   utterances?: Utterance[] | null;
+  /** 只在玩家载荷里：试玩里这个窗口自己的处境——被暂停了？轮到他了吗？ */
+  trialFlags?: { paused: boolean; isCurrent: boolean } | null;
   version: 1;
   name: string;
   terrains: Terrain[];

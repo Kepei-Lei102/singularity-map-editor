@@ -41,6 +41,11 @@ export function PlayerView() {
     const t = window.setTimeout(() => setNotice(null), 6000);
     return () => window.clearTimeout(t);
   }, [notice]);
+  useEffect(() => {
+    if (!moveNote) return;
+    const t = window.setTimeout(() => setMoveNote(null), 6000);
+    return () => window.clearTimeout(t);
+  }, [moveNote]);
   const saveNotes = (v: string) => { setNotes(v); try { localStorage.setItem('ts-player-notes', v); } catch { /* 存不了也不影响看 */ } };
 
   useEffect(() => {
@@ -112,6 +117,14 @@ export function PlayerView() {
           <button className="player-nums" onClick={() => setNums(!nums)}>{nums ? '隐藏编号' : '显示编号'}</button>
         </div>;
       })()}
+
+      {/* 自己的处境：被暂停了、或者还没轮到自己。常驻，不用按键才知道。 */}
+      {map && world?.trialFlags?.paused && (
+        <div className="player-notice miss">见证者暂停了你的操作</div>
+      )}
+      {map && world?.trialFlags && !world.trialFlags.isCurrent && !world.trialFlags.paused && (
+        <div className="player-notice">还没轮到你</div>
+      )}
 
       {/* 走不过去的提示。几秒后自己收。 */}
       {map && moveNote && (
