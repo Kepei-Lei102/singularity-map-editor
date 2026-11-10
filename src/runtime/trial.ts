@@ -4,7 +4,7 @@ import { effectiveLayer } from '../scene/vision';
 import { objectEnabled } from '../core/objectData.js';
 import { beginSandbox, endSandbox, getUI, getWorld, setUI, toast, update, type UIState } from '../core/store';
 import { addMark, autoReveal, cancelPendingPlay, checkEnterTriggers, findMap, ioBusy } from './actions';
-import type { Facing, GameMap, JumpRequest, MapObject, Stance, World } from '../core/types';
+import type { Delta, Facing, GameMap, JumpRequest, MapObject, PhysicalEvent, Stance, World } from '../core/types';
 import { gridDist, uid } from '../core/util';
 import { blocksMovement, ROUND_MINUTES } from '../scene/perception';
 import { characterPathClear, furnitureSweepBlocked, nextTokenStep, setTokenPosition, tokenPosition } from '../scene/architecture';
@@ -18,6 +18,7 @@ import {
   type JumpCheck, type JumpRoll,
 } from '../rules/jump';
 import { openJudgment } from '../rules/judgments';
+import { appendEvent } from '../rules/events';
 import { CELL_METERS, heightAt } from '../scene/height';
 import { cellFloor, hasPitBottom } from '../scene/terrain';
 import { canAffordStep, canTurn, chargeUsedThisTurn, moveBudgetOn, movePool, RUN_MODES, runMeShort, spendCharge, stepPrice, tickCharge, STAND_UP_COST, ROLL_OVER_COST, type ChargeState, type RunMode } from '../rules/move';
@@ -761,6 +762,29 @@ export function settleAttack(targetTokenId: string, roll: number, opts: { roller
   let downed: Downed | null = null;
   let note = '';
   const kind = downedBy(sharp);
+  // 攻击也要进事件账本：句子是渲染出来的，不再各处自己拼一段中文。
+  const deltas: Delta[] = [];
+  const record = (d: World) => {
+    const band = r.band;
+    const ev: PhysicalEvent = {
+      id: uid(), at: Date.now(), session: d.session,
+      actor: { kind: 'pc', id: pl.pcId ?? pl.tokenId, name: pl.name },
+      target: { kind: target.pcId ? 'pc' : 'npc', id: target.pcId ?? target.id, name: target.name },
+      action: { name: sharp ? '攻击（锐器）' : '攻击（钝器）', source: '临场' },
+      check: {
+        scale: 'd100',
+        attrs: [],
+        merge: 'single',
+        dc: 0,
+        total: r.roll,
+        success: r.hit,
+        tier: band === 'super' || band === 'great' ? 'crit' : band === 'miss' ? 'fumble' : null,
+        level: band === 'super' ? '特大' : null,
+      },
+      deltas,
+    };
+    appendEvent(d, ev);
+  };
   update((d) => {
     const dm = findMap(d, t.mapId)!;
     const dt = dm.tokens.find((x) => x.id === targetTokenId)!;
@@ -768,9 +792,10 @@ export function settleAttack(targetTokenId: string, roll: number, opts: { roller
     const tokenHP = (dt.hpMax ?? 0) > 0 ? { hp: dt.hp ?? dt.hpMax!, max: dt.hpMax! } : null;
     const p = dt.pcId ? d.party.find((x) => x.id === dt.pcId) : null;
     const pool = p ? hpOf(p) : tokenHP;
-    if (!pool) { note = `${dt.name} 没有血条（角色卡和棋子都没填 HP）；伤害记在裁定里`; return; }
+    if (!pool) { note = `${dt.name} 没有血条（角色卡和棋子都没填 HP）；伤害记在裁定里`; record(d); return; }
     const next = Math.max(0, pool.hp - r.damage);
     hpBefore = pool.hp; hpAfter = next; hpMax = pool.max;
+    deltas.push({ kind: 'hp', id: dt.pcId ?? dt.id, name: dt.name, from: pool.hp, to: next });
     if (p) { p.hp = next; p.hpMax ??= pool.max; }
     else { dt.hp = next; }
     const already = dt.status?.label === '濒死' ? 'dying' : dt.down ? 'down' : null;
@@ -782,7 +807,9 @@ export function settleAttack(targetTokenId: string, roll: number, opts: { roller
           ? { label: downedLabel('dying'), roundsLeft: DYING_ROUNDS }
           : robotIncoming();
       } else { delete dt.status; dt.down = true; }
+      deltas.push({ kind: 'status', id: dt.pcId ?? dt.id, name: dt.name, from: already ? downedLabel(already as Downed) : null, to: downedLabel(downed) });
     } else downed = already;
+    record(d);
   });
   setTr({
     acted: { ...(t.acted ?? {}), [pl.tokenId]: true },

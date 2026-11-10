@@ -139,6 +139,14 @@ test('试玩里攻击：扣行动点、扣目标 HP、濒死标状态', async ()
   assert.equal(pcB.hpMax, 6);
   assert.equal(pcB.hp, 3, '目标 HP 6 应该扣 3');
   assert.equal(api.actionsLeft(api.getUI().trial), 0);
+  // 事件账本：一句宣告 + 一句结果，都是渲染出来的
+  const ev = world.events.at(-1);
+  assert.equal(ev.action.name, '攻击（钝器）');
+  assert.equal(ev.check.success, true);
+  assert.equal(ev.deltas[0].kind, 'hp');
+  assert.equal(ev.deltas[0].from, 6);
+  assert.equal(ev.deltas[0].to, 3);
+  assert.match(world.log.at(-1).text, /^攻击者 对 目标 发起了【攻击（钝器）】.*目标 的 HP 从 6 改为 3$/);
   assert.match(api.trialAttack('tb') ?? '', /行动点/);
   api.trialEndTurn();
   assert.equal(api.actionsLeft(api.getUI().trial), 1);

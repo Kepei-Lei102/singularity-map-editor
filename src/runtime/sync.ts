@@ -179,7 +179,7 @@ export function playerWorld(w: World, mapId: string | null = w.playerMapId, pcId
     party: pcId ? w.party.filter(p => p.id === pcId).map(p => ({ id: p.id, name: p.name, tags: [], color: p.color, attributes: p.attributes, hp: p.hp, hpMax: p.hpMax, me: p.me, meMax: p.meMax })) : [],
     terrains: w.terrains.filter((t) => usedTerrains.has(t.id)),
     materials: (w.materials ?? []).filter((m) => usedMaterials.has(m.id)),
-    flows: [], log: [], npcs: [], media: [],
+    flows: [], log: [], npcs: [], media: [], events: [],
     ...(() => {
       if (!valid || !pcId) return { judgments: [] };
       const mine = (w.judgments ?? []).filter(j => j.recipients.includes(pcId));

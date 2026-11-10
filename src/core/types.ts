@@ -556,6 +556,52 @@ export interface DiceJudgment {
 }
 
 export interface JudgmentNotice { id: Id; at: number }
+/** 一次物理事件的单一记账：A 对 B 发起动作 → 该过什么骰子 → 结果 → 谁什么从多少变成多少。 */
+export type Delta =
+  | { kind: 'hp'; id: Id; name: string; from: number; to: number }
+  | { kind: 'me'; id: Id; name: string; from: number; to: number }
+  | { kind: 'moved'; id: Id; name: string; from: { x: number; y: number }; to: { x: number; y: number } }
+  | { kind: 'status'; id: Id; name: string; from: string | null; to: string | null }
+  | { kind: 'points'; id: Id; name: string; pool: 'move'; from: number; to: number }
+  | { kind: 'object'; id: Id; name: string; path: string; from: string | number | boolean | null; to: string | number | boolean | null };
+
+export interface EventActor { kind: 'pc' | 'npc' | 'object' | 'terrain'; id: Id; name: string }
+
+/**
+ * 一条物理事件。句子是这条事件的**渲染结果**，不是输入：
+ *   `<A> 对 <B> 发起了 <动作>，需要过 <属性>（优势/劣势）`
+ *   `<动作> <成功/失败/大成功/大失败>，<谁> 的 <什么> 从 <X> 改为 <Y>`
+ * 这样日志、判定记录、事件卡片都是它的视图，以后临场生成分支也从它读状态。
+ */
+export interface PhysicalEvent {
+  id: Id;
+  at: number;
+  session: number;
+  actor: EventActor;
+  /** 对谁/对什么。可以没有：移动、感知不对某个人 */
+  target?: EventActor;
+  action: { id?: Id; name: string; source: '动作库' | '技能' | '临场' };
+  /** 判定块。没掷骰就没有这一块 */
+  check?: {
+    scale: 'd20' | 'd100';
+    attrs: { attr: string; dice: 'single' | 'advantage' | 'disadvantage'; roll?: number; used?: number; value: number }[];
+    merge: 'single' | 'any' | 'all';
+    dc: number;
+    total: number;
+    success: boolean;
+    tier: 'crit' | 'fumble' | null;
+    /** 特大成功 / 特大失败；普通极值是 null */
+    level?: '特大' | null;
+    /** 优势/劣势的第二颗（谁掷的记清楚） */
+    extra?: { roll: number; by: 'witness' | 'auto' };
+  };
+  deltas: Delta[];
+  /** A 得到的信息：不改变世界，只改变认知 */
+  knowledge?: { subject: Id; label: string; tier: string }[];
+  /** 见证者当场写的裁定 */
+  ruling?: string;
+}
+
 export interface World {
   judgments?: DiceJudgment[];
   /** 只在玩家载荷里：最新一次判定不在他视野内，只给这个通知。 */
@@ -578,6 +624,8 @@ export interface World {
   flows: Flow[];
   lines?: Line[]; // 旧版，迁移后删除
   log: LogEntry[];
+  /** 最近发生过的物理事件（按时间正序，只留最近 EVENT_CAP 条）。 */
+  events?: PhysicalEvent[];
   media: MediaMeta[];
   session: number;
   playerMapId: Id | null;
