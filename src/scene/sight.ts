@@ -294,21 +294,38 @@ export function partyVisionDetailOf(world: World, map: GameMap, viewers: Viewer[
 }
 
 /**
+ * 一次判定要用的两份表：每格衰减（跟眼睛高度有关）和子格挡死表（只跟地图有关）。
+ * 建表是 O(格数)，所以别放在内层循环里——一个观察者建一次，反复用。
+ */
+export interface SightCache { cost: Float32Array; block: Uint8Array | null }
+
+export function sightCacheFor(world: World, map: GameMap, eye: Viewer): SightCache {
+  return { cost: cellSightCost(world, map, eyeHeight(eye)), block: sightSubcellBlockers(world, map) };
+}
+
+/**
  * 一个点能不能被这双眼睛看到。口径和规则书视野一致：
  * 主格衰减走 canSee（包含目标格），建筑薄墙走连续几何，子格挡死表只细化遮挡。
  * 用于开门、判定可见性、滑块、看清范围这类“点”判定，不走老的 sightCosts。
  */
-export function visiblePoint(world: World, map: GameMap, eye: Viewer, target: Point, geometry?: ReturnType<typeof architectureGeometry>): boolean {
+export function visiblePoint(
+  world: World, map: GameMap, eye: Viewer, target: Point,
+  geometry?: ReturnType<typeof architectureGeometry>,
+  cache?: SightCache,
+): boolean {
   const p = eyePoint(eye);
   if (p.x < 0 || p.y < 0 || p.x > map.width || p.y > map.height || target.x < 0 || target.y < 0 || target.x > map.width || target.y > map.height) return false;
   const x0 = Math.floor(p.x), y0 = Math.floor(p.y), x1 = Math.floor(target.x), y1 = Math.floor(target.y);
-  const cost = cellSightCost(world, map, eyeHeight(eye));
-  if (!canSee(cost, map.width, x0, y0, x1, y1)) return false;
+  const cost = cache ? cache.cost : cellSightCost(world, map, eyeHeight(eye));
+  // 这条线只算一次：以前 canSee 算一遍、下面加墙又算一遍。
+  const sum = cellSightTotal(cost, map.width, x0, y0, x1, y1);
+  if (sum > VISION_BUDGET) return false;
   if (eye.facing && !inCone(eye.facing, p.x, p.y, target.x, target.y, coneFor(map, x0, y0))) return false;
   const g = geometry ?? architectureGeometry(map);
   // 墙按系数 2 叠加：一道墙就超过 1.56 的预算，等于挡住；门开着几何里没这块。
-  if (cellSightTotal(cost, map.width, x0, y0, x1, y1) + wallSightSum(g, p, target) > VISION_BUDGET) return false;
-  if (subcellSightBlocked(world, map, p, target)) return false;
+  if (sum + wallSightSum(g, p, target) > VISION_BUDGET) return false;
+  const block = cache ? cache.block : sightSubcellBlockers(world, map);
+  if (subcellBlockedWith(block, map.width * SUB, map.height * SUB, p, target)) return false;
   return true;
 }
 

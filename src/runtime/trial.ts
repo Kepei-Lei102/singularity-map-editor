@@ -10,7 +10,7 @@ import { blocksMovement, ROUND_MINUTES } from '../scene/perception';
 import { characterPathClear, furnitureSweepBlocked, nextTokenStep, setTokenPosition, tokenPosition } from '../scene/architecture';
 import { terrainBlocksPoint, terrainBlocksRect } from '../scene/terrain';
 import { slidingPuzzleForObject } from '../scene/sliding';
-import { viewerOf, visiblePoint } from '../scene/sight';
+import { sightCacheFor, viewerOf, visiblePoint } from '../scene/sight';
 import { describeSense, rollSense, senseHints, type SenseKind } from '../rules/sense';
 import {
   describeInjury, describePitFall, describeStepDrop, gapAhead, INJURY_DICE, INJURY_LABEL, injuryTier,
@@ -889,7 +889,9 @@ export function trialAttackTargets(): AttackTarget[] {
   if (!m || !attacker) return [];
   const pc = w.party.find((p) => p.id === pl.pcId);
   const eye = viewerOf(attacker, { sex: pc?.sex, heightCm: pc?.heightCm });
-  return attackTargets(w, m, attacker, (k) => visiblePoint(w, m, eye, tokenPosition(k)));
+  // 一次枚举只建一次代价表：以前每个候选目标都重建一遍全图。
+  const cache = sightCacheFor(w, m, eye);
+  return attackTargets(w, m, attacker, (k) => visiblePoint(w, m, eye, tokenPosition(k), undefined, cache));
 }
 
 /** 借机攻击：那一步触发后，主持人点「打」才会结算。 */

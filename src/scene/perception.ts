@@ -2,7 +2,7 @@ import { objectEnabled } from '../core/objectData.js';
 import { architectureBlocksSight, architectureGeometry, isArchitectureObject, tokenPosition, isSubdivided } from './architecture';
 import { produce } from 'immer';
 import type { GameMap, MapObject, Token, VisionLayer, World } from '../core/types';
-import { partyVisionDetailOf, visiblePoint, viewerOf, type Viewer } from './sight';
+import { partyVisionDetailOf, sightCacheFor, visiblePoint, viewerOf, type Viewer } from './sight';
 import { cloneLayer, emptyVision, mergeLayers, visionKey } from './vision';
 import { cellLine, gridDist } from '../core/util';
 
@@ -39,12 +39,14 @@ export const CLEAR_BANDS = [
 function sightToObject(world: World, map: GameMap, eye: Viewer, o: MapObject) {
   if (!objectEnabled(map, o)) return { d: Infinity, los: false };
   const p = tokenPosition(eye);
+  // 代价表跟眼睛有关、挡死表跟地图有关，一次判定内不变：建一次，物件每个子格都复用。
+  const cache = sightCacheFor(world, map, eye);
   let best = { d: Infinity, los: false };
   if (isArchitectureObject(o)) {
     const geometry = architectureGeometry(map, true), others = geometry.filter(r => r.objectId !== o.id && r.blocksSight);
     for (const r of geometry.filter(r => r.objectId === o.id)) {
       const target = { x: Math.max(r.x, Math.min(r.x + r.w, p.x)), y: Math.max(r.y, Math.min(r.y + r.h, p.y)) };
-      const d = gridDist(target.x - p.x, target.y - p.y), los = visiblePoint(world, map, eye, target, others);
+      const d = gridDist(target.x - p.x, target.y - p.y), los = visiblePoint(world, map, eye, target, others, cache);
       if ((los && !best.los) || los === best.los && d < best.d) best = { d, los };
     }
     return best;
@@ -53,7 +55,7 @@ function sightToObject(world: World, map: GameMap, eye: Viewer, o: MapObject) {
     const fine = isSubdivided(map, x, y), n = fine ? 3 : 1;
     for (let sy = 0; sy < n; sy++) for (let sx = 0; sx < n; sx++) {
       const target = { x: x + (sx + 0.5) / n, y: y + (sy + 0.5) / n };
-      const d = gridDist(target.x - p.x, target.y - p.y), los = visiblePoint(world, map, eye, target);
+      const d = gridDist(target.x - p.x, target.y - p.y), los = visiblePoint(world, map, eye, target, undefined, cache);
       if ((los && !best.los) || los === best.los && d < best.d) best = { d, los };
     }
   }

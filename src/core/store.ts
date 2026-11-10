@@ -113,6 +113,26 @@ function pushHistory(at: World = world) {
 }
 
 /**
+ * 这次改动会不会影响「谁看见过什么」。不会就跳过整条记忆同步——
+ * syncMemory 每个地图要扫 `宽×高×9` 个子格，还会按队员复制整层视野，
+ * 以前连改个 NPC 名字、打个字都付这个代价。
+ */
+function memoryDirty(a: World, b: World): boolean {
+  if (a.visionMode !== b.visionMode || a.party !== b.party || a.terrains !== b.terrains) return true;
+  if (a.maps.length !== b.maps.length) return true;
+  for (const m of b.maps) {
+    const o = a.maps.find((x) => x.id === m.id);
+    if (!o) return true;
+    if (o.cells !== m.cells || o.subCells !== m.subCells || o.objects !== m.objects || o.tokens !== m.tokens
+      || o.architecture !== m.architecture || o.architectureFragments !== m.architectureFragments
+      || o.subdivisions !== m.subdivisions || o.heights !== m.heights || o.fog !== m.fog || o.subFog !== m.subFog
+      || o.views !== m.views || o.autoFog !== m.autoFog
+      || o.materialCells !== m.materialCells || o.materialSubCells !== m.materialSubCells) return true;
+  }
+  return false;
+}
+
+/**
  * 修改世界。coalesce：同一个 key 在 1 秒内的连续修改合并成一步撤销（用于打字）。
  */
 export function update(fn: (d: Draft<World>) => void, opts: { coalesce?: string; history?: boolean } = {}) {
@@ -125,7 +145,8 @@ export function update(fn: (d: Draft<World>) => void, opts: { coalesce?: string;
     const error = architectureTransitionError(before, m);
     if (error) { toast(error); return; }
   }
-  next = produce(withVision(next, world), syncMemory);
+  const needMemory = memoryDirty(world, next);
+  next = produce(withVision(next, world), (d) => { if (needMemory) syncMemory(d); });
   next = bumpStateRevs(world, next);
   if (batching && batchStart) { pushHistory(batchStart); batchStart = null; } // 拖动里第一次真的改了东西，才记一步撤销
   else if (!batching && opts.history !== false) {

@@ -7,7 +7,7 @@ import { anyVisible } from './memory';
 import { subKey, terrainAtSubcell } from './terrain';
 import { materialAtSubcell, materialMap, rememberedMaterialAtSubcell } from './material';
 import type { Selection, Tool, View } from '../core/store';
-import type { GameMap, MapObject, SeenObject, World } from '../core/types';
+import type { GameMap, MapObject, SeenObject, Token, World } from '../core/types';
 import { staleMemories } from './memory';
 import { CONN_ICON, CONN_LABEL } from '../core/types';
 import { CS, colName, distToRect, gridDist } from '../core/util';
@@ -363,6 +363,27 @@ function playerPresentation(world: World, map: GameMap, viewer?: string): GameMa
     seen: { ...map.seen, objects: map.seen.objects.map(r => playerSeen(r, viewer, map.objects.find(ob => ob.id === r.id))) } };
 }
 
+/** 选中棋子那圈「看清范围」的视野缓存：键是引用相等，改了就自动失效。 */
+let clearVision: {
+  map: GameMap; token: Token; cells: GameMap['cells']; objects: GameMap['objects'];
+  architecture: GameMap['architecture']; subdivisions: GameMap['subdivisions']; heights: GameMap['heights'];
+  terrains: World['terrains']; vis: Uint8Array;
+} | null = null;
+
+function clearVisionOf(world: World, map: GameMap, st: Token): Uint8Array {
+  const m = clearVision;
+  if (m && m.map === map && m.token === st && m.cells === map.cells && m.objects === map.objects
+    && m.architecture === map.architecture && m.subdivisions === map.subdivisions && m.heights === map.heights
+    && m.terrains === world.terrains) return m.vis;
+  const pc = world.party.find((p) => p.id === st.pcId);
+  const vis = visionOf(world, map, viewerOf(st, { sex: pc?.sex, heightCm: pc?.heightCm }));
+  clearVision = {
+    map, token: st, cells: map.cells, objects: map.objects, architecture: map.architecture,
+    subdivisions: map.subdivisions, heights: map.heights, terrains: world.terrains, vis,
+  };
+  return vis;
+}
+
 export function render(
   ctx: CanvasRenderingContext2D, cw: number, ch: number, dpr: number,
   world: World, map0: GameMap, view: View, o: RenderOpts,
@@ -478,9 +499,11 @@ export function render(
   // 选中玩家棋子：画出"看清"的三档（1 / 5 / 15 格），只画看得见的格子
   const st = o.selection?.type === 'token' && o.selection.mapId === map.id ? map.tokens.find((t) => t.id === (o.selection as { id: string }).id) : null;
   if (st && st.pcId && !player) {
-    // 视线判定用规则书口径（跨格累加，预算 1.56），三档只负责染色
-    const pc = world.party.find((p) => p.id === st.pcId);
-    const vis = visionOf(world, map, viewerOf(st, { sex: pc?.sex, heightCm: pc?.heightCm }));
+    // 视线判定用规则书口径（跨格累加，预算 1.56），三档只负责染色。
+    // 全图视野是 O(格 × 子格 × 墙)，以前每次重绘都算一遍——拖动/平移时肉眼可见地掉帧。
+    // 这里按「棋子对象 + 地图的几份数组」的引用缓存：Immer 下没改的部分引用不变，
+    // 棋子一动、地图一画，引用就变了，自然重算。
+    const vis = clearVisionOf(world, map, st);
     const R = CLEAR_BANDS[CLEAR_BANDS.length - 1].d;
     const alpha = [0.3, 0.17, 0.07];
     for (let y = Math.max(y0, st.y - R); y <= Math.min(y1, st.y + R); y++)
