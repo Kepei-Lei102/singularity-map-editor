@@ -1,8 +1,8 @@
 import { useState } from 'react';
 import { getUI, getWorld, setUI, useUI, useWorld, worldContext } from '../core/store';
-import { cancelJudgment, openJudgment, publishJudgment, standInForJudgment } from '../rules/judgments';
+import { openJudgment, publishJudgment, standInForJudgment } from '../rules/judgments';
 import { pushJudgmentRequest } from '../runtime/sync';
-import { settleAttack, settleJump } from '../runtime/trial';
+import { cancelPendingJudgment, settleAttack, settleJump } from '../runtime/trial';
 import { tokenPosition } from '../scene/architecture';
 import type { Id } from '../core/types';
 import { DiceTray, type DiceSides, type DiceTrayRecord } from './DiceTray';
@@ -128,7 +128,7 @@ function PendingJudgmentPanel({ context }: { context: string }) {
     )}
     <div className="btns">
       {!standIn && <button onClick={() => { const e = standInForJudgment(); if (e) setMessage(e); }}>代掷（玩家不在电脑前 / 实体骰）</button>}
-      <button onClick={() => setMessage(cancelJudgment() ?? '已取消这个判定')}>取消整个判定</button>
+      <button onClick={() => setMessage(cancelPendingJudgment() ?? '已取消这个判定')}>取消整个判定</button>
     </div>
     <div role="status">{message}</div>
   </section>;

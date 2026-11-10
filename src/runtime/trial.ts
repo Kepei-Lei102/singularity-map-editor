@@ -1,4 +1,5 @@
-import { clearTrialWindows, openPlayerWindow, playerWindowFor, pushJudgmentRequest, registerTrialMove, selectTrialViewer } from './sync';
+import { clearTrialWindows, openPlayerWindow, playerWindowFor, pushJudgeCancel, pushJudgmentRequest, registerTrialMove, selectTrialViewer } from './sync';
+import { cancelJudgment } from '../rules/judgments';
 import { playerObject } from '../scene/identity';
 import { effectiveLayer } from '../scene/vision';
 import { objectEnabled } from '../core/objectData.js';
@@ -859,6 +860,14 @@ export function damageLost(ev: { hpBefore: number | null; hpAfter: number | null
  */
 export function damageLanded(ev: { damage: number; hpBefore: number | null; hpAfter: number | null }): boolean {
   return ev.damage > 0 && damageLost(ev) > 0;
+}
+
+/** 取消整个判定，并通知正在等这颗骰子的玩家窗口收掉骰盘（不然它会一直挂着，掷了也没人接）。 */
+export function cancelPendingJudgment(): string | null {
+  const p = getUI().pendingJudgment;
+  const msg = cancelJudgment();
+  if (p?.subjectId) pushJudgeCancel(p.subjectId, p.id);
+  return msg;
 }
 
 /** 关掉大事卡片。 */

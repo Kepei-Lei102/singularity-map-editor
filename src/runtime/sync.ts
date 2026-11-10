@@ -314,6 +314,15 @@ export function pushJudgmentRequest(pcId: string): void {
   }
 }
 
+/** 取消判定时把「别等了」推到那个玩家的窗口：不然他的骰盘会一直挂着，掷了也没人接。 */
+export function pushJudgeCancel(pcId: string, judgmentId: string): void {
+  for (const [, entry] of players) {
+    if (entry.pcId !== pcId || !entry.win || entry.win.closed) continue;
+    const msg: SyncMsg = { type: 'judge-cancel', id: judgmentId, __ts: 'ts-map', seq: rand(), from: SESSION, inst: INST, born: BORN };
+    try { entry.win.postMessage(msg, target()); } catch { /* closed */ }
+  }
+}
+
 /** 玩家窗口掷完，主持人这边收下来，等着确认广播。 */
 /**
  * 玩家窗口发来的一句话：落到主持人这边的 world 里，等见证者接。

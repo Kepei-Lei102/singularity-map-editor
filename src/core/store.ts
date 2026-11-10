@@ -184,6 +184,8 @@ export function endBatch() {
 }
 
 export function undo() {
+  // 试玩里不许撤销：世界会退回去，但事件账本和日志已经写死了，屏幕和日志会打架。
+  if (sandbox) { toast('试玩里不能撤销（退出试玩后再改）'); return; }
   const prev = past.pop();
   if (!prev) return;
   future.push(world);
@@ -193,6 +195,7 @@ export function undo() {
   emit();
 }
 export function redo() {
+  if (sandbox) { toast('试玩里不能重做（退出试玩后再改）'); return; }
   const next = future.pop();
   if (!next) return;
   past.push(world);

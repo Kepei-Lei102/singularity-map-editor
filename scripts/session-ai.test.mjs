@@ -107,7 +107,9 @@ test('manual advisor review inside a trial stays sandboxed and snapshots cannot 
     assert.equal(api.getRealWorld(), real);
     assert.equal(real.maps[0].objects[0].state, 1);
     assert.equal(real.maps[0].tokens[0].status, undefined);
-    api.undo(); assert.equal(api.getWorld().maps[0].tokens[0].status, undefined);
+    // 试玩里撤销被挡住（账本退不回去）；真正世界始终没被碰
+    api.undo(); assert.equal(api.getWorld().maps[0].tokens[0].status.label, '试验状态');
+    assert.equal(api.getRealWorld(), real);
     api.endSandbox();
     assert.equal(api.getWorld(), real);
     assert.equal(api.getWorld().maps[0].objects[0].state, 1);
