@@ -189,9 +189,9 @@ export function endTrial() {
   playingBefore = null;
 }
 
-/** 躺下的人干不了什么，得先花行动点翻身或者站起来。 */
+/** 躺下的人干不了什么，得先花移动点翻身或者站起来（不是行动点）。 */
 function lyingMsg(tok: { stance?: string; name: string }): string | null {
-  return tok.stance === '躺' ? `${tok.name}躺着，先翻身或站起来（要花行动点）` : null;
+  return tok.stance === '躺' ? `${tok.name}躺着，先翻身或站起来（要花移动点）` : null;
 }
 
 export function trialMove(dx: number, dy: number) {
@@ -266,9 +266,9 @@ export function trialMove(dx: number, dy: number) {
   }
   const now = getWorld(), m2 = findMap(now, t.mapId);
   if (!m2) return setTr({ msg: '走不过去' });
-  // 战斗模式：玩家可以互相路过，但不能停在同一个格子上。
+  // 不管战斗还是自由行动，都不能停在别人的格子上。
   const landing = { x: Math.floor(step.b.x), y: Math.floor(step.b.y) };
-  const occupied = t.combat && m2.tokens.find((k) => k.id !== tok.id && Math.floor(tokenPosition(k).x) === landing.x && Math.floor(tokenPosition(k).y) === landing.y);
+  const occupied = m2.tokens.find((k) => k.id !== tok.id && Math.floor(tokenPosition(k).x) === landing.x && Math.floor(tokenPosition(k).y) === landing.y);
   if (occupied) return setTr({ msg: `${occupied.name} 在这里，不能停在同一个格子上` });
   // 前面是坑？不是走着能过去的。第一下给提示并记住方向，第二下同方向才真的起跳——
   // 跳跃不能误触，掉下去是要扣血的。
@@ -998,6 +998,8 @@ export function trialRun(mode: RunMode | null): string | null {
   if (mode === null) { setTr({ runMode: null, runTurns: 0, msg: '' }); return null; }
 
   const spec = RUN_MODES[mode];
+  // 作者口径：扣 ME 换跑法只能在本回合还没挪步的时候做，一旦动了这回合就只能走路。
+  if ((t.moved?.[pl.tokenId] ?? 0) > 0) return '这回合已经动过了，只能走路';
   if (t.combat && spec.usesAction && t.acted) return `【${spec.label}】要占行动点，这回合已经用掉了`;
   if (runMeShort(pc, spec)) return `ME 不够：【${spec.label}】要 ${spec.meCost} ME，现在只有 ${pc.me}`;
 
@@ -1017,7 +1019,7 @@ export function trialRun(mode: RunMode | null): string | null {
  * 姿态：站、坐、蹲、躺、趴。
  *
  * 作者口径：
- * - 躺下基本丧失行动能力，要先用行动点翻身（躺→趴）或站起来（躺→站）
+ * - 躺下基本丧失行动能力，要先用移动点翻身（躺→趴 75）或站起来（躺→站 150）
  * - 趴着能动，但按三倍消耗爬：普通人一回合 1 格
  * - 坐／蹲可以直接躺下，不用先站起来
  * - 目前姿态只影响视野高度；战斗里的额外效果还没定，先不写死

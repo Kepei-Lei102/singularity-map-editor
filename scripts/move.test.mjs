@@ -373,3 +373,19 @@ test('用掉之后清零，从头重新蓄', () => {
   assert.equal(spent.cells, 0);
   assert.equal(spent.progress, 0);
 });
+
+// ---------- 作者口径：平时 5 格，某回合走了 6 格就把蓄力用掉 ----------
+
+test('平时 5 格，走了 6 格 = 吃到蓄力', () => {
+  // 425 点 = 5.67 格，算 5 格；超出基准 50 点 → 有蓄力档
+  const b = api.moveBudget({ attributes: { 敏捷: 50, 力量: 50, 意志: 50 } });
+  assert.equal(b.cells, 5);
+  assert.ok(b.charge);
+  // 池子 = 425 + 蓄好的 1 格 75 = 500
+  const pool = api.movePool(b, 1);
+  assert.equal(pool, 500);
+  // 走 5 格：remain 125，蓄力还在
+  assert.equal(api.chargeUsedThisTurn(b, pool - 5 * api.POINTS_PER_CELL, 1), false);
+  // 走 6 格：remain 50，蓄力用掉
+  assert.equal(api.chargeUsedThisTurn(b, pool - 6 * api.POINTS_PER_CELL, 1), true);
+});
