@@ -674,8 +674,8 @@ export function trialEndTurn() {
   })();
   // 换回合要把这一回合的账本清干净：跑了什么、拐了几次都是「本回合」的。
   // 不清的话「奔跑只准拐一次」会变成整场只准拐一次，下一回合还会白送一个跑法。
-  // 锐器/钝器是装备选择，不按回合重置——静默回钝器会把「倒地＝昏厥还是濒死」改掉，太危险。
-  setTr({ moved: {}, turned: {}, turn: t.turn + 1, acted: {}, runMode: {}, runTurns: {},
+  // 锐器只对「这一击」有效：勾了没打就结束回合，也回默认钝器，别把上一轮的勾带进下一轮。
+  setTr({ moved: {}, turned: {}, turn: t.turn + 1, acted: {}, runMode: {}, runTurns: {}, sharpAttack: {},
     opportunity: null, msg: '', charge, movePoints });
 }
 
@@ -832,6 +832,8 @@ export function settleAttack(
   });
   setTr({
     acted: { ...(t.acted ?? {}), [pl.tokenId]: true },
+    // 锐器是「这一击的选择」：打完自动回默认钝器，下一击要重新勾。
+    sharpAttack: { ...(t.sharpAttack ?? {}), [pl.tokenId]: false },
     msg: '',
     event: {
       kind: r.hit ? 'hit' : 'miss',

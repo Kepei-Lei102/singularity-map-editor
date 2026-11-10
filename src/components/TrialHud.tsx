@@ -134,9 +134,9 @@ export function TrialHud() {
                 </button>
               ))}
               {/* 钝器默认；只有身上带锐器的角色才给这个勾选 */}
-              <label className={`check ${sharp ? '' : 'off'}`} title={sharp ? '勾上就是用锐器：打倒的人进入濒死' : '这个角色身上没有锐器，只能用钝器'}>
+              <label className={`check ${sharp ? '' : 'off'}`} title={sharp ? '勾上就是这一击用锐器（打倒的人进入濒死）；打完自动回钝器' : '这个角色身上没有锐器，只能用钝器'}>
                 <input type="checkbox" disabled={!sharp || !targets.length} checked={sharp && !bluntMode}
-                  onChange={(e) => set({ sharpAttack: { ...(t.sharpAttack ?? {}), [cur?.tokenId ?? '']: e.target.checked } })} /> 锐器
+                  onChange={(e) => set({ sharpAttack: { ...(t.sharpAttack ?? {}), [cur?.tokenId ?? '']: e.target.checked } })} /> 下一击锐器
               </label>
             </>;
           })()}

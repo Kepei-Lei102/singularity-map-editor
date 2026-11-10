@@ -166,11 +166,21 @@ test('攻击事件的 check 用的是 kind/band，不再拿 dc:0 当哨兵', () 
   assert.equal(c.outcome, '命中');
 });
 
-test('锐器/钝器是装备选择：结束回合不会静默回钝器', () => {
+test('锐器是「这一击的选择」：打完自动回钝器，勾了没用掉也会在结束回合时清掉', () => {
   fight();
+  api.update((d) => { d.party.find((p) => p.id === 'a').sharp = true; }); // 角色卡上带着锐器
+  api.setUI({ trial: { ...api.getUI().trial, sharpAttack: { ta: true } } });
+  assert.equal(api.trialAttack('tb', { roll: 50, roller: () => 3, sharp: true }), null);
+  assert.equal(api.getWorld().events.at(-1).action.name, '攻击（锐器）');
+  assert.ok(!api.getUI().trial.sharpAttack.ta, '这一击打完就该回钝器');
+  // 下一回合不勾：走钝器
+  api.trialEndTurn();
+  assert.equal(api.trialAttack('tb', { roll: 50, roller: () => 3 }), null);
+  assert.equal(api.getWorld().events.at(-1).action.name, '攻击（钝器）');
+  // 勾了但没打：结束回合清掉
   api.setUI({ trial: { ...api.getUI().trial, sharpAttack: { ta: true } } });
   api.trialEndTurn();
-  assert.equal(api.getUI().trial.sharpAttack.ta, true);
+  assert.ok(!api.getUI().trial.sharpAttack.ta);
 });
 
 test('进出战斗要重算点池：上一场的 300 点不能带进新一场', () => {
