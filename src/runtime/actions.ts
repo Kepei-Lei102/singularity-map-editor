@@ -2,11 +2,10 @@ import { identityCheck } from '../scene/identity';
 import { objectEnabled } from '../core/objectData.js';
 import { architectureGeometry, architectureWalls, architectureObjectBounds, isArchitectureObject, openingIsOpen, objectStateError, architectureTransitionError, normalizeArchitectureBounds, clipArchitecture, characterPathClear, setTokenPosition, tokenPosition, wallCovered } from '../scene/architecture';
 import { checkArchitecture } from '../core/schema.js';
-import { produce } from 'immer';
 import type { Draft } from 'immer';
 import JSZip from 'jszip';
 import { getUI, getWorld, reachableWorlds, replaceWorld, setUI, toast, update, worldContext, type Selection } from '../core/store';
-import { blocksMovement, pcWithin, withVision } from '../scene/perception';
+import { blocksMovement, pcWithin } from '../scene/perception';
 import { viewerOf, visiblePoint } from '../scene/sight';
 import { subKey, terrainAtSubcell } from '../scene/terrain';
 import { materialAtCell, materialAtSubcell } from '../scene/material';
@@ -19,7 +18,6 @@ export { NODE_H, NODE_W, reachable } from '../rules/flow';
 import { CONN_LABEL } from '../core/types';
 import { TIER_LABEL } from '../core/types';
 import { download, uid } from '../core/util';
-import { syncMemory } from '../scene/memory';
 import { contentKey, getRaw, listStored, mediaChanged, putBlobs, storageKey } from './media';
 import { checkRoomObjects, checkWorld, repairOrphanSubcells, repairWorld } from '../core/schema.js';
 import { allSlots, dropSlot, loadSlot, saveSlot } from '../core/persist';
@@ -1382,16 +1380,6 @@ export function moveMapToken(mapId: string, id: string, p: { x: number; y: numbe
   }); return null;
 }
 
-/**
- * 切换视野算法并立刻重算迷雾，方便在同一张图上来回对照：
- * rulebook＝规则书口径（预算 1.56、每格 0.1），legacy＝老口径（累计 ≥1 断）。
- * 这是一次性的对照开关，确认观感后可以删掉。
- */
-export function setVisionAlgo(algo: 'legacy' | 'rulebook') {
-  setUI({ visionAlgo: algo });
-  const w = getWorld();
-  replaceWorld(produce(withVision(w, { ...w, maps: [] }, algo), syncMemory));
-}
 
 // ---------- 高度 ----------
 

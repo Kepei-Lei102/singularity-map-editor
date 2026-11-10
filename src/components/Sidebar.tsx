@@ -8,7 +8,7 @@ import { clampHeight, MAX_HEIGHT_CELLS, MIN_HEIGHT_CELLS } from '../scene/height
 import { newMap } from '../core/defaults';
 import { cellName, uid } from '../core/util';
 import { Area, Check, Num, Row, Section, Txt } from './fields';
-import { captureRoomReset, resetRoom, saveRoomLayout, deleteRoomLayout, paintFog, setVisionAlgo, nudgeHeight, setHeightArea } from '../runtime/actions';
+import { captureRoomReset, resetRoom, saveRoomLayout, deleteRoomLayout, paintFog, nudgeHeight, setHeightArea } from '../runtime/actions';
 
 /** 框选矩形里的所有格子，按行排好。 */
 const allCellsIn = (r: { x0: number; y0: number; x1: number; y1: number }): [number, number][] => {
@@ -148,7 +148,6 @@ export function Sidebar() {
           </>
         )}
         {ui.mode === 'edit' && <Check label="显示迷雾" value={ui.showFogInEdit} onChange={(v) => setUI({ showFogInEdit: v })} />}
-        {ui.mode === 'edit' && <Check label="规则书视野" value={ui.visionAlgo === 'rulebook'} onChange={(v) => setVisionAlgo(v ? 'rulebook' : 'legacy')} />}
         {ui.mode === 'edit' && (
           <>
             <Row label="画笔精度"><span className="inline">

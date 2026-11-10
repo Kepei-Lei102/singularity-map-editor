@@ -150,15 +150,17 @@ export function sightSubcellBlockers(world: World, map: GameMap): Uint8Array | n
   return out;
 }
 
-/** 高精度线是否穿过挡死子格；起点和终点自身不算。 */
+/** 用现成的挡死表判一次；起点和终点自身不算。 */
+function subcellBlockedWith(block: Uint8Array | null, width3: number, height3: number, from: Point, to: Point): boolean {
+  if (!block) return false;
+  const sx = Math.max(0, Math.min(width3 - 1, Math.floor(from.x * SUB))), sy = Math.max(0, Math.min(height3 - 1, Math.floor(from.y * SUB)));
+  const tx = Math.max(0, Math.min(width3 - 1, Math.floor(to.x * SUB))), ty = Math.max(0, Math.min(height3 - 1, Math.floor(to.y * SUB)));
+  return subcellLineBlocked(block, width3, sx, sy, tx, ty);
+}
+
 /** 从 from 点到 to 点，是否穿过挡死子格。地图没细分就是 false。 */
 export function subcellSightBlocked(world: World, map: GameMap, from: Point, to: Point): boolean {
-  const block = sightSubcellBlockers(world, map);
-  if (!block) return false;
-  const w3 = map.width * SUB, h3 = map.height * SUB;
-  const sx = Math.max(0, Math.min(w3 - 1, Math.floor(from.x * SUB))), sy = Math.max(0, Math.min(h3 - 1, Math.floor(from.y * SUB)));
-  const tx = Math.max(0, Math.min(w3 - 1, Math.floor(to.x * SUB))), ty = Math.max(0, Math.min(h3 - 1, Math.floor(to.y * SUB)));
-  return subcellLineBlocked(block, w3, sx, sy, tx, ty);
+  return subcellBlockedWith(sightSubcellBlockers(world, map), map.width * SUB, map.height * SUB, from, to);
 }
 
 function subcellLineBlocked(block: Uint8Array, width3: number, x0: number, y0: number, x1: number, y1: number) {
@@ -172,17 +174,38 @@ function subcellLineBlocked(block: Uint8Array, width3: number, x0: number, y0: n
   return false;
 }
 
-/** 一个观察者看得见哪些格。返回 Uint8Array（1 = 看得见）。 */
+/**
+ * 一个观察者看得见哪些格。返回 Uint8Array（1 = 看得见）。
+ *
+ * 三条遮挡都要算，缺一条墙就不挡视线了：
+ *   1. 地形／物件的视野衰减系数（cellSightCost，含 0.1 基线）；
+ *   2. 建筑薄墙、门的连续几何（architectureGeometry，门开着就有缝）；
+ *   3. 细分格的挡死小块（visionCoef ≥ 99）。
+ * 细分过的主格按 3×3 小格判，任意一小格看得见就整格可见。
+ */
 export function visionOf(world: World, map: GameMap, viewer: Viewer): Uint8Array {
   const eye = eyeHeight(viewer);
   const cost = cellSightCost(world, map, eye);
+  const geometry = architectureGeometry(map);
+  const block = sightSubcellBlockers(world, map);
+  const w3 = map.width * SUB, h3 = map.height * SUB;
   const cone = viewer.facing ? coneFor(map, viewer.x, viewer.y) : 360;
+  const p = eyePoint(viewer);
   const vis = new Uint8Array(map.width * map.height);
   const maxCells = Math.ceil(VISION_BUDGET / BASE_CELL_COST); // 15
+  const clear = (target: Point) =>
+    !geometry.some((r) => r.blocksSight && segmentHitsRect(p, target, r))
+    && !subcellBlockedWith(block, w3, h3, p, target);
   for (let y = 0; y < map.height; y++) for (let x = 0; x < map.width; x++) {
     if (gridDist(x - viewer.x, y - viewer.y) > maxCells) continue;
     if (viewer.facing && !inCone(viewer.facing, viewer.x, viewer.y, x, y, cone)) continue;
-    if (canSee(cost, map.width, viewer.x, viewer.y, x, y)) vis[y * map.width + x] = 1;
+    if (!canSee(cost, map.width, Math.floor(p.x), Math.floor(p.y), x, y)) continue;
+    const n = map.subdivisions?.includes(y * map.width + x) ? SUB : 1;
+    let seen = false;
+    for (let sy = 0; sy < n && !seen; sy++) for (let sx = 0; sx < n && !seen; sx++) {
+      if (clear({ x: x + (sx + 0.5) / n, y: y + (sy + 0.5) / n })) seen = true;
+    }
+    if (seen) vis[y * map.width + x] = 1;
   }
   return vis;
 }
@@ -192,16 +215,19 @@ export function visionDetailOf(world: World, map: GameMap, viewer: Viewer): { vi
   const vis = visionOf(world, map, viewer);
   const sub: Record<number, number> = {};
   const block = sightSubcellBlockers(world, map);
-  if (!block || !map.subdivisions?.length) return { vis, sub };
+  if (!map.subdivisions?.length) return { vis, sub };
+  const geometry = architectureGeometry(map);
   const p = eyePoint(viewer);
   const w3 = map.width * SUB, h3 = map.height * SUB;
-  const ex = Math.max(0, Math.min(w3 - 1, Math.floor(p.x * SUB))), ey = Math.max(0, Math.min(h3 - 1, Math.floor(p.y * SUB)));
   for (const idx of map.subdivisions) {
     const x = idx % map.width, y = Math.floor(idx / map.width);
-    if (!vis[idx]) continue;
     for (let sy = 0; sy < SUB; sy++) for (let sx = 0; sx < SUB; sx++) {
       const x3 = x * SUB + sx, y3 = y * SUB + sy;
-      sub[subKey(map, x3, y3)] = subcellLineBlocked(block, w3, ex, ey, x3, y3) ? 0 : 1;
+      const target = { x: (x3 + 0.5) / SUB, y: (y3 + 0.5) / SUB };
+      const blocked = subcellBlockedWith(block, w3, h3, p, target)
+        || geometry.some((r) => r.blocksSight && segmentHitsRect(p, target, r));
+      // 主格看不见，整格的小格都不算看见；主格看得见再按 1/3 精度细判。
+      sub[subKey(map, x3, y3)] = vis[idx] && !blocked ? 1 : 0;
     }
   }
   return { vis, sub };
@@ -223,7 +249,8 @@ export function partyVisionDetailOf(world: World, map: GameMap, viewers: Viewer[
   for (const v of viewers) {
     const one = visionDetailOf(world, map, v);
     for (let i = 0; i < vis.length; i++) if (one.vis[i]) vis[i] = 1;
-    for (const [k, val] of Object.entries(one.sub)) if (val) sub[+k] = 1;
+    // 0 也要留：迷雾要把「看不见」记成 0，否则记忆那层没法区分「没算过」和「看不见」。
+    for (const [k, val] of Object.entries(one.sub)) sub[+k] = Math.max(sub[+k] ?? 0, val);
   }
   return { vis, sub };
 }

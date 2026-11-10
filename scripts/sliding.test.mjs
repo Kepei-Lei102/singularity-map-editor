@@ -41,7 +41,7 @@ function install(world) {
   // Eyes represent registered characters; orphan pcIds must never become knowledge sources.
   for (const t of world.maps.flatMap(m => m.tokens)) if (t.pcId && !world.party.some(p => p.id === t.pcId)) world.party.push({ id: t.pcId, name: t.name, color: t.color, tags: [] });
   api.replaceWorld(world);
-  api.setUI({ mapId: world.maps[0].id, trial: null, selection: null, mode: 'edit', visionAlgo: 'legacy' });
+  api.setUI({ mapId: world.maps[0].id, trial: null, selection: null, mode: 'edit' });
 }
 
 test('legal single steps translate without rotating or requiring a person/helper', () => {
@@ -672,9 +672,8 @@ test('flow closing and undo closing reject an occupied aperture atomically', () 
     assert.match(api.setObjectState(map.id, 'door', 0), /有人/);
   }
 });
-test('native walls have no coarse furniture collision or sight costs and open door frees aperture', () => {
+test('native walls have no coarse furniture collision and open door frees aperture', () => {
   const { world, map } = nativeFineFixture(); map.objects.find(o => o.id === 'door').state = 1;
-  assert.ok(api.sightCosts(world, map).every(v => v === 0));
   assert.equal(api.blocksMovement(map.objects.find(o => o.id === 'wall')), false);
   assert.equal(api.characterPathClear(world, map, { x: 4.5, y: 1.5 }, { x: 4.5, y: 2.5 }), true);
   assert.equal(api.characterPathClear(world, map, { x: 3.5, y: 3.5 }, { x: 4.5, y: 3.5 }), true);

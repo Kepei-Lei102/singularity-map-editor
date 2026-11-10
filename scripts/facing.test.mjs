@@ -35,7 +35,7 @@ function fixture({ combat = false, otherAt = null } = {}) {
   world.maps = [map];
   api.replaceWorld(world);
   api.setUI({
-    mapId: map.id, mode: 'edit', visionAlgo: 'rulebook',
+    mapId: map.id, mode: 'edit',
     trial: { mapId: map.id, players: [{ tokenId: 't1', pcId: 'pc', name: '甲' }], current: 0, combat, moved: {}, turned: {}, turn: 1, msg: '', markSymbol: '!', markText: '', markMode: false },
   });
   return { map };
