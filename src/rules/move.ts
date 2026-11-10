@@ -129,18 +129,25 @@ export function spendCharge(s: ChargeState): ChargeState {
 }
 
 /**
- * 这一回合有没有吃到蓄的那一格。
+ * 这一回合有没有吃到蓄水池里的那一格。
  *
- * 回合开始的点数池 = 本身移动值 + 蓄好的格数×75。
- * 池子是混合扣的，看不出「这一步花的是谁的钱」——
- * 但蓄的那部分固定在池子末尾，所以只要「剩下的点数少于 蓄的格数×75」，
- * 就说明已经走进蓄来的那段了。这时候蓄力算用掉，重新从 0 蓄。
+ * 蓄水池上限就是一格 = 75 点（作者口径：「上限就是 1，最多只能一格充能」）。
+ * 回合开始的点数池 = 本身移动值 + 蓄水池里的 75 点。
+ * 池子是混着扣的，看不出「这一步花的是谁的钱」——但蓄的那 75 点固定在池子末尾，
+ * 所以剩下的点数少于 75，就说明已经吃到它了。吃到就清零，重新从 0 蓄。
+ *
+ * 作者举的例子：平时走 5 格（425 点），某回合走 6 格（450 点），多出来的 25 点
+ * 只可能来自蓄水池，这时候蓄力就用掉了。
  */
+export const CHARGE_POINTS = MAX_CHARGE_CELLS * POINTS_PER_CELL;
+
 export function chargeUsedThisTurn(
   b: MoveBudget | null, pointsLeft: number, storedCells: number,
 ): boolean {
   if (!b || storedCells <= 0) return false;
-  return pointsLeft < storedCells * POINTS_PER_CELL - 1e-9;
+  // 蓄水池封顶一格，多算的格数不会真的存在，这里再夹一次防止脏数据放大阈值。
+  const reservoir = Math.min(storedCells, MAX_CHARGE_CELLS) * POINTS_PER_CELL;
+  return pointsLeft < reservoir - 1e-9;
 }
 
 /** 性别没填时按默认身高算。 */
