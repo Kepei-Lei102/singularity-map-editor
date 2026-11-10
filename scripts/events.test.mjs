@@ -197,6 +197,10 @@ test('damageLost 报实际扣血；命中却没掉血、只改状态时 note 要
   assert.equal(api.damageLost({ hpBefore: 6, hpAfter: 3 }), 3);
   assert.equal(api.damageLost({ hpBefore: 6, hpAfter: 6 }), 0);
   assert.equal(api.damageLost({ hpBefore: null, hpAfter: null }), 0);
+  // 半空/反向：别让 `null - null = 0` 这种巧合蒙过去
+  assert.equal(api.damageLost({ hpBefore: 5, hpAfter: null }), 0);
+  assert.equal(api.damageLost({ hpBefore: null, hpAfter: 5 }), 0);
+  assert.equal(api.damageLost({ hpBefore: 3, hpAfter: 5 }), 0, '血变多不算扣血');
 
   // 真实攻击：hp 1 挨 3 点伤害，实际只扣 1
   fight({ targetHp: 1 });
