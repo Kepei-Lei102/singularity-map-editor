@@ -24,7 +24,7 @@ export type SyncBody =
   | { type: 'hello'; binding?: string }
   | { type: 'judge-request'; judgment: PendingJudgment } // 见证者→玩家：轮到你自己掷
   | { type: 'judge-cancel'; id: string } // 见证者取消整个判定
-  | { type: 'judge-roll'; id: string; title: string; sides: number; value: number; tens: number | null; units: number | null; material: string; seed: number; rollId: string } // 玩家掷完回传
+  | { type: 'judge-roll'; id: string; title: string; sides: number; value: number; values?: number[]; tens: number | null; units: number | null; material: string; seed: number; rollId: string } // 玩家掷完回传；value 是采信的那颗，优势/劣势时 values 带两颗
   | { type: 'say'; text: string; targetTokenId: string | null } // 玩家窗口→见证者：玩家说了什么
   | { type: 'move'; dx: number; dy: number } // 玩家窗口→见证者：我要往这个方向走一格
   | { type: 'move-result'; ok: boolean; msg: string } // 见证者→玩家：这一走成没成
@@ -366,9 +366,21 @@ function onMove(m: Extract<SyncMsg, { type: 'move' }>, source: MessageEventSourc
 function onJudgeRoll(m: Extract<SyncMsg, { type: 'judge-roll' }>): void {
   const p = getUI().pendingJudgment;
   if (!p || p.id !== m.id) return;
+  // 这里以前只比一个 id：任何同源标签页（甚至 BroadcastChannel，source 是 null 会跳过来源检查）
+  // 都能往待掷判定里塞一颗骰子，包括不可能的 D20=999。骰子是这个程序最核心的承诺，得验。
+  if (m.from !== SESSION) return;
+  if (!Number.isInteger(m.sides) || m.sides !== p.sides) return;
+  if (!Number.isInteger(m.value) || m.value < 1 || m.value > m.sides) return;
+  if (m.values !== undefined) {
+    if (!Array.isArray(m.values) || m.values.length > 2) return;
+    if (m.values.some((v) => !Number.isInteger(v) || v < 1 || v > m.sides)) return;
+    if (!m.values.includes(m.value)) return; // 采信值必须是掷出来的其中一颗
+  }
+  if (m.tens !== null && !(Number.isInteger(m.tens) && m.tens >= 0 && m.tens <= 90 && m.tens % 10 === 0)) return;
+  if (m.units !== null && !(Number.isInteger(m.units) && m.units >= 0 && m.units <= 9)) return;
   setUI({
     judgmentResult: {
-      id: m.id, title: m.title, sides: m.sides, value: m.value, tens: m.tens, units: m.units,
+      judgmentId: m.id, title: m.title, sides: m.sides, value: m.value, values: m.values, tens: m.tens, units: m.units,
       material: m.material, seed: m.seed, rollId: m.rollId, byStandIn: false,
     },
   });
@@ -417,7 +429,10 @@ export function listenAsEditor(onHello: () => void) {
   const off = listen((m, source) => {
     // 另一个编辑器实例在用同一个会话标识（复制了标签页）：不管消息来得多晚，都按"后打开的让"处理
     // 玩家窗口的 judge-roll 也带同一个 SESSION，但那是绑定窗口发的，不是复制出来的编辑器，得放行。
-    if (m.type !== 'hello' && m.type !== 'judge-roll' && m.type !== 'say' && m.type !== 'move' && m.from === SESSION && m.inst !== INST) {
+    // skill-decision 也要放行：玩家点「同意/不同意」时同源部署下玩家窗口的 sessionStorage 是主持人的副本，
+    // 不排除它就会命中这个分支去 renewSession()，所有玩家窗口会永久掉线。
+    if (m.type !== 'hello' && m.type !== 'judge-roll' && m.type !== 'say' && m.type !== 'move'
+      && m.type !== 'skill-decision' && m.from === SESSION && m.inst !== INST) {
       const iAmNewer = m.born < BORN || (m.born === BORN && m.inst < INST);
       if (iAmNewer) renewSession();
       else { send({ type: 'taken' }); onHello(); saveNow(); } // 我是原来那个：叫对方换号，重推一次世界（万一玩家窗口刚才收到了对方的），并重存一次自己的槽（万一对方存进来过）

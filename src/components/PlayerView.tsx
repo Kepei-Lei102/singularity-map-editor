@@ -5,7 +5,7 @@ import { TIER_LABEL } from '../core/types';
 import { MapCanvas } from './MapCanvas';
 import { UTTERANCE_MAX } from '../rules/dialogue';
 import { MediaView } from './MediaPanel';
-import { DiceTray } from './DiceTray';
+import { DiceTray, type DiceTrayRecord } from './DiceTray';
 import { hpOf } from '../rules/combat';
 
 /** 玩家窗口：主持人共享这个窗口的屏幕给玩家。只显示玩家该看到的东西。 */
@@ -25,7 +25,8 @@ export function PlayerView() {
   const [moveNote, setMoveNote] = useState<{ ok: boolean; msg: string } | null>(null);
   /** 轮到自己掷的判定。玩家不能拒掷，所以只给「掷」。 */
   const [pending, setPending] = useState<PendingJudgment | null>(null);
-  const [rolled, setRolled] = useState<{ sides: number; value: number } | null>(null);
+  /** 掷过的骰子。优势/劣势要两颗，所以这里是个数组。 */
+  const [rolled, setRolled] = useState<{ sides: number; rolls: DiceTrayRecord[]; taken: number } | null>(null);
   /** 底部抽屉：一次只开一个。 */
   const [drawer, setDrawer] = useState<'clues' | 'skills' | 'notes' | 'talk' | null>(null);
   /** 笔记只存在这个浏览器里，不发给主持人。 */
@@ -36,6 +37,8 @@ export function PlayerView() {
   const [sayErr, setSayErr] = useState<string | null>(null);
   /** 最近一次跟我有关的攻击：从底部弹一条，几秒后自己收。 */
   const [notice, setNotice] = useState<CombatNotice | null>(null);
+  /** 换了一个新的判定：上一笔掷过的骰子必须清掉，否则会把旧骰子当新结果。 */
+  useEffect(() => { setRolled(null); }, [pending?.id]);
   useEffect(() => {
     if (!notice) return;
     const t = window.setTimeout(() => setNotice(null), 6000);
@@ -222,21 +225,49 @@ export function PlayerView() {
           </div>
         </aside>
       )}
-      {pending && (
-        <div className="player-roll">
+      {pending && (() => {
+        // 优劣势由发起者骰两次（作者 2026-11-10 定）：优势取高、劣势取低。见证者只管「这次算不算优劣势」。
+        const diceMode = pending.jump?.dice ?? 'single';
+        const needTwo = diceMode !== 'single';
+        const need = needTwo ? 2 : 1;
+        const throwDie = (r: DiceTrayRecord) => {
+          const rolls = [...(rolled?.rolls ?? []), r];
+          if (rolls.length < need) { setRolled({ sides: r.sides, rolls, taken: rolls[0].value }); return; }
+          const taken = needTwo
+            ? (diceMode === 'advantage' ? Math.max(...rolls.map((x) => x.value)) : Math.min(...rolls.map((x) => x.value)))
+            : rolls[0].value;
+          const chosen = rolls.find((x) => x.value === taken)!;
+          setRolled({ sides: r.sides, rolls, taken });
+          reportJudgmentRoll({
+            type: 'judge-roll', id: pending.id, title: pending.title, sides: chosen.sides,
+            value: taken, values: rolls.map((x) => x.value),
+            tens: chosen.tens, units: chosen.units, material: chosen.material, seed: chosen.seed, rollId: chosen.id,
+          });
+        };
+        const fmt = (v: number) => (v === 100 ? '000' : String(v));
+        const waitingSecond = !!rolled && rolled.rolls.length < need;
+        return <div className="player-roll">
           <h3>轮到你了 · {pending.title}</h3>
-          <div className="muted">见证者宣告了这个判定，骰子由你掷。掷了不能取消。</div>
-          {rolled
-            ? <div className="player-roll-result">D{rolled.sides} = {rolled.value === 100 ? '000' : rolled.value}</div>
-            : <DiceTray persona="player" sides={pending.sides}
-                onResult={(r) => {
-                  setRolled({ sides: r.sides, value: r.value });
-                  reportJudgmentRoll({ type: 'judge-roll', id: pending.id, title: pending.title, sides: r.sides, value: r.value, tens: r.tens, units: r.units, material: r.material, seed: r.seed, rollId: r.id });
-                }}
-                onError={() => {}} />}
-          {rolled && <div className="muted">已经送到见证者那边，等他确认后广播全队。</div>}
-        </div>
-      )}
+          <div className="muted">
+            见证者宣告了这个判定，骰子由你掷。掷了不能取消。
+            {needTwo && (diceMode === 'advantage' ? '这次是优势骰：掷两颗，取高的那颗。' : '这次是劣势骰：掷两颗，取低的那颗。')}
+          </div>
+          {waitingSecond
+            ? <div>
+                <div className="player-roll-result">第一颗 D{rolled!.sides} = {fmt(rolled!.rolls[0].value)}</div>
+                <div className="muted">再掷一颗，取{diceMode === 'advantage' ? '高' : '低'}。</div>
+                <DiceTray persona="player" sides={pending.sides} onResult={throwDie} onError={() => {}} />
+              </div>
+            : rolled
+              ? <div className="player-roll-result">
+                  {needTwo
+                    ? `D${rolled.sides} = ${rolled.rolls.map((r) => fmt(r.value)).join(' / ')} → 采信 ${fmt(rolled.taken)}`
+                    : `D${rolled.sides} = ${fmt(rolled.taken)}`}
+                </div>
+              : <DiceTray persona="player" sides={pending.sides} onResult={throwDie} onError={() => {}} />}
+          {rolled && !waitingSecond && <div className="muted">已经送到见证者那边，等他确认后广播全队。</div>}
+        </div>;
+      })()}
       {judgmentNotice && !judgment && <div className="player-judgment-notice">发生了一次判定</div>}
       {judgment && <button className="player-judgment-toggle" onClick={() => setDismissed(dismissed === judgment.id ? null : judgment.id)}>正式判定 · {judgment.title}</button>}
       {judgment && dismissed !== judgment.id && <aside className="player-judgment">

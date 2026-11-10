@@ -314,13 +314,27 @@ test('优劣势挂在哪项属性上：魅力有优势、智慧只掷一次', ()
 test('与：两项都要过；取高只对魅力那一项生效', () => {
   const spec = { attrs: [{ attr: '魅力', dice: 'advantage' }, { attr: '智慧' }], merge: 'all' };
   const sheetBoth = sheet({ 魅力: 50, 智慧: 50 }); // 两项区值都是 10 → DC 20 要骰点 ≥10
-  // 魅力 5/20 取高 = 20（大成功）；智慧 18 也过 → 整体过
-  const pass = resolveChecks(spec, sheetBoth, [[5, 20], [18]]);
+  // 魅力 5/18 取高 = 18、智慧 18，都过 → 整体过（不是大成功）
+  const pass = resolveChecks(spec, sheetBoth, [[5, 18], [18]]);
   assert.equal(pass.success, true);
   assert.equal(pass.tier, 'success');
   // 智慧只掷一次，掷 5 → 15 < 20 → 整体不过
-  const fail = resolveChecks(spec, sheetBoth, [[5, 20], [5]]);
+  const fail = resolveChecks(spec, sheetBoth, [[5, 18], [5]]);
   assert.equal(fail.success, false);
+});
+
+test('一个大成功顶俩：任一属性大成功，整次判定完全成功', () => {
+  const spec = { attrs: [{ attr: '力量' }, { attr: '敏捷' }], merge: 'all' };
+  const both = sheet({ 力量: 50, 敏捷: 50 });
+  // 力量掷 3 没过，敏捷掷 20 是大成功 → 整次完全成功
+  const res = resolveChecks(spec, both, [[3], [20]]);
+  assert.equal(res.checks[0].success, false, '力量那一项确实没过');
+  assert.equal(res.success, true, '敏捷的大成功顶替');
+  assert.equal(res.tier, 'crit');
+  // 换个顺序也一样
+  const res2 = resolveChecks(spec, both, [[20], [3]]);
+  assert.equal(res2.success, true);
+  assert.equal(res2.tier, 'crit');
 });
 
 test('或：一项大失败只判死它自己，另一项过了照样算过', () => {

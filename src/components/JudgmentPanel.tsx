@@ -44,8 +44,10 @@ export function JudgmentPanel() {
 /** 判定已经开出去了：等玩家掷，见证者这一格只能等、取消，或者代掷。 */
 function PendingJudgmentPanel({ context }: { context: string }) {
   const world = useWorld();
-  const result = getUI().judgmentResult;
   const p = getUI().pendingJudgment!;
+  const rawResult = getUI().judgmentResult;
+  // 只认属于这一笔判定的骰子。对不上就当没掷过——不然取消一笔重开后，上一颗骰子会被当成新结果。
+  const result = rawResult && rawResult.judgmentId === p.id ? rawResult : null;
   const subject = world.party.find((x) => x.id === p.subjectId);
   const [message, setMessage] = useState('');
   const broadcast = () => {
@@ -63,6 +65,13 @@ function PendingJudgmentPanel({ context }: { context: string }) {
     setUI({ pendingJudgment: null, judgmentResult: null });
   };
   const standIn = !!p.standIn;
+  // 优劣势的骰由发起者自己掷两次（作者 2026-11-10 定）：玩家窗口会把两颗都送过来，
+  // 这里只管用。见证者决定的是「这次算不算优劣势」，不是替玩家掷骰。
+  const dice = p.jump?.dice ?? 'single';
+  const needTwo = dice !== 'single';
+  const fmt = (v: number) => (v === 100 ? '000' : String(v));
+  /** 结算要两颗一起交给引擎；只给一颗，引擎会把它当单掷，优劣势就丢了。 */
+  const diceValues = result ? (result.values?.length ? result.values : [result.value]) : [];
   const onStandInRoll = (roll: DiceTrayRecord) => {
     const err = publishJudgment({
       title: p.title, ruling: p.ruling, recipients: world.party.map((x) => x.id),
@@ -74,7 +83,7 @@ function PendingJudgmentPanel({ context }: { context: string }) {
   };
   return <section className="judgment-panel">
     <h3>{standIn ? '代掷中' : `判定已经开出去了 · 等 ${subject?.name ?? '玩家'} 掷骰`}</h3>
-    <div><b>{p.title}</b> · D{p.sides} · {subject?.name ?? '角色'}</div>
+    <div><b>{p.title}</b> · D{p.sides} · {subject?.name ?? '角色'}{needTwo ? (dice === 'advantage' ? ' · 优势骰' : ' · 劣势骰') : ''}</div>
     {p.ruling && <div className="muted">你预先写好的裁定（已锁）：{p.ruling}</div>}
     <div className="muted">骰子在他的窗口里。见证者默认不能代掷。</div>
     {standIn && <div>
@@ -84,11 +93,13 @@ function PendingJudgmentPanel({ context }: { context: string }) {
     </div>}
     {!standIn && (result
       ? <div>
-          他掷出了：D{result.sides} = {result.value === 100 ? '000' : result.value}
+          他掷出了：{diceValues.length > 1
+            ? `D${result.sides} = ${diceValues.map(fmt).join(' / ')} → 采信 ${fmt(result.value)}`
+            : `D${result.sides} = ${fmt(result.value)}`}
           {p.jump && (
             <button onClick={() => {
               // 跳跃走「骰出即生效、生什么效见证者确认」：你按结果执行，再广播。
-              const err = settleJump(p.jump!, [result.value]);
+              const err = settleJump(p.jump!, diceValues);
               if (err) setMessage(err);
               broadcast();
             }}>按结果执行（挪棋子 / 扣血）</button>

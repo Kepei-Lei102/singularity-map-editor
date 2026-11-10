@@ -6,6 +6,7 @@ import type { PendingJudgment, World } from './types';
 import { demoWorld, emptyWorld } from './defaults';
 import { isPlayerEntry } from './deployment';
 import { migrateWorld, syncMemory } from '../scene/memory';
+import type { CombatNotice } from './types';
 import { setMediaIndex } from '../runtime/media';
 import { withVision } from '../scene/perception';
 import { loadSlot, saveSlot } from './persist';
@@ -256,25 +257,8 @@ export interface UIState {
     /** 借机攻击提示：这一步触发了，等主持人决定打不打。 */
     opportunity?: { moverTokenId: string; enemies: string[]; from: { x: number; y: number }; to: { x: number; y: number } } | null;
     /** 刚发生的大事（攻击、伤害、濒死）：单独一张大卡片显示，不塞进底部小字。 */
-    event?: {
-      kind: 'hit' | 'miss';
-      attackerPcId: string | null;
-      attackerName: string;
-      targetPcId: string | null;
-      targetName: string;
-      roll: number; // D100，100 表示 00
-      crit: boolean; // 大成功及以上
-      /** 伤害骰颗数：普通 1、大成功 2、特大成功 4。旧卡片没有就当 1 颗。 */
-      dice?: number;
-      damage: number;
-      hpBefore: number | null;
-      hpAfter: number | null;
-      hpMax: number | null;
-      /** 倒地走向：钝器打晕是「昏厥」，锐器是「濒死」。 */
-      downed?: 'down' | 'dying' | null;
-      note?: string;
-      at: number;
-    } | null;
+    /** 刚发生的大事（攻击、伤害、濒死）：这里跟 `CombatNotice` 是同一个形状，少一个「我是哪一方」。 */
+    event?: Omit<CombatNotice, 'id' | 'role'> | null;
     /** 最近一次感知判定的结果。见证者据此决定给什么信息。 */
     sense?: { kind: SenseKind; roll: SenseRoll; hints: SenseHint[]; at: number } | null;
     turn: number;
@@ -288,7 +272,12 @@ export interface UIState {
   /** 玩家窗口掷完回传的结果，等见证者确认后广播。 */
   /** 前面是坑，等玩家再按一次同方向确认起跳。 */
   pendingGap: { tokenId: string; dx: number; dy: number } | null;
-  judgmentResult: { id: string; title: string; sides: number; value: number; tens: number | null; units: number | null; material: string; seed: number; rollId: string; byStandIn: boolean } | null;
+  /**
+   * 玩家掷完的结果。judgmentId 标明它属于哪一笔判定——没有这个字段的时候，
+   * 取消一笔再开一笔，上一颗骰子会被当成新判定的结果。
+   * value 是采信的那一颗；优势/劣势掷两颗时 values 记着两颗（单骰就只有一颗）。
+   */
+  judgmentResult: { judgmentId: string; title: string; sides: number; value: number; values?: number[]; tens: number | null; units: number | null; material: string; seed: number; rollId: string; byStandIn: boolean } | null;
   flowId: string | null;
   connKind: 'stairs' | 'portal' | 'door' | 'other';
   tokenPcId: string | null;

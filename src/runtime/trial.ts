@@ -206,6 +206,9 @@ export function trialMove(dx: number, dy: number) {
     if (tok.status.endsAt !== undefined && tok.status.endsAt <= Date.now()) clearTrialStatus(tok.id);
     else return setTr({ msg: `${pl.name}${tok.status.label}中，暂时不能行动` });
   }
+  // 尸体和昏厥是另外两个字段，不挡在 status 里——这里补一道，不然死了还能走。
+  if (tok.corpse) return setTr({ msg: `${pl.name}已经死了` });
+  if (tok.down) return setTr({ msg: `${pl.name}昏厥中，动不了` });
   const lying = lyingMsg(tok);
   if (lying) return setTr({ msg: lying });
   // 朝向：战斗中第一次按方向＝原地转身，再按同方向才走（回合制下等于一次确认）。
@@ -553,7 +556,11 @@ export function settleJump(req: JumpRequest, values: number[]): string {
     // 跳过去的那几格照样花移动点（战斗中才扣）。
     if (t.combat) {
       const cost = (req.unitPrice ?? 75) * req.moveMultiplier * landingStep;
-      const left = Math.max(0, (t.movePoints?.[req.tokenId] ?? 0) - cost);
+      // 点池是懒初始化的：本回合第一个动作若是跳跃，movePoints 还没有这一项，
+      // 直接按 0 算会把人钉死在原地。这里跟走格子那条路一样，按满池兜底。
+      const pool = t.movePoints?.[req.tokenId]
+        ?? movePool(pc ? moveBudgetOn(pc, m.layer) : null, t.charge?.[req.tokenId]?.cells ?? 0);
+      const left = Math.max(0, pool - cost);
       setTr({ movePoints: { ...(t.movePoints ?? {}), [req.tokenId]: left },
         ...(req.usesAction ? { acted: true } : {}),
         msg: `${done}了${roll ? `：骰点 ${roll.used} + 区值 ${roll.value} = ${roll.total} / DC ${roll.dc}` : ''}` });
@@ -663,7 +670,10 @@ export function trialEndTurn() {
     }
     return next;
   })();
-  setTr({ moved: {}, turned: {}, turn: t.turn + 1, acted: false, opportunity: null, msg: '', charge, movePoints });
+  // 换回合要把这一回合的账本清干净：跑了什么、拐了几次都是「本回合」的。
+  // 不清的话「奔跑只准拐一次」会变成整场只准拐一次，下一回合还会白送一个跑法。
+  setTr({ moved: {}, turned: {}, turn: t.turn + 1, acted: false, runMode: null, runTurns: 0,
+    opportunity: null, msg: '', charge, movePoints });
 }
 
 /** 这一回合还有几点行动点：每回合 1 点，攻击/主动技能花掉就算用完。 */
@@ -686,6 +696,10 @@ export function trialAttack(targetTokenId: string, opts: { roll?: number; roller
   if (!m || !attacker || !target) return '找不到攻击者或目标';
   if (attacker.id === target.id) return '不能打自己';
   if (attacker.stance === '躺') return `${attacker.name}躺着，打不了。先翻身或站起来`;
+  // 尸体/昏厥是单独两个字段，不在 status 里——不拦的话死了还能打人。
+  if (attacker.corpse) return `${attacker.name}已经死了`;
+  if (attacker.down) return `${attacker.name}昏厥中，打不了`;
+  if (target.corpse) return `${target.name} 已经死了，不用再打`;
   if (target.status?.label === '濒死') return `${target.name} 已经濒死了`;
   const dist = Math.abs(attacker.x - target.x) + Math.abs(attacker.y - target.y);
   if (dist > ATTACK_RANGE) return `超出攻击距离（${dist} 格 > ${ATTACK_RANGE}）`;
@@ -851,7 +865,8 @@ export function trialOpportunityAttack(): string | null {
       const e = dm.tokens.find((k) => k.id === enemyId);
       if (!e || e.opportunityUsed) continue;
       e.opportunityUsed = true;
-      // 没有技能就是纯幸运骰 D100；这一击也走同一套命中规则（只有大失败落空）。
+      // 借机攻击走攻击口径（作者已定）：000 特大成功 / 1–5 落空 / 95–99 大成功 / 其余命中。
+      // 不是「纯幸运骰 51+」——那条是 resolveLuck 的口径，借机攻击不用它。
       const roll = 1 + Math.floor(Math.random() * 100);
       const r = rollAttack(roll, 8);
       const mv = dm.tokens.find((k) => k.id === mover.id)!;

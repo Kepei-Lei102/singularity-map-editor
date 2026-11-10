@@ -116,6 +116,8 @@ export interface AttributeCheck {
   tier: Tier | null;
   level: CritLevel;
   mode: Advantage;
+  /** 有值就是「这次没算成」：目前只有漏传骰点这一种。别把它当成掷了个 1。 */
+  error?: string;
 }
 
 /**
@@ -135,12 +137,18 @@ export function resolveCheck(opts: {
 }): AttributeCheck {
   const scale = opts.scale ?? 'd20';
   const sides = scale === 'd20' ? 20 : 100;
-  const rolls = opts.rolls.length ? opts.rolls.map((v) => Math.max(1, Math.min(sides, Math.round(v)))) : [1];
   const mode = opts.mode ?? 'normal';
-  const used = pickRoll(rolls, mode);
   const adjust = opts.adjust ?? 0;
   const value = attrValue(opts.attributes?.[opts.attr] ?? 0, scale) + adjust;
   const dc = opts.dc ?? DEFAULT_DC[scale];
+  if (!opts.rolls.length) {
+    // 调用方漏传骰点（UI 没拿到结果、参数顺序错了）时，以前会静默当成「掷了 1」→ 必定大失败，
+    // 日志里看着像运气差，评审和测试都抓不到。现在如实标出来，交给调用方决定怎么显示。
+    return { scale, attr: opts.attr, rolls: [], used: 0, value, adjust, dc, total: value,
+      success: false, tier: null, level: null, mode, error: '没有骰点' };
+  }
+  const rolls = opts.rolls.map((v) => Math.max(1, Math.min(sides, Math.round(v))));
+  const used = pickRoll(rolls, mode);
   const total = value + used;
   const ext = tierOfRoll(scale, used, undefined, opts.attack ? { attack: true } : undefined);
   // 极值只作用于自己那一项：掷 20 直接算过，掷 1 直接算不过，其余按总数对 DC。
@@ -191,7 +199,8 @@ export function rollSpec(spec: JudgeSpec, roller: (sides: number) => number): nu
 
 /**
  * 按「或／与」把多项属性合成一个成败。
- * 极值只作用于自己那一项：一项掷 1 只判死自己，另一项过了，「或」照样算过。
+ * 大成功是「顶替」：任一属性掷出大成功，整次判定完全成功（作者口径：一个大成功顶俩）。
+ * 大失败只作用于自己那一项：一项掷 1 只判死自己，另一项过了，「或」照样算过。
  */
 export function resolveChecks(
   spec: JudgeSpec,
@@ -206,13 +215,17 @@ export function resolveChecks(
     mode: a.dice === 'advantage' || a.dice === 'disadvantage' ? a.dice : 'normal',
     adjust: spec.adjust,
   }));
+  // 作者口径：一个大成功顶俩——多项属性里任一属性掷出大成功，整次判定就完全成功，
+  // 哪怕另一项没过（力量＋敏捷，敏捷大成功直接算完全成功）。
+  const crit = checks.some((c) => c.tier === 'crit');
   const success = checks.length === 0 ? false
-    : merge === 'any' ? checks.some((c) => c.success)
-      : merge === 'all' ? checks.every((c) => c.success)
-        : checks[0].success;
+    : crit ? true
+      : merge === 'any' ? checks.some((c) => c.success)
+        : merge === 'all' ? checks.every((c) => c.success)
+          : checks[0].success;
   const tier: Tier = !success
     ? (checks.some((c) => c.tier === 'fumble') ? 'fumble' : 'fail')
-    : (checks.every((c) => c.tier === 'crit') ? 'crit' : 'success');
+    : crit ? 'crit' : 'success';
   return { checks, success, tier };
 }
 

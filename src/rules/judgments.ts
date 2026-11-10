@@ -52,6 +52,7 @@ export function openJudgment(input: {
       subjectId: input.subjectId, place: input.place ?? null, at: Date.now(), session: getWorld().session,
       jump: input.jump ?? null,
     },
+    judgmentResult: null, // 新判定不能带着上一笔的骰子
   });
   return null;
 }
@@ -63,7 +64,7 @@ export function cancelJudgment(): string | null {
   update((d) => {
     d.log.push({ id: uid(), at: Date.now(), session: d.session, kind: 'note', text: `取消判定「${p.title}」` });
   });
-  setUI({ pendingJudgment: null });
+  setUI({ pendingJudgment: null, judgmentResult: null });
   return null;
 }
 
