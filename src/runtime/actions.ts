@@ -654,6 +654,9 @@ export function reshapeMaps(mapIds: string[], left: number, top: number, right: 
         if (L.seen.architecture) L.seen.architecture = L.seen.architecture.map(r => ({ ...r, x: r.x + left, y: r.y + top })).filter(r => r.x + r.w > 0 && r.y + r.h > 0 && r.x < W && r.y < H);
       }
       m.cells = remap(m.cells, '');
+      // 高度也要跟着重排，不然改完尺寸整层高度会错位到别的格子上。
+      // 长度对不上的旧数据直接丢掉，比留着错位强。
+      if (m.heights) m.heights = m.heights.length === oldWidth * m.height ? remap(m.heights, 0) : undefined;
       m.d100 = remap(m.d100, 0);
       m.roomCells = remap(m.roomCells, '');
       m.fog = remap(m.fog, 0);

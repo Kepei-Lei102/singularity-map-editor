@@ -12,7 +12,7 @@ import { terrainBlocksPoint, terrainBlocksRect } from '../scene/terrain';
 import { slidingPuzzleForObject } from '../scene/sliding';
 import { viewerOf, visiblePoint } from '../scene/sight';
 import { describeSense, rollSense, senseHints, type SenseKind } from '../rules/sense';
-import { gapAhead, stepDrop } from '../rules/jump';
+import { describeStepDrop, gapAhead, stepDrop } from '../rules/jump';
 import { heightAt } from '../scene/height';
 import { cellFloor } from '../scene/terrain';
 import { canAffordStep, canTurn, moveBudgetOn, movePool, RUN_MODES, runMeShort, stepPrice, tickCharge, STAND_UP_COST, ROLL_OVER_COST, type ChargeState, type RunMode } from '../rules/move';
@@ -279,6 +279,11 @@ export function trialMove(dx: number, dy: number) {
   // 落差：上一步台阶能走（双倍点数），再高就得上攀跳/攀爬；往下就是跳，会摔。
   const drop = stepDrop(heightAt(m2, Math.floor(step.a.x), Math.floor(step.a.y)), heightAt(m2, landing.x, landing.y));
   if (drop.kind === 'blocked') return setTr({ msg: drop.reason });
+  // 往下 2 格以上不是走着下去的，是跳下去——会摔。这里先拦住，
+  // 跳跃动作接进来之前不能让人静默走掉。
+  if (drop.kind === 'stepDown' && !drop.safe) {
+    return setTr({ msg: describeStepDrop(drop) });
+  }
   const extraPrice = drop.kind === 'stepUp' ? price : 0; // 上台阶再付一份
   if (t.combat && drop.kind !== 'flat') {
     const left = t.movePoints?.[pl.tokenId] ?? movePool(budget, stored);

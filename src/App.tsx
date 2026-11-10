@@ -89,7 +89,10 @@ function Editor() {
       }
       if (mod && e.key.toLowerCase() === 'y' && !typing) { e.preventDefault(); redo(); return; }
       if (mod && e.key.toLowerCase() === 's') { e.preventDefault(); if (!getUI().trial) saveToDisk(); return; }
-      if (typing || mod) return;
+      // Alt/Option + 字母是在打字（macOS 上 Option+U 出「¨」），别当成快捷键。
+      if (typing || mod || e.altKey) return;
+      // 按住不放的连发不算新的一次按键：不然后双工具的字母会来回切。
+      if (e.repeat) return;
       if (getUI().trial) {
         const k = e.key.toLowerCase();
         const dir: Record<string, [number, number]> = { w: [0, -1], a: [-1, 0], s: [0, 1], d: [1, 0] };
@@ -102,7 +105,7 @@ function Editor() {
       }
       if (e.key === '[') { const p = panels.current.left; p.setOpen(!p.open); return; }
       if (e.key === ']') { const p = panels.current.right; p.setOpen(!p.open); return; }
-      if (e.key === 'Escape') setUI({ pendingConn: null, selection: null, tool: 'select' });
+      if (e.key === 'Escape') setUI({ pendingConn: null, selection: null, tool: 'select', heightRect: null });
       else if (e.key === 'Delete' || e.key === 'Backspace') deleteSelection();
       else {
         // 一个字母可能带两个工具：按一下用上次的，再按一下切到另一个。

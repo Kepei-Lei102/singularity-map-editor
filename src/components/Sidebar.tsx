@@ -62,7 +62,7 @@ export function Sidebar() {
                   {inGroup.map(([t, label, key]) => (
                     <button key={t} className={ui.tool === t ? 'tool on' : 'tool'} aria-label={label}
                       title={key ? `${label} · 快捷键 ${key}` : label}
-                      onClick={() => setUI({ tool: t, pendingConn: null })}>{label}</button>
+                      onClick={() => setUI({ tool: t, pendingConn: null, ...(t === 'heightRect' ? {} : { heightRect: null }) })}>{label}</button>
                   ))}
                 </div>
               </div>
@@ -107,14 +107,14 @@ export function Sidebar() {
         {ui.tool === 'heightBrush' && (
           <>
             <div className="hint">左键抬高 1 格，按住拖动连续抬；Shift + 左键压低。最低到地面（0）。1 格 = 0.75 米，一层楼挑高 8 格。</div>
-            <button className="tool" onClick={() => setUI({ heightValue: 0 })}>全部压平（用框选工具）</button>
+            <button className="tool" onClick={() => setUI({ tool: 'heightRect', heightValue: 0 })}>切到框选压平 →</button>
           </>
         )}
         {ui.tool === 'heightRect' && (
           <>
             <div className="hint">拖出一片，再在下面填高度应用。压平就是填 0。</div>
             <Row label="高度（格）">
-              <Num value={ui.heightValue ?? 1} min={0} step={1} onChange={(v) => setUI({ heightValue: v })} />
+              <Num value={ui.heightValue ?? 1} min={0} step={1} onChange={(v) => setUI({ heightValue: Math.max(0, Math.round(Number.isFinite(v) ? v : 0)) })} />
             </Row>
             {ui.heightRect && ui.heightRect.mapId === ui.mapId ? (
               <div className="hint">
@@ -213,7 +213,18 @@ export function Sidebar() {
               <Row label="名字"><Txt value={terrain.name} onChange={(v) => update((d) => { d.terrains.find((t) => t.id === terrain.id)!.name = v; }, { coalesce: 'tn' + terrain.id })} /></Row>
               <Row label="颜色"><input type="color" value={terrain.color} onChange={(e) => update((d) => { d.terrains.find((t) => t.id === terrain.id)!.color = e.target.value; }, { coalesce: 'tc' + terrain.id })} /></Row>
               <Row label="视野衰减"><Num value={terrain.visionCoef} step={0.1} min={0} onChange={(v) => update((d) => { d.terrains.find((t) => t.id === terrain.id)!.visionCoef = Math.min(1000, Math.max(0, v)); })} /></Row>
-              <Check label="不可通行" value={terrain.blocksMove} onChange={(v) => update((d) => { d.terrains.find((t) => t.id === terrain.id)!.blocksMove = v; })} />
+              <Check label="不可通行" value={terrain.blocksMove} onChange={(v) => update((d) => {
+                const t = d.terrains.find((x) => x.id === terrain.id)!;
+                t.blocksMove = v;
+                // 刚设成不可通行就先当墙：跳不过去。想让它变成坑得自己勾下面那条。
+                if (v && t.crossable === undefined) t.crossable = false;
+              })} />
+              {terrain.blocksMove && (
+                <>
+                  <Check label="能跨过去" value={terrain.crossable === true} onChange={(v) => update((d) => { d.terrains.find((t) => t.id === terrain.id)!.crossable = v; })} />
+                  <div className="hint">勾上＝这里是坑、楼间空隙那种「脚下没地方站但能跳过去」。不勾＝墙，跳也跳不过去。</div>
+                </>
+              )}
               <div className="hint">视野衰减：空地 0.1（≈15 格视野），草丛 2。现在只记录，以后算视野用。</div>
               <button className="danger small" onClick={() => {
                 if (!confirm(`删除地形「${terrain.name}」？用了它的格子会变空。`)) return;

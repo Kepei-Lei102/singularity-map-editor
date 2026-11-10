@@ -188,10 +188,26 @@ test('往下 12 格以上有攀爬：依旧占行动点', () => {
 
 test('往下必摔：确实扣血', () => {
   const plan = api.planJump('down', 8, NO);
-  const out = api.resolveJump(pc({}), plan, dice(7));
+  // 第 4 个参数是摔伤骰（1D12），不能拿 D100 顶
+  const out = api.resolveJump(pc({}), plan, dice(7), () => 7);
   assert.equal(out.landed, false);
   assert.equal(out.damage, 7);
   assert.match(out.text, /重伤/);
+});
+
+test('摔伤骰不能拿 D100 顶：1D12 要均匀分布', () => {
+  // 这条防的是「resolveJump 把自己的 D100 塞给 rollInjury」——
+  // 那样 1D12 会有 89% 掷出 12。
+  const plan = api.planJump('down', 8, NO);
+  const counts = {};
+  for (let i = 0; i < 4000; i++) {
+    const d = api.resolveJump(pc({}), plan).damage;
+    counts[d] = (counts[d] || 0) + 1;
+  }
+  const keys = Object.keys(counts).map(Number);
+  assert.equal(keys.length, 12, '1D12 应该 12 个面都出得来，实际只出了 ' + keys.length + ' 个');
+  const twelve = counts[12] ?? 0;
+  assert.ok(twelve < 4000 * 0.15, `12 出现了 ${twelve} 次，分布不对（均匀应约 333）`);
 });
 
 test('往下检定过了：稳稳落地不摔', () => {

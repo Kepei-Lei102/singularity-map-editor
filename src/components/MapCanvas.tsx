@@ -205,6 +205,9 @@ export function MapCanvas({ world, map, mode, playerNumbers = false, follow, vie
   };
 
   const onDown = (e: React.PointerEvent) => {
+    // 上一笔还没收尾就又按下了（拖动中按右键、多指、触控笔第二次按下）：
+    // 先把那一笔收掉，不然 beginBatch 会被吃掉、撤销从此静默失效。
+    if (drag.current) { drag.current = null; endBatch(); setPreview(null); }
     try { canvas.current!.setPointerCapture(e.pointerId); } catch { /* 合成事件没有真实指针 */ }
     const { sx, sy, cx, cy } = toCell(e);
     const v = viewRef.current;
@@ -376,9 +379,11 @@ export function MapCanvas({ world, map, mode, playerNumbers = false, follow, vie
       dr.bx = bx; dr.by = by;
       setPreview({ x: Math.min(dr.ax, bx) / 3, y: Math.min(dr.ay, by) / 3, w: Math.max(.05, Math.abs(bx - dr.ax) / 3), h: Math.max(.05, Math.abs(by - dr.ay) / 3) });
     } else if (dr.k === 'height') {
-      // 单格抬高：拖动时沿着线把经过的格子都调一次
+      // 单格抬高：拖动时沿着线把经过的格子都调一次。
+      // cellLine 会把起点也放进来，而起点在 pointerdown 已经加过一次了，
+      // 所以这里要跳过第一个，不然拖过的格子每格会被加两次。
       if (cx === dr.lx && cy === dr.ly) return;
-      nudgeHeight(map.id, cellLine(dr.lx, dr.ly, cx, cy), dr.delta);
+      nudgeHeight(map.id, cellLine(dr.lx, dr.ly, cx, cy).slice(1), dr.delta);
       dr.lx = cx; dr.ly = cy;
     } else if (dr.k === 'heightRect') {
       dr.x1 = clampX(cx); dr.y1 = clampY(cy);
@@ -469,11 +474,13 @@ export function MapCanvas({ world, map, mode, playerNumbers = false, follow, vie
     if (dr.k === 'wall') { const error = addArchitectureWall(map.id, { x: dr.ax, y: dr.ay }, { x: dr.bx, y: dr.by }, getUI().tool === 'glass' ? 'glass' : 'wall', getUI().wallThickness); if (error) toast(error); setPreview(null); }
     // 高度：单格拖动收尾；框选只记下矩形，侧栏输入数值再应用。
     if (dr.k === 'height') { endBatch(); setPreview(null); }
-    if (dr.k === 'heightRect' && preview) {
+    if (dr.k === 'heightRect') {
+      // 直接按 drag 里记的矩形算，不依赖 preview 这个 React state——
+      // preview 可能已经被别的东西清掉了，那样 endBatch 就会被漏掉。
       endBatch();
       setPreview(null);
-      setUI({ heightRect: { mapId: map.id, x0: preview.x, y0: preview.y,
-        x1: preview.x + preview.w - 1, y1: preview.y + preview.h - 1 } });
+      setUI({ heightRect: { mapId: map.id, x0: Math.min(dr.x0, dr.x1), y0: Math.min(dr.y0, dr.y1),
+        x1: Math.max(dr.x0, dr.x1), y1: Math.max(dr.y0, dr.y1) } });
     }
     if (dr.k === 'paint' || dr.k === 'obj') endBatch();
     if (dr.k === 'tok') {

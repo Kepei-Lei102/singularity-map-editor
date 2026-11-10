@@ -12,7 +12,7 @@ const temp = await mkdtemp(join(tmpdir(), 'ts-ui-test-'));
 const bundle = join(temp, 'editor.cjs');
 // Exercise the real pointer handlers without a DOM. Only React hooks and canvas are replaced.
 await build({
-  stdin: { contents: `export * from './src/core/defaults'; export * from './src/core/store'; export * from './src/scene/render'; export * from './src/components/Sidebar'; export * from './src/components/toolGroups'; export * from './src/components/MapCanvas';`, resolveDir: root },
+  stdin: { contents: `export * from './src/core/defaults'; export * from './src/core/store'; export * from './src/scene/render'; export * from './src/components/Sidebar'; export * from './src/components/toolGroups'; export * from './src/components/MapCanvas'; export * from './src/runtime/actions';`, resolveDir: root },
   outfile: bundle, bundle: true, platform: 'node', format: 'cjs', logLevel: 'silent',
   plugins: [{ name: 'hooks', setup(b) {
     b.onResolve({ filter: /^react\/jsx-runtime$/ }, () => ({ path: 'jsx', namespace: 'test' }));
@@ -212,4 +212,91 @@ test('wide short object keeps name/state in complete rows above the footer; same
   result = drawing(world,map,'player');
   assert.ok(result.text.some(l => l.value === '记忆家具'));
   assert.ok(result.text.some(l => l.value === '[记忆状态]'));
+});
+
+// ---------- 高度：真正走生产函数，不是测测试里重写的副本 ----------
+
+function heightFixture(w = 10, h = 10) {
+  const world = api.emptyWorld(), map = api.newMap('高度测试', '现实', 0, w, h, 'floor', false);
+  map.autoFog = false; map.objects = []; map.tokens = [];
+  world.maps = [map];
+  api.replaceWorld(world);
+  api.setUI({ mode: 'edit', tool: 'heightBrush', views: { [map.id]: { zoom: 1, panX: 0, panY: 0 } }, heightRect: null, heightValue: 2 });
+  return map;
+}
+
+function canvasHandlers() {
+  globalThis.testRefs = [{}, { setPointerCapture() {}, getBoundingClientRect: () => ({ left: 0, top: 0 }) }];
+  const tree = api.MapCanvas({ world: api.getWorld(), map: api.getWorld().maps[0], mode: 'edit' });
+  return tree.props.children[0].props;
+}
+
+const CELL = 32;
+const at = (cx, cy) => ({ button: 0, pointerId: 1, clientX: cx * CELL + CELL / 2, clientY: cy * CELL + CELL / 2 });
+
+test('单格抬高：点一下 +1', () => {
+  const map = heightFixture();
+  const c = canvasHandlers();
+  c.onPointerDown(at(0, 0)); c.onPointerUp(at(0, 0));
+  assert.equal(api.getWorld().maps[0].heights[0], 1);
+});
+
+test('拖动过三格：每格只 +1，不是 +2', () => {
+  const map = heightFixture();
+  const c = canvasHandlers();
+  c.onPointerDown(at(0, 0));
+  c.onPointerMove(at(1, 0));
+  c.onPointerMove(at(2, 0));
+  c.onPointerUp(at(2, 0));
+  // 老 bug：起点格已经在 down 里加过，拖动时 cellLine 又把起点带回来，于是每格 +2。
+  assert.deepEqual(api.getWorld().maps[0].heights.slice(0, 3), [1, 1, 1]);
+});
+
+test('Shift + 点击是压低', () => {
+  const map = heightFixture();
+  api.nudgeHeight(map.id, [[0, 0]], 2);
+  const c = canvasHandlers();
+  const down = { ...at(0, 0), shiftKey: true };
+  c.onPointerDown(down); c.onPointerUp(down);
+  assert.equal(api.getWorld().maps[0].heights[0], 1);
+});
+
+test('压低到 0 就不再往下', () => {
+  const map = heightFixture();
+  api.setHeightArea(map.id, { x0: 0, y0: 0, x1: 0, y1: 0 }, 0);
+  api.nudgeHeight(map.id, [[0, 0]], -3);
+  assert.equal(api.getWorld().maps[0].heights?.[0] ?? 0, 0);
+});
+
+test('整次拖动只占一步撤销，undo 回到原样', () => {
+  const map = heightFixture();
+  const c = canvasHandlers();
+  c.onPointerDown(at(0, 0));
+  c.onPointerMove(at(1, 0));
+  c.onPointerMove(at(2, 0));
+  c.onPointerUp(at(2, 0));
+  assert.deepEqual(api.getWorld().maps[0].heights.slice(0, 3), [1, 1, 1]);
+  api.undo();
+  assert.deepEqual(api.getWorld().maps[0].heights?.slice(0, 3) ?? [0, 0, 0], [0, 0, 0], '一步撤销就全回去');
+});
+
+test('框选整片设高度', () => {
+  const map = heightFixture(6, 4);
+  api.setHeightArea(map.id, { x0: 1, y0: 1, x1: 2, y1: 2 }, 3);
+  const hs = api.getWorld().maps[0].heights;
+  assert.equal(hs[1 * 6 + 1], 3);
+  assert.equal(hs[2 * 6 + 2], 3);
+  assert.equal(hs[0], 0, '范围外不动');
+});
+
+test('改地图尺寸时高度跟着重排', () => {
+  const map = heightFixture(4, 3);
+  api.setHeightArea(map.id, { x0: 3, y0: 2, x1: 3, y1: 2 }, 5);
+  assert.equal(api.getWorld().maps[0].heights[2 * 4 + 3], 5);
+  api.resizeMap(map.id, 5, 3);
+  const m = api.getWorld().maps[0];
+  assert.equal(m.width, 5);
+  assert.equal(m.heights.length, 5 * 3, '长度要跟着新尺寸');
+  assert.equal(m.heights[2 * 5 + 3], 5, '同一格高度不变');
+  assert.equal(m.heights[2 * 5 + 1], 0, '没抬高过的格子还是 0');
 });

@@ -228,7 +228,12 @@ export interface JumpOutcome {
  * - 检定没过 = 没跳过去，掉下去，按落差摔
  * - 没有检定、但落差够大（6 格以上）= 必摔
  */
-export function resolveJump(pc: PC, plan: JumpPlan, roll?: () => number): JumpOutcome {
+/**
+ * @param roll 检定骰，返回 1–100（D100）
+ * @param injuryRoll 摔伤骰，返回 1–面数。**不能拿 D100 当摔伤骰**：
+ *   1D4 用 D100 掷会有 97% 掷出 4。不传就用各面数的默认骰。
+ */
+export function resolveJump(pc: PC, plan: JumpPlan, roll?: () => number, injuryRoll?: () => number): JumpOutcome {
   const r = roll ?? rollD100;
   const check = plan.check ? rollJumpCheck(pc, plan.check, r) : null;
 
@@ -241,7 +246,7 @@ export function resolveJump(pc: PC, plan: JumpPlan, roll?: () => number): JumpOu
     if (!landed) {
       // 平行跳失败：掉进空隙。按落差算——空隙按掉落算，至少中伤。
       const tier: InjuryTier = 'medium';
-      damage = rollInjury(tier, r);
+      damage = rollInjury(tier, injuryRoll);
       text = `${describeRoll(check!)}。没跳过去，掉下去了：${INJURY_LABEL[tier]} 1D${INJURY_DICE[tier]}，扣 ${damage} HP`;
     } else {
       text = check ? `${describeRoll(check)}。跳过去了` : '一格，直接过去了';
@@ -267,7 +272,7 @@ export function resolveJump(pc: PC, plan: JumpPlan, roll?: () => number): JumpOu
     landed = check === null || check.success;
     if (!landed) {
       const tier = injuryTier(plan.height);
-      damage = rollInjury(tier, r);
+      damage = rollInjury(tier, injuryRoll);
       text = `${describeRoll(check!)}。手滑了：${INJURY_LABEL[tier]} 1D${INJURY_DICE[tier]}，扣 ${damage} HP`;
     } else {
       text = `${describeRoll(check!)}。爬下来了`;
@@ -278,7 +283,7 @@ export function resolveJump(pc: PC, plan: JumpPlan, roll?: () => number): JumpOu
   // 没技能跳下去
   const tier = plan.injury;
   if (check === null || !check.success) {
-    damage = rollInjury(tier, r);
+    damage = rollInjury(tier, injuryRoll);
     landed = false;
     text = check
       ? `${describeRoll(check)}。没稳住，${describeInjury(plan.height, damage)}`
@@ -347,7 +352,7 @@ export function describeStepDrop(d: StepDrop): string {
   if (d.kind === 'stepUp') return '上一步台阶，双倍移动点';
   if (d.kind === 'stepDown') return d.safe
     ? '下一步台阶，正常走'
-    : `下 ${d.height} 格，摔伤 ${INJURY_LABEL[d.injury]} 1D${INJURY_DICE[d.injury]}`;
+    : `往下 ${d.height} 格（${(d.height * CELL_M).toFixed(2)} 米），得跳下去——会摔：${INJURY_LABEL[d.injury]} 1D${INJURY_DICE[d.injury]}`;
   return d.reason;
 }
 
@@ -384,7 +389,7 @@ export function pitFall(fromHeight: number, bottomHeight: number | null): PitFal
   return { cells, nextFloor: false, injury: injuryTier(cells) };
 }
 
-/** 掉进坑里，掷一次伤害。 */
+/** 掉进坑里，掷一次伤害。roll 是摔伤骰（1–面数），不是 D100。 */
 export function rollPitFall(fall: PitFall, roll?: () => number): number {
   return rollInjury(fall.injury, roll);
 }

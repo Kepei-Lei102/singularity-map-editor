@@ -149,11 +149,12 @@ test('1/2 档：两回合攒满一格', () => {
   assert.equal(s.progress, 0);
 });
 
-test('蓄满之后继续转，会接着攒下一格', () => {
+test('蓄满一格就停住，不会再攒', () => {
   const b = api.moveBudget(pc({ 敏捷: 97.5 }));
+  // 作者口径：上限就是 1，最多只能一格充能
   let s = { progress: 0, cells: 0 };
   for (let i = 0; i < 6; i++) s = api.tickCharge(b, s);
-  assert.equal(s.cells, 3, '六回合攒三格');
+  assert.equal(s.cells, 1, '六回合也只攒到一格');
 });
 
 test('没有蓄力门槛的人，怎么转都不给', () => {
@@ -164,8 +165,8 @@ test('没有蓄力门槛的人，怎么转都不给', () => {
 });
 
 test('用掉一格蓄力之后，重新从 0 蓄', () => {
-  const s = api.spendCharge({ progress: 0.9, cells: 2 });
-  assert.equal(s.cells, 1);
+  const s = api.spendCharge({ progress: 0.9, cells: 1 });
+  assert.equal(s.cells, 0);
   assert.equal(s.progress, 0, '用完就重新蓄');
 });
 
@@ -314,4 +315,32 @@ test('普通人在点数池里能走几格', () => {
   const crawlPrice = api.stepPrice(null, true);
   while (api.canAffordStep(crawlLeft, crawlPrice)) { crawlLeft -= crawlPrice; crawlSteps++; }
   assert.equal(crawlSteps, 1, '普通人趴着就是 1 格');
+});
+
+test('蓄力最多积一格，不会无限涨', () => {
+  const b = api.moveBudgetOn(pc({ 智慧: 50, 观察: 50, 魅力: 50 }), '梦境');
+  assert.ok(b.charge, '这个角色应该在蓄力区间');
+  let s = { progress: 0, cells: 0 };
+  for (let i = 0; i < 40; i++) s = api.tickCharge(b, s);
+  assert.equal(s.cells, api.MAX_CHARGE_CELLS, '蓄满就停在一格');
+  assert.equal(s.cells, 1);
+});
+
+test('蓄满之后池子只加一格，不再膨胀', () => {
+  const b = api.moveBudgetOn(pc({ 智慧: 50, 观察: 50, 魅力: 50 }), '梦境');
+  let s = { progress: 0, cells: 0 };
+  for (let i = 0; i < 40; i++) s = api.tickCharge(b, s);
+  assert.equal(api.movePool(b, s.cells), b.value + 75);
+});
+
+test('用掉一格蓄力后重新蓄满', () => {
+  const b = api.moveBudgetOn(pc({ 智慧: 50, 观察: 50, 魅力: 50 }), '梦境');
+  let s = api.tickCharge(b, api.tickCharge(b, { progress: 0, cells: 0 }));
+  assert.equal(s.cells, 1);
+  s = api.spendCharge(s);
+  assert.equal(s.cells, 0);
+  assert.equal(s.progress, 0);
+  s = api.tickCharge(b, s);
+  s = api.tickCharge(b, s);
+  assert.equal(s.cells, 1, '两回合后又蓄满');
 });

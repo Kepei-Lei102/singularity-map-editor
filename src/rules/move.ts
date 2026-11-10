@@ -110,17 +110,22 @@ export function cellsThisTurn(b: MoveBudget, stored = 0): number {
  */
 export interface ChargeState { progress: number; cells: number }
 
+/** 蓄力最多攒一格。作者口径：「上限就是 1，最多只能一格充能」。 */
+export const MAX_CHARGE_CELLS = 1;
+
 export function tickCharge(b: MoveBudget, s: ChargeState): ChargeState {
   if (!b.charge) return s;
+  // 已经满格就不再蓄了，免得越积越多。
+  if (s.cells >= MAX_CHARGE_CELLS) return { progress: 0, cells: MAX_CHARGE_CELLS };
   // 每回合最多蓄 1 格，多出来的丢掉，不然小数会越积越多。
   const progress = Math.min(1, s.progress + b.charge.perRound);
-  if (progress >= 1 - 1e-9) return { progress: 0, cells: s.cells + 1 };
+  if (progress >= 1 - 1e-9) return { progress: 0, cells: Math.min(MAX_CHARGE_CELLS, s.cells + 1) };
   return { progress, cells: s.cells };
 }
 
 /** 用掉一格蓄力。用完之后重新从 0 蓄。 */
 export function spendCharge(s: ChargeState): ChargeState {
-  return { progress: 0, cells: Math.max(0, s.cells - 1) };
+  return { progress: 0, cells: Math.max(0, Math.min(MAX_CHARGE_CELLS, s.cells) - 1) };
 }
 
 /** 性别没填时按默认身高算。 */

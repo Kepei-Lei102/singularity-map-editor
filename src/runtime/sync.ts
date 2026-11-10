@@ -366,8 +366,14 @@ export function listen(fn: (m: SyncMsg, source: MessageEventSource | null) => vo
   const seen = new Set<string>();
   const handle = (e: MessageEvent) => {
     if (!isMsg(e.data) || seen.has(e.data.seq)) return;
-    const expected = player ? hostOriginForPlayer() : e.data.type === 'hello' ? playerWindowOrigin() : location.origin;
-    if (e.origin && e.origin !== expected) return;
+    // 主持端这边：自己的窗口（另一个编辑器标签、BroadcastChannel）来自本机 origin，
+    // 玩家窗口来自配置的玩家 origin——分端口部署时这两个不一样，得都认。
+    const allowed = player
+      ? [hostOriginForPlayer()]
+      : e.data.type === 'hello'
+        ? [playerWindowOrigin()]
+        : [location.origin, playerWindowOrigin()];
+    if (e.origin && !allowed.includes(e.origin)) return;
     // Cross-origin windows never participate in host session-collision negotiation.
     // 玩家窗口回传的掷骰结果例外：那是绑定窗口自己发的，要收。
     if (!player && e.data.type !== 'hello' && e.data.type !== 'judge-roll' && e.data.type !== 'say' && e.data.type !== 'move' && e.source) return;
