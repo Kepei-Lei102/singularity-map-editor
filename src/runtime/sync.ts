@@ -26,6 +26,8 @@ export type SyncBody =
   | { type: 'judge-cancel'; id: string } // 见证者取消整个判定
   | { type: 'judge-roll'; id: string; title: string; sides: number; value: number; tens: number | null; units: number | null; material: string; seed: number; rollId: string } // 玩家掷完回传
   | { type: 'say'; text: string; targetTokenId: string | null } // 玩家窗口→见证者：玩家说了什么
+  | { type: 'move'; dx: number; dy: number } // 玩家窗口→见证者：我要往这个方向走一格
+  | { type: 'move-result'; ok: boolean; msg: string } // 见证者→玩家：这一走成没成
   | { type: 'clear' }
   | { type: 'play'; mediaId: string; label: string; mime: string; blob?: Blob }
   | { type: 'stop' }
@@ -278,7 +280,7 @@ export function send(body: SyncBody, to?: string) {
     if (p.win && !p.win.closed) try { p.win.postMessage(out, target()); } catch { /* closed */ }
   }
   // 玩家端回传判定的掷骰结果：直接回给打开它的那个主持人窗口。
-  if (body.type === 'judge-roll' || body.type === 'say') {
+  if (body.type === 'judge-roll' || body.type === 'say' || body.type === 'move') {
     if (window.opener && !window.opener.closed) { try { window.opener.postMessage(out, messageTarget(hostOriginForPlayer())); } catch { /* closed */ } }
     return;
   }
@@ -313,6 +315,36 @@ function onSay(m: Extract<SyncMsg, { type: 'say' }>, source: MessageEventSource 
   say(m.text, m.targetTokenId, { pcId: p.pcId, tokenId: pl.tokenId, mapId: t.mapId, name: pl.name });
 }
 
+/** 试玩执行一步移动。trial 和 sync 互相 import，用注册回调避开直接依赖。 */
+let trialMoveHandler: ((dx: number, dy: number) => void) | null = null;
+export function registerTrialMove(fn: (dx: number, dy: number) => void): void { trialMoveHandler = fn; }
+
+function replyMove(entry: { win: Window | null }, ok: boolean, msg: string): void {
+  try {
+    entry.win?.postMessage({ type: 'move-result', ok, msg, __ts: 'ts-map', seq: rand(), from: SESSION, inst: INST, born: BORN }, target());
+  } catch { /* closed */ }
+}
+
+/**
+ * 玩家窗口按了方向键。
+ * 身份用主持人这边的绑定反查，不信玩家自报；不是他的回合一概不认。
+ */
+function onMove(m: Extract<SyncMsg, { type: 'move' }>, source: MessageEventSource | null): void {
+  const binding = [...players.entries()].find(([, p]) => p.win === source)?.[0];
+  const entry = binding ? players.get(binding) : undefined;
+  if (!entry || !trialMoveHandler) return;
+  if (!Number.isInteger(m.dx) || !Number.isInteger(m.dy)) return;
+  if (Math.abs(m.dx) + Math.abs(m.dy) !== 1) return; // 只认一格一步
+  const t = getUI().trial;
+  if (!t) return;
+  const pl = t.players[t.current];
+  if (!pl || pl.pcId !== entry.pcId) return replyMove(entry, false, '现在不是你的回合');
+  if (pl.paused) return replyMove(entry, false, '见证者暂停了你的操作');
+  trialMoveHandler(m.dx, m.dy);
+  const msg = getUI().trial?.msg ?? '';
+  replyMove(entry, !msg, msg);
+}
+
 function onJudgeRoll(m: Extract<SyncMsg, { type: 'judge-roll' }>): void {
   const p = getUI().pendingJudgment;
   if (!p || p.id !== m.id) return;
@@ -338,7 +370,7 @@ export function listen(fn: (m: SyncMsg, source: MessageEventSource | null) => vo
     if (e.origin && e.origin !== expected) return;
     // Cross-origin windows never participate in host session-collision negotiation.
     // 玩家窗口回传的掷骰结果例外：那是绑定窗口自己发的，要收。
-    if (!player && e.data.type !== 'hello' && e.data.type !== 'judge-roll' && e.data.type !== 'say' && e.source) return;
+    if (!player && e.data.type !== 'hello' && e.data.type !== 'judge-roll' && e.data.type !== 'say' && e.data.type !== 'move' && e.source) return;
     seen.add(e.data.seq);
     if (seen.size > 500) seen.clear();
     fn(e.data, e.source);
@@ -361,7 +393,7 @@ export function listenAsEditor(onHello: () => void) {
   const off = listen((m, source) => {
     // 另一个编辑器实例在用同一个会话标识（复制了标签页）：不管消息来得多晚，都按"后打开的让"处理
     // 玩家窗口的 judge-roll 也带同一个 SESSION，但那是绑定窗口发的，不是复制出来的编辑器，得放行。
-    if (m.type !== 'hello' && m.type !== 'judge-roll' && m.type !== 'say' && m.from === SESSION && m.inst !== INST) {
+    if (m.type !== 'hello' && m.type !== 'judge-roll' && m.type !== 'say' && m.type !== 'move' && m.from === SESSION && m.inst !== INST) {
       const iAmNewer = m.born < BORN || (m.born === BORN && m.inst < INST);
       if (iAmNewer) renewSession();
       else { send({ type: 'taken' }); onHello(); saveNow(); } // 我是原来那个：叫对方换号，重推一次世界（万一玩家窗口刚才收到了对方的），并重存一次自己的槽（万一对方存进来过）
@@ -370,6 +402,7 @@ export function listenAsEditor(onHello: () => void) {
     if (m.type === 'claim' || m.type === 'taken' || m.type === 'alive') return;
     if (m.type === 'judge-roll') { onJudgeRoll(m); return; }
     if (m.type === 'say') { onSay(m, source); return; }
+    if (m.type === 'move') { onMove(m, source); return; }
     if (m.type !== 'hello' || (m.to && m.to !== SESSION)) return;
     const p = m.binding && players.get(m.binding);
     if (!p || !source || !('postMessage' in source) || p.win && source !== p.win) return;
@@ -396,7 +429,7 @@ export function listenAsPlayer(fn: (m: SyncMsg) => void) {
   let lastHeard = 0;
   const QUIET = 5000;
   const off = listen((m, source) => {
-    if (m.type !== 'world' && m.type !== 'play' && m.type !== 'stop' && m.type !== 'clear' && m.type !== 'alive' && m.type !== 'judge-request' && m.type !== 'judge-cancel') return;
+    if (m.type !== 'world' && m.type !== 'play' && m.type !== 'stop' && m.type !== 'clear' && m.type !== 'alive' && m.type !== 'judge-request' && m.type !== 'judge-cancel' && m.type !== 'move-result') return;
     if (!bound || !binding) return;
     if (m.type !== 'alive' && (!source || source !== window.opener)) return;
     if (m.from !== bound) return;

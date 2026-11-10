@@ -118,6 +118,11 @@ textarea { resize: vertical; }
 .chips { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 6px; }
 .chip { padding: 2px 8px; border-radius: 12px; font-size: 12px; background: var(--panel2); border: 1px solid var(--line); }
 .chip.on { border-color: var(--accent); color: var(--accent); }
+.chip.paused { opacity: .5; text-decoration: line-through; }
+.chip-group { display: inline-flex; align-items: center; gap: 0; }
+.chip-group > .chip { border-top-right-radius: 0; border-bottom-right-radius: 0; }
+.chip-group > .ghost { border-top-left-radius: 0; border-bottom-left-radius: 0; border-left: 0; opacity: .7; }
+.chip-group > .ghost.on { opacity: 1; color: var(--warn, #d8a24a); }
 .chip a { cursor: pointer; margin-left: 2px; }
 .badge { font-size: 11px; padding: 1px 6px; border-radius: 10px; border: 1px solid var(--line); color: var(--muted); white-space: nowrap; }
 .badge.ok { color: var(--ok); border-color: var(--ok); }

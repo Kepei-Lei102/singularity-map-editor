@@ -168,13 +168,13 @@ test('战斗通报只发给当事人，且只带结果不带骰子细节', async
   assert.match(src, /combatNotice: combatNoticeFor\(p\.pcId\)/);
 });
 
-test('玩家说的话要送到见证者那边，不被两道守卫吃掉', async () => {
+test('玩家窗口回传的消息（掷骰、说话、走一格）都送到见证者那边，不被两道守卫吃掉', async () => {
   const src = await readFile(join(root, 'src/runtime/sync.ts'), 'utf8');
   // 走 opener 直发，不走广播
-  assert.match(src, /body\.type === 'judge-roll' \|\| body\.type === 'say'[\s\S]{0,120}window\.opener/);
-  // 两道守卫都要放行
-  assert.match(src, /e\.data\.type !== 'say'/);
-  assert.match(src, /m\.type !== 'say' && m\.from === SESSION/);
+  assert.match(src, /body\.type === 'judge-roll' \|\| body\.type === 'say'[\s\S]{0,160}window\.opener/);
+  // 两道守卫都要放行这三种
+  assert.match(src, /e\.data\.type !== 'say' && e\.data\.type !== 'move'/);
+  assert.match(src, /m\.type !== 'say' && m\.type !== 'move' && m\.from === SESSION/);
   // 主持人这边要能收，并且用绑定信息认人，不信玩家自报
   const handler = src.split('function onSay')[1].split('function onJudgeRoll')[0];
   assert.match(handler, /players\.entries\(\)[\s\S]{0,80}p\.win === source/);

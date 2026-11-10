@@ -21,6 +21,8 @@ export function PlayerView() {
   const [skills, setSkills] = useState<PublicSkill[]>([]);
   const [pathway, setPathway] = useState<string | null>(null);
   const [avatar, setAvatar] = useState<string | null>(null);
+  /** 自己按方向键走格子的结果。没消息就是成了。 */
+  const [moveNote, setMoveNote] = useState<{ ok: boolean; msg: string } | null>(null);
   /** 轮到自己掷的判定。玩家不能拒掷，所以只给「掷」。 */
   const [pending, setPending] = useState<PendingJudgment | null>(null);
   const [rolled, setRolled] = useState<{ sides: number; value: number } | null>(null);
@@ -57,11 +59,27 @@ export function PlayerView() {
       } else if (m.type === 'judge-request') { setPending(m.judgment); setRolled(null); }
       else if (m.type === 'judge-cancel') { setPending(null); setRolled(null); }
       else if (m.type === 'clear') { setWorld(null); setMedia(null); setFocus(null); setCast(null); setPending(null); setRolled(null); }
+      else if (m.type === 'move-result') setMoveNote(m.ok ? null : { ok: false, msg: m.msg });
       else if (m.type === 'play') setMedia({ mediaId: m.mediaId, label: m.label, mime: m.mime, blob: m.blob });
       else if (m.type === 'stop') setMedia(null);
     });
     document.title = '奇点之后 · 玩家视角';
     return off;
+  }, []);
+
+  // 方向键走一格，发给见证者那边执行。焦点在输入框里就不抢。
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const el = e.target as HTMLElement | null;
+      if (el && (/^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName) || el.isContentEditable)) return;
+      const dir: Record<string, [number, number]> = { arrowup: [0, -1], arrowdown: [0, 1], arrowleft: [-1, 0], arrowright: [1, 0], w: [0, -1], a: [-1, 0], s: [0, 1], d: [1, 0] };
+      const d = dir[e.key.toLowerCase()];
+      if (!d) return;
+      e.preventDefault();
+      send({ type: 'move', dx: d[0], dy: d[1] });
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
   }, []);
 
   const map = world?.maps.find((m) => m.id === world.playerMapId);
@@ -94,6 +112,11 @@ export function PlayerView() {
           <button className="player-nums" onClick={() => setNums(!nums)}>{nums ? '隐藏编号' : '显示编号'}</button>
         </div>;
       })()}
+
+      {/* 走不过去的提示。几秒后自己收。 */}
+      {map && moveNote && (
+        <div className="player-notice miss" onClick={() => setMoveNote(null)}>{moveNote.msg}</div>
+      )}
 
       {/* 跟我有关的攻击：状态条上方弹一条，几秒后自己收。 */}
       {map && notice && (

@@ -22,7 +22,7 @@ function aiIntentSettings(): AdvisorSettings {
 import { MARK_LIFE, findMap, giveMapKnowledge, setVisionMode } from '../runtime/actions';
 import { HEAR_RANGE } from '../scene/perception';
 import {
-  MOVE_PER_TURN, actionsLeft, addTrialPlayer, clearTrialStatus, endTrial, setTrialStatus, statusLeft, switchTrialPlayer,
+  MOVE_PER_TURN, actionsLeft, addTrialPlayer, clearTrialStatus, endTrial, setTrialStatus, statusLeft, switchTrialPlayer, toggleTrialPause,
   tickRobots, trialRun, trialSense, trialStance,
   toggleCombat, toggleMarkMode, trialAttack, trialAttackTargets, trialRescue, trialOpportunityAttack, trialSkipOpportunity,
 } from '../runtime/trial';
@@ -71,9 +71,13 @@ export function TrialHud() {
       <div className="trial-row">
         <b>试玩中</b>
         {t.players.map((p, i) => (
-          <button key={p.tokenId} className={`small chip ${i === t.current ? 'on' : ''}`} onClick={() => switchTrialPlayer(i)}>
-            <i className="dot" style={{ background: color(p.pcId) }} /> {p.name}
-          </button>
+          <span key={p.tokenId} className="chip-group">
+            <button className={`small chip ${i === t.current ? 'on' : ''} ${p.paused ? 'paused' : ''}`} onClick={() => switchTrialPlayer(i)}>
+              <i className="dot" style={{ background: color(p.pcId) }} /> {p.name}
+            </button>
+            <button className={`small ghost ${p.paused ? 'on' : ''}`} title={p.paused ? '放开这个玩家的操作' : '暂停这个玩家的操作'}
+              onClick={() => toggleTrialPause(i)}>{p.paused ? '▶' : '⏸'}</button>
+          </span>
         ))}
         {t.players.length < 4 && <button className="small" onClick={addTrialPlayer}>＋ 再放一个</button>}
         <span className="spacer" />

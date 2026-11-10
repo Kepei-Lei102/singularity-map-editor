@@ -1,4 +1,4 @@
-import { clearTrialWindows, openPlayerWindow, selectTrialViewer } from './sync';
+import { clearTrialWindows, openPlayerWindow, registerTrialMove, selectTrialViewer } from './sync';
 import { playerObject } from '../scene/identity';
 import { effectiveLayer } from '../scene/vision';
 import { objectEnabled } from '../core/objectData.js';
@@ -148,11 +148,22 @@ export function startTrial() {
   openPlayerWindow(p.pcId, true);
 }
 
+// 玩家窗口按方向键时，sync 回调到这里执行。两边互相 import，用注册避开直接依赖。
+registerTrialMove((dx, dy) => { trialMove(dx, dy); });
+
 export function addTrialPlayer() {
   const t = tr();
   if (!t) return;
   const p = placePlayer(t.mapId);
   if (p) { setTr({ players: [...t.players, p], current: t.players.length, msg: '' }); selectTrialViewer(p.pcId); }
+}
+
+/** 暂停/放开某个玩家的操作。见证者怕一个人把全场的骰子都掷了。 */
+export function toggleTrialPause(i: number) {
+  const t = tr();
+  if (!t || !t.players[i]) return;
+  const players = t.players.map((p, j) => j === i ? { ...p, paused: !p.paused } : p);
+  setTr({ players, msg: '' });
 }
 
 export function switchTrialPlayer(i?: number) {
