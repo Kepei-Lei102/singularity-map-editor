@@ -44,7 +44,11 @@ export function declareText(ev: PhysicalEvent): string {
   if (!c) return `${who} 发起了【${ev.action.name}】`;
   const attrs = c.attrs.map((a) => `${a.attr}${DICE_TEXT[a.dice] ?? ''}`).join('＋');
   const rolled = c.scale === 'd20' ? 'D20' : 'D100';
-  const target = attrs ? `要过 ${attrs}${MERGE_TEXT[c.merge] ?? ''}，DC ${c.dc}` : `掷 ${rolled}`;
+  // dc 是可选的（攻击没有门槛）；有 DC 才写，别渲染出「DC undefined」。
+  const hasDc = typeof c.dc === 'number';
+  const target = attrs
+    ? `要过 ${attrs}${MERGE_TEXT[c.merge] ?? ''}${hasDc ? `，DC ${c.dc}` : ''}`
+    : `掷 ${rolled}`;
   return `${who} 发起了【${ev.action.name}】，${target}`;
 }
 

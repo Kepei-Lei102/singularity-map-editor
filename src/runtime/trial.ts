@@ -811,7 +811,8 @@ export function settleAttack(
     if (next !== pool.hp) deltas.push({ kind: 'hp', id: dt.pcId ?? dt.id, name: dt.name, from: pool.hp, to: next });
     if (p) { p.hp = next; p.hpMax ??= pool.max; }
     else { dt.hp = next; }
-    if (next <= 0) {
+    // 落空（伤害 0）不许进倒地分支：目标本来就是 hp0 的话，这一刀不该把状态抹掉。
+    if (r.hit && next <= 0) {
       downed = already ?? kind;
       if (downed === 'dying') {
         // 战斗模式下倒计时按回合走；自由行动没有回合，改由急救机器人挂一个到场时间。
@@ -822,7 +823,9 @@ export function settleAttack(
       // 按「状态文字真的变了」判断，而不是按 already：棋子本来带晕厥/中毒、down 也是 true 时，
       // 这一步会把 status 删掉，必须记下来（以前判 downed===already 会漏成「没变化」）。
       const newLabel = downedLabel(downed);
-      if (oldLabel !== newLabel) deltas.push({ kind: 'status', id: dt.id, name: dt.name, from: oldLabel, to: newLabel });
+      // 本来就昏厥（down=true）又挂着别的状态：这一步是「那个状态被清掉」，不是「变成昏厥」。
+      const toLabel = already === 'down' && downed === 'down' ? null : newLabel;
+      if (oldLabel !== newLabel) deltas.push({ kind: 'status', id: dt.id, name: dt.name, from: oldLabel, to: toLabel });
     } else downed = already;
     if (r.hit && !deltas.length) note = '这一下数值没有变化（目标已经在倒地状态，或没有可扣的血量）';
     record(d, note || undefined);

@@ -119,7 +119,27 @@ test('已昏厥且身上还挂着别的状态：状态被抹掉要入账', () =>
   const st = api.getWorld().events.at(-1).deltas.find((d) => d.kind === 'status');
   assert.ok(st, 'status 被 delete 了就必须有 delta');
   assert.equal(st.from, '中毒');
-  assert.equal(st.to, '昏厥');
+  // 受击前就已经是 down（昏厥），这一步实际是「中毒被清掉」，不是「变成昏厥」
+  assert.equal(st.to, null);
+});
+
+test('落空不许动状态：已昏厥且挂着中毒的目标挨空刀后状态还在', () => {
+  const { m } = fight({ targetHp: 0, targetToken: { down: true, status: { label: '中毒', roundsLeft: 3 } } });
+  assert.equal(api.trialAttack('tb', { roll: 3, roller: () => 3 }), null);
+  const ev = api.getWorld().events.at(-1);
+  assert.deepEqual(ev.deltas, [], '落空就不该有状态变化');
+  const tok = api.findMap(api.getWorld(), m.id).tokens.find((t) => t.id === 'tb');
+  assert.equal(tok.status?.label, '中毒', '落空不能把状态抹掉');
+});
+
+test('declareText：有属性但没 DC 时不渲染 undefined', () => {
+  const text = api.eventText({ id: 'x', at: 0, session: 0,
+    actor: { kind: 'pc', id: 'a', name: '甲' }, action: { name: '撬锁', source: '动作库' },
+    check: { scale: 'd20', attrs: [{ attr: '敏捷', dice: 'single', value: 6 }], merge: 'single', total: 18, success: true, tier: null },
+    deltas: [],
+  });
+  assert.doesNotMatch(text, /undefined|null/);
+  assert.match(text, /敏捷/);
 });
 
 test('落空打没有血条的目标：不该说「伤害没落地」', () => {
