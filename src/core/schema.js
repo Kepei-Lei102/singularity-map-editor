@@ -129,8 +129,16 @@ export function repairWorld(w) {
   if (w.events !== undefined) {
     if (!Array.isArray(w.events)) { delete w.events; fixed.push('事件账本不是数组，已清空'); }
     else {
+      // 丢弃面跟 checkWorld 保持同一张单子：缺字段/枚举错的条目在这里就该掉，别等到校验整份存档时才炸。
+      const KINDS = new Set(['hp', 'me', 'moved', 'status', 'points', 'object']);
       const ok = w.events.filter((e) => e && typeof e === 'object' && typeof e.id === 'string'
-        && e.actor && typeof e.actor === 'object' && e.action && typeof e.action === 'object' && Array.isArray(e.deltas));
+        && typeof e.at === 'number' && typeof e.session === 'number'
+        && e.actor && typeof e.actor === 'object' && ['pc', 'npc', 'object', 'terrain'].includes(e.actor.kind)
+        && typeof e.actor.id === 'string'
+        && e.action && typeof e.action === 'object' && typeof e.action.name === 'string'
+        && ['动作库', '技能', '临场'].includes(e.action.source)
+        && Array.isArray(e.deltas)
+        && e.deltas.every((d) => d && typeof d === 'object' && KINDS.has(d.kind) && typeof d.id === 'string' && typeof d.name === 'string'));
       if (ok.length !== w.events.length) { fixed.push(`事件账本丢了 ${w.events.length - ok.length} 条形状不对的`); w.events = ok; }
       if (w.events.length > 200) { fixed.push(`事件账本裁到最近 200 条（原 ${w.events.length} 条）`); w.events = w.events.slice(-200); }
     }
@@ -598,7 +606,9 @@ export function checkWorld(w, migrated = false) {
         const ca = `${ea}.check`;
         obj(e.check, ca); oneOf(e.check.scale, ['d20', 'd100'], `${ca}.scale`); arr(e.check.attrs, `${ca}.attrs`);
         oneOf(e.check.merge, ['single', 'any', 'all'], `${ca}.merge`);
-        num(e.check.dc, `${ca}.dc`); num(e.check.total, `${ca}.total`); bool(e.check.success, `${ca}.success`);
+        if (e.check.kind !== undefined) oneOf(e.check.kind, ['check', 'attack'], `${ca}.kind`);
+        if (e.check.band !== undefined) oneOf(e.check.band, ['miss', 'hit', 'great', 'super'], `${ca}.band`);
+        optNum(e.check.dc, `${ca}.dc`); num(e.check.total, `${ca}.total`); bool(e.check.success, `${ca}.success`);
         if (e.check.tier !== null && e.check.tier !== undefined) oneOf(e.check.tier, ['crit', 'fumble'], `${ca}.tier`);
         optStr(e.check.outcome, `${ca}.outcome`);
         if (e.check.rolledBy !== undefined) oneOf(e.check.rolledBy, ['player', 'witness', 'host'], `${ca}.rolledBy`);
@@ -608,7 +618,7 @@ export function checkWorld(w, migrated = false) {
     if (w.events.length > 200) fail('events', `事件账本最多留 200 条，现在 ${w.events.length} 条`);
   }
   arr(w.log, 'log').forEach((e, i) => {
-    obj(e, `log[${i}]`); id(e.id, `log[${i}].id`); num(e.at, `log[${i}].at`); num(e.session, `log[${i}].session`); str(e.kind, `log[${i}].kind`); str(e.text, `log[${i}].text`); optStr(e.mapId, `log[${i}].mapId`);
+    obj(e, `log[${i}]`); id(e.id, `log[${i}].id`); num(e.at, `log[${i}].at`); num(e.session, `log[${i}].session`); str(e.kind, `log[${i}].kind`); str(e.text, `log[${i}].text`); optStr(e.mapId, `log[${i}].mapId`); optStr(e.eventId, `log[${i}].eventId`);
   });
   arr(w.media, 'media').forEach((m, i) => {
     obj(m, `media[${i}]`);

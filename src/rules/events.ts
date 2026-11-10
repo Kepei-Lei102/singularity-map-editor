@@ -22,7 +22,7 @@ interface EventSink {
 export function appendEvent(d: EventSink, ev: PhysicalEvent): void {
   (d.events ??= []).push(ev);
   if (d.events.length > EVENT_CAP) d.events.splice(0, d.events.length - EVENT_CAP);
-  d.log.push({ id: `${ev.id}-log`, at: ev.at, session: ev.session, kind: 'note', text: eventText(ev) });
+  d.log.push({ id: `${ev.id}-log`, at: ev.at, session: ev.session, kind: 'note', text: eventText(ev), eventId: ev.id });
 }
 
 const DICE_TEXT: Record<string, string> = {
@@ -57,21 +57,28 @@ export function tierText(c: NonNullable<PhysicalEvent['check']>): string {
   return c.success ? '成功' : '失败';
 }
 
-function deltaText(d: Delta): string {
+/** 格坐标：整数不带小数点，带小数就写一位——别和 1/3 子格坐标混在一起看。 */
+const fmtAt = (n: number) => (Number.isInteger(n) ? String(n) : n.toFixed(1));
+
+/** 渲染一处变化；值没变就返回 null，绝不写「从 6 改为 6」。 */
+function deltaText(d: Delta): string | null {
+  const same = (a: unknown, b: unknown) => a === b;
   switch (d.kind) {
-    case 'hp': return `${d.name} 的 HP 从 ${d.from} 改为 ${d.to}`;
-    case 'me': return `${d.name} 的 ME 从 ${d.from} 改为 ${d.to}`;
-    case 'moved': return `${d.name} 从 (${d.from.x}, ${d.from.y}) 挪到 (${d.to.x}, ${d.to.y})`;
-    case 'status': return `${d.name} 的状态从 ${d.from ?? '无'} 改为 ${d.to ?? '无'}`;
-    case 'points': return `${d.name} 的移动点从 ${d.from} 改为 ${d.to}`;
-    case 'object': return `${d.name} 的 ${d.path} 从 ${d.from ?? '无'} 改为 ${d.to ?? '无'}`;
+    case 'hp': return same(d.from, d.to) ? null : `${d.name} 的 HP 从 ${d.from} 改为 ${d.to}`;
+    case 'me': return same(d.from, d.to) ? null : `${d.name} 的 ME 从 ${d.from} 改为 ${d.to}`;
+    case 'moved':
+      if (d.from.x === d.to.x && d.from.y === d.to.y) return null;
+      return `${d.name} 从格坐标 (${fmtAt(d.from.x)}, ${fmtAt(d.from.y)}) 挪到 (${fmtAt(d.to.x)}, ${fmtAt(d.to.y)})`;
+    case 'status': return same(d.from, d.to) ? null : `${d.name} 的状态从 ${d.from ?? '无'} 改为 ${d.to ?? '无'}`;
+    case 'points': return same(d.from, d.to) ? null : `${d.name} 的移动点从 ${d.from} 改为 ${d.to}`;
+    case 'object': return same(d.from, d.to) ? null : `${d.name} 的 ${d.path} 从 ${d.from ?? '无'} 改为 ${d.to ?? '无'}`;
   }
 }
 
 /** 结果那一句：「【动作】失败：B 的 HP 从 8 改为 3；A 得知 …」。 */
 export function resultText(ev: PhysicalEvent): string {
   const head = `【${ev.action.name}】${ev.check ? tierText(ev.check) : '完成'}`;
-  const parts = ev.deltas.map(deltaText);
+  const parts = ev.deltas.map(deltaText).filter((x): x is string => !!x);
   const know = ev.knowledge?.length
     ? `${ev.actor.name} 得知 ${ev.knowledge.map((k) => k.label).join('、')}`
     : '';

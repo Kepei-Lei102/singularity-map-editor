@@ -11,7 +11,7 @@ import type { Facing, GameMap, MapObject, Point, Sex, Stance, Token, World } fro
 export type { Facing, Sex, Stance } from '../core/types';
 import { objectEnabled } from '../core/objectData.js';
 import { architectureGeometry, isArchitectureObject, segmentHitsRect } from './architecture';
-import { SUB, subKey, terrainAtSubcell } from './terrain';
+import { SUB, subKey } from './terrain';
 import { cellLine, gridDist } from '../core/util';
 
 /** 视野预算。规则书：无障碍 15 格 = 1.5，＜1.56，所以第 16 格看不见。 */
@@ -172,13 +172,33 @@ export function eyePoint(v: Viewer): Point {
  * 只用于细化遮挡，不参与衰减；整格衰减仍按 cellSightCost。
  */
 export function sightSubcellBlockers(world: World, map: GameMap): Uint8Array | null {
-  if (!map.subdivisions?.length) return null;
-  const w3 = map.width * SUB, h3 = map.height * SUB;
+  const sub = map.subdivisions;
+  if (!sub?.length) return null;
+  // 以前逐个子格调 terrainAtSubcell（里面还有 subdivisions.includes 线性扫描），
+  // 100×100 全细分要 97ms，而且每次 sightToObject 都重来一遍。按主格循环就快两个数量级。
+  const w3 = map.width * SUB;
   const coef = new Map(world.terrains.map((t) => [t.id, t.visionCoef]));
-  const out = new Uint8Array(w3 * h3);
-  for (let y3 = 0; y3 < h3; y3++) for (let x3 = 0; x3 < w3; x3++) {
-    const c = coef.get(terrainAtSubcell(map, x3, y3)) ?? 0;
-    if (c >= FULL_BLOCK) out[y3 * w3 + x3] = 1;
+  const out = new Uint8Array(w3 * map.height * SUB);
+  const fine = new Set(sub);
+  const subCells = map.subCells;
+  for (let cy = 0; cy < map.height; cy++) for (let cx = 0; cx < map.width; cx++) {
+    const idx = cy * map.width + cx;
+    const base = map.cells[idx] ?? '';
+    const baseBlocked = (coef.get(base) ?? 0) >= FULL_BLOCK;
+    if (!fine.has(idx)) {
+      // 没细分的格子：要么 9 个子格全挡，要么全不挡。
+      if (!baseBlocked) continue;
+      for (let sy = 0; sy < SUB; sy++) {
+        const row = (cy * SUB + sy) * w3 + cx * SUB;
+        out.fill(1, row, row + SUB);
+      }
+      continue;
+    }
+    for (let sy = 0; sy < SUB; sy++) for (let sx = 0; sx < SUB; sx++) {
+      const k = (cy * SUB + sy) * w3 + cx * SUB + sx;
+      const t = subCells?.[k] ?? base;
+      if ((coef.get(t) ?? 0) >= FULL_BLOCK) out[k] = 1;
+    }
   }
   return out;
 }
@@ -314,7 +334,8 @@ export function visiblePoint(
   cache?: SightCache,
 ): boolean {
   const p = eyePoint(eye);
-  if (p.x < 0 || p.y < 0 || p.x > map.width || p.y > map.height || target.x < 0 || target.y < 0 || target.x > map.width || target.y > map.height) return false;
+  // 用 >= 而不是 >：越界点以前会读到下一行第一格（甚至算出 NaN），现在一律不可见。
+  if (p.x < 0 || p.y < 0 || p.x >= map.width || p.y >= map.height || target.x < 0 || target.y < 0 || target.x >= map.width || target.y >= map.height) return false;
   const x0 = Math.floor(p.x), y0 = Math.floor(p.y), x1 = Math.floor(target.x), y1 = Math.floor(target.y);
   const cost = cache ? cache.cost : cellSightCost(world, map, eyeHeight(eye));
   // 这条线只算一次：以前 canSee 算一遍、下面加墙又算一遍。

@@ -13,7 +13,7 @@ await build({
   stdin: { contents: `export * from './src/scene/sight';`, resolveDir: root },
   outfile: bundle, bundle: true, platform: 'node', format: 'cjs', logLevel: 'silent',
 });
-const { eyeHeight, coneFor, cellSightCost, canSee, inCone, visionOf, visionDetailOf, visiblePoint, VISION_BUDGET, BASE_CELL_COST, objectSightCost } = await import(bundle);
+const { eyeHeight, coneFor, cellSightCost, canSee, inCone, visionOf, visionDetailOf, visiblePoint, sightCacheFor, VISION_BUDGET, BASE_CELL_COST, objectSightCost } = await import(bundle);
 after(() => rm(temp, { recursive: true, force: true }));
 
 const world = { terrains: [
@@ -115,4 +115,25 @@ test('子格视野：衰减仍按整格，只有挡死小块按 1/3 细化', () 
   map.subCells[5 * 60 + 15] = 'wall';
   delete map.subCells[4 * 60 + 15];
   assert.equal(visiblePoint(world, map, eye, { x: 7.5, y: 1.5 }), true);
+});
+
+test('SightCache 与逐次建表逐点一致（带物件、细分格、朝向）', () => {
+  const map = mkMap(12, 9);
+  map.objects = [{ id: 'o1', name: '箱子', kind: 'object', x: 3, y: 3, w: 2, h: 1, height: 1.4, color: '', icon: '', secrets: [], states: [], state: '', tags: [] }];
+  map.subdivisions = [1 * 12 + 4, 2 * 12 + 5];
+  map.subCells = { [4 * 36 + 15]: 'wall' };
+  const eye = { x: 1, y: 1, sex: '男', facing: '东' };
+  const cache = sightCacheFor(world, map, eye);
+  for (let y = 0; y < map.height; y++) for (let x = 0; x < map.width; x++) {
+    const t = { x: x + 0.5, y: y + 0.5 };
+    assert.equal(visiblePoint(world, map, eye, t, undefined, cache), visiblePoint(world, map, eye, t), `(${x}, ${y})`);
+  }
+});
+
+test('越界点一律不可见：不再读到下一行第一格', () => {
+  const map = mkMap(6, 6);
+  const eye = { x: 5, y: 5 };
+  assert.equal(visiblePoint(world, map, eye, { x: 6, y: 5 }), false);
+  assert.equal(visiblePoint(world, map, eye, { x: 5, y: 6 }), false);
+  assert.equal(visiblePoint(world, map, eye, { x: 3, y: 6 }), false);
 });

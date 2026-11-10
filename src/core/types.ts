@@ -387,6 +387,8 @@ export interface LogEntry {
   kind: 'state' | 'reveal' | 'media' | 'step' | 'note' | 'enter';
   text: string;
   mapId?: Id;
+  /** 这条日志是从哪条物理事件渲染来的（events 只留 200 条，日志不截断，靠它对回结构） */
+  eventId?: Id;
 }
 
 export interface MediaMeta {
@@ -583,10 +585,15 @@ export interface PhysicalEvent {
   action: { id?: Id; name: string; source: '动作库' | '技能' | '临场' };
   /** 判定块。没掷骰就没有这一块 */
   check?: {
+    /** check＝属性判定（有 DC）；attack＝攻击（没有 DC，只有档位） */
+    kind?: 'check' | 'attack';
+    /** 攻击档位（attack 才有） */
+    band?: 'miss' | 'hit' | 'great' | 'super';
     scale: 'd20' | 'd100';
     attrs: { attr: string; dice: 'single' | 'advantage' | 'disadvantage'; roll?: number; used?: number; value: number }[];
     merge: 'single' | 'any' | 'all';
-    dc: number;
+    /** 属性判定才有 DC；攻击没有门槛，别拿 0 当哨兵 */
+    dc?: number;
     total: number;
     success: boolean;
     tier: 'crit' | 'fumble' | null;

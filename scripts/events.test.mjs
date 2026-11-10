@@ -113,6 +113,39 @@ test('没有血条的目标：伤害没落地这件事要进账本', () => {
   assert.match(ev.note ?? '', /没有血条/);
 });
 
+test('已昏厥且身上还挂着别的状态：状态被抹掉要入账', () => {
+  fight({ targetHp: 2, targetToken: { down: true, status: { label: '中毒', roundsLeft: 3 } } });
+  assert.equal(api.trialAttack('tb', { roll: 50, roller: () => 3 }), null);
+  const st = api.getWorld().events.at(-1).deltas.find((d) => d.kind === 'status');
+  assert.ok(st, 'status 被 delete 了就必须有 delta');
+  assert.equal(st.from, '中毒');
+  assert.equal(st.to, '昏厥');
+});
+
+test('落空打没有血条的目标：不该说「伤害没落地」', () => {
+  const { m } = fight();
+  api.update((d) => {
+    const t = api.findMap(d, m.id).tokens.find((x) => x.id === 'tb');
+    delete t.pcId; delete t.hp; delete t.hpMax;
+  });
+  assert.equal(api.trialAttack('tb', { roll: 3, roller: () => 3 }), null);
+  const ev = api.getWorld().events.at(-1);
+  assert.deepEqual(ev.deltas, []);
+  assert.equal(ev.note, undefined, '落空时本来就没伤害，别把原因归成没血条');
+  assert.equal(ev.check.outcome, '落空');
+});
+
+test('攻击事件的 check 用的是 kind/band，不再拿 dc:0 当哨兵', () => {
+  fight();
+  api.settleAttack('tb', 50, { roller: () => 3, rolledBy: 'player' });
+  const c = api.getWorld().events.at(-1).check;
+  assert.equal(c.kind, 'attack');
+  assert.equal(c.band, 'hit');
+  assert.equal(c.dc, undefined);
+  assert.equal(c.rolledBy, 'player');
+  assert.equal(c.outcome, '命中');
+});
+
 test('锐器/钝器是装备选择：结束回合不会静默回钝器', () => {
   fight();
   api.setUI({ trial: { ...api.getUI().trial, sharpAttack: { ta: true } } });
@@ -160,4 +193,15 @@ test('存档校验：真事件能过校验；events 不是数组/超 200 条要�
   assert.match(fixed.join('；'), /200/);
   assert.equal(many.events.length, 200);
   assert.equal(many.events[0].id, 'e5');
+
+  // 形状不对的条目要在 repair 阶段就被丢掉（跟 checkWorld 同一张单子）
+  const partial = JSON.parse(JSON.stringify(w));
+  partial.events = [
+    partial.events[partial.events.length - 1],
+    { id: 'broken', actor: { kind: 'pc', id: 'a', name: 'x' }, action: { name: '攻击', source: '临场' }, deltas: [] },
+  ];
+  const fixed2 = api.repairWorld(partial);
+  assert.match(fixed2.join('；'), /形状不对/);
+  assert.equal(partial.events.length, 1);
+  assert.equal(partial.events[0].id, w.events.at(-1).id);
 });

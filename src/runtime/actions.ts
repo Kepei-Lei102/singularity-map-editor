@@ -6,7 +6,7 @@ import type { Draft } from 'immer';
 import JSZip from 'jszip';
 import { getUI, getWorld, reachableWorlds, replaceWorld, setUI, toast, update, worldContext, type Selection } from '../core/store';
 import { blocksMovement, pcWithin } from '../scene/perception';
-import { viewerOf, visiblePoint } from '../scene/sight';
+import { sightCacheFor, viewerOf, visiblePoint } from '../scene/sight';
 import { subKey, terrainAtSubcell } from '../scene/terrain';
 import { materialAtCell, materialAtSubcell } from '../scene/material';
 import { objectRect } from '../scene/architecture';
@@ -382,11 +382,21 @@ export function checkEnterTriggers(mapId: string, tokenId: string, fromX: number
 export function autoReveal(mapId: string) {
   const w = getWorld(), m = findMap(w, mapId); if (!m) return;
   const effects: KnowledgeEffect[] = [];
+  // 视野表按「眼睛」建：每个队员建一次，物件 × 秘密内层复用。
+  // 以前是物件 × 队员次重建全图代价表，细分地图上一步能到秒级。
+  const eyes = new Map<string, ReturnType<typeof viewerOf>>();
+  for (const p of w.party) {
+    const t = m.tokens.find((x) => x.pcId === p.id);
+    if (t) eyes.set(p.id, viewerOf(t, { sex: p.sex, heightCm: p.heightCm }));
+  }
+  const caches = new Map<string, ReturnType<typeof sightCacheFor>>();
+  for (const [pcId, eye] of eyes) caches.set(pcId, sightCacheFor(w, m, eye));
   for (const o of m.objects) for (const s of o.secrets) {
     if (s.kind !== 'auto' || s.revealed?.scope === 'party') continue;
     const recipients = new Set<string>();
     for (const p of w.party) {
-      if (pcWithin(w, { ...m, tokens: m.tokens.filter(t => t.pcId === p.id) }, o, s.range))
+      const tm = { ...m, tokens: m.tokens.filter(t => t.pcId === p.id) };
+      if (pcWithin(w, tm, o, s.range, caches.get(p.id)))
         for (const id of visionMembers(w, p.id)) if (!s.discoveries?.[id]) recipients.add(id);
     }
     if (!recipients.size) continue;

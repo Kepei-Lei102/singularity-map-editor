@@ -2,7 +2,7 @@ import { objectEnabled } from '../core/objectData.js';
 import { architectureBlocksSight, architectureGeometry, isArchitectureObject, tokenPosition, isSubdivided } from './architecture';
 import { produce } from 'immer';
 import type { GameMap, MapObject, Token, VisionLayer, World } from '../core/types';
-import { partyVisionDetailOf, sightCacheFor, visiblePoint, viewerOf, type Viewer } from './sight';
+import { partyVisionDetailOf, sightCacheFor, visiblePoint, viewerOf, type SightCache, type Viewer } from './sight';
 import { cloneLayer, emptyVision, mergeLayers, visionKey } from './vision';
 import { cellLine, gridDist } from '../core/util';
 
@@ -36,11 +36,12 @@ export const CLEAR_BANDS = [
   { d: 15, label: '屋子那头' },
 ];
 
-function sightToObject(world: World, map: GameMap, eye: Viewer, o: MapObject) {
+function sightToObject(world: World, map: GameMap, eye: Viewer, o: MapObject, shared?: SightCache) {
   if (!objectEnabled(map, o)) return { d: Infinity, los: false };
   const p = tokenPosition(eye);
   // 代价表跟眼睛有关、挡死表跟地图有关，一次判定内不变：建一次，物件每个子格都复用。
-  const cache = sightCacheFor(world, map, eye);
+  // 调用方（autoReveal）可以传入按队员建好的表，避免物件 × 队员次重建。
+  const cache = shared ?? sightCacheFor(world, map, eye);
   let best = { d: Infinity, los: false };
   if (isArchitectureObject(o)) {
     const geometry = architectureGeometry(map, true), others = geometry.filter(r => r.objectId !== o.id && r.blocksSight);
@@ -134,12 +135,12 @@ export function nearestPc(world: World, map: GameMap, o: MapObject): Nearest | n
 }
 
 /** 有没有哪个玩家角色在 range 以内、且看得见。 */
-export function pcWithin(world: World, map: GameMap, o: MapObject, range: number) {
+export function pcWithin(world: World, map: GameMap, o: MapObject, range: number, cache?: SightCache) {
   return map.tokens.find((t) => {
     if (!t.pcId) return false;
     const pc = world.party.find((p) => p.id === t.pcId);
     const eye = viewerOf(t, { sex: pc?.sex, heightCm: pc?.heightCm });
-    const result = sightToObject(world, map, eye, o);
+    const result = sightToObject(world, map, eye, o, cache);
     return result.los && result.d <= range;
   });
 }

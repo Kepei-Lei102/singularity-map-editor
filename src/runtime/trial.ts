@@ -776,7 +776,8 @@ export function settleAttack(
       {
         target: { kind: target.pcId ? 'pc' : 'npc', id: target.pcId ?? target.id, name: target.name },
         check: {
-          scale: 'd100', attrs: [], merge: 'single', dc: 0, total: r.roll, success: r.hit,
+          // 攻击没有 DC、也没有属性对抗：用 kind/band 说清楚，别拿 dc:0 当哨兵。
+          kind: 'attack', band, scale: 'd100', attrs: [], merge: 'single', total: r.roll, success: r.hit,
           tier: band === 'super' || band === 'great' ? 'crit' : band === 'miss' ? 'fumble' : null,
           level: band === 'super' ? '特大' : null,
           // 攻击档位用攻击口径的词（落空/命中/大成功/特大成功）；别再翻成判定那套「失败」。
@@ -796,8 +797,9 @@ export function settleAttack(
     const p = dt.pcId ? d.party.find((x) => x.id === dt.pcId) : null;
     const pool = p ? hpOf(p) : tokenHP;
     if (!pool) {
-      note = `${dt.name} 没有血条（角色卡和棋子都没填 HP）；伤害没落地`;
-      record(d, note);
+      // 落空本来就没有伤害可记；只有真打中才需要说明「伤害没落地」。
+      if (r.hit) { note = `${dt.name} 没有血条（角色卡和棋子都没填 HP）；伤害没落地`; record(d, note); }
+      else record(d);
       return;
     }
     // 旧状态要先留成 from：被打到 0 的人本来可能是晕厥/中毒，不能写成「状态从 无 改为 昏厥」。
@@ -817,8 +819,10 @@ export function settleAttack(
           ? { label: downedLabel('dying'), roundsLeft: DYING_ROUNDS }
           : robotIncoming();
       } else { delete dt.status; dt.down = true; }
-      // 状态本来就一样（已经昏厥又挨钝器）不算变化。
-      if (downed !== already) deltas.push({ kind: 'status', id: dt.id, name: dt.name, from: oldLabel, to: downedLabel(downed) });
+      // 按「状态文字真的变了」判断，而不是按 already：棋子本来带晕厥/中毒、down 也是 true 时，
+      // 这一步会把 status 删掉，必须记下来（以前判 downed===already 会漏成「没变化」）。
+      const newLabel = downedLabel(downed);
+      if (oldLabel !== newLabel) deltas.push({ kind: 'status', id: dt.id, name: dt.name, from: oldLabel, to: newLabel });
     } else downed = already;
     if (r.hit && !deltas.length) note = '这一下数值没有变化（目标已经在倒地状态，或没有可扣的血量）';
     record(d, note || undefined);
