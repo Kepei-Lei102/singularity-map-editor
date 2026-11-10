@@ -96,8 +96,21 @@ export function objectSightCost(o: MapObject, eye: number): number {
   return Math.min(1, h / eye) * BASE_CELL_COST * 10;
 }
 
-/** 建筑墙／门的视野系数。作者口径：墙直接算 2，开门算 0.1（就是无障碍基线，等于不挡）。 */
+/**
+ * 建筑构件的视野系数。作者口径：
+ * - 普通墙直接算 2
+ * - 玻璃墙算 0.3（能透过，但看得没那么远）
+ * - 开门算 0.1，就是无障碍基线，等于不挡
+ */
 export const WALL_SIGHT_COST = 2;
+export const GLASS_SIGHT_COST = 0.3;
+
+/** 单个建筑构件阻挡视线花多少预算。门洞／开着的门不额外加（格子自带的 0.1 基线已经算了）。 */
+export function wallSightCostOf(r: { material?: string; blocksSight: boolean }): number {
+  if (r.material === 'glass') return GLASS_SIGHT_COST;
+  if (r.material === 'opening') return 0;
+  return r.blocksSight ? WALL_SIGHT_COST : 0;
+}
 
 /** 沿视线逐格累加，含目标格。撞到墙角（两侧都挡死）返回 Infinity。 */
 export function cellSightTotal(cost: Float32Array, width: number, x0: number, y0: number, x1: number, y1: number): number {
@@ -112,16 +125,17 @@ export function cellSightTotal(cost: Float32Array, width: number, x0: number, y0
   return sum;
 }
 
-/** 这条线穿过几道建筑墙（挡死矩形）。看着墙本身那一面不算被它挡住。 */
-export function wallCrossings(geometry: ReturnType<typeof architectureGeometry>, from: Point, to: Point): number {
-  let n = 0;
+/** 这条线穿过建筑构件要多花多少视野预算（墙 2、玻璃 0.3、门洞 0）。看着墙面本身不算被它挡。 */
+export function wallSightSum(geometry: ReturnType<typeof architectureGeometry>, from: Point, to: Point): number {
+  let sum = 0;
   for (const r of geometry) {
-    if (!r.blocksSight) continue;
+    const c = wallSightCostOf(r);
+    if (c <= 0) continue;
     const inside = to.x >= r.x && to.x <= r.x + r.w && to.y >= r.y && to.y <= r.y + r.h;
     if (inside) continue;
-    if (segmentHitsRect(from, to, r)) n++;
+    if (segmentHitsRect(from, to, r)) sum += c;
   }
-  return n;
+  return sum;
 }
 
 /** 沿视线累加（逐格系数 + 穿过的墙按 2 记）；超过预算就看不见。 */
@@ -216,7 +230,7 @@ export function visionOf(world: World, map: GameMap, viewer: Viewer): Uint8Array
     const total = cellSightTotal(cost, map.width, Math.floor(p.x), Math.floor(p.y), Math.floor(target.x), Math.floor(target.y));
     if (total > VISION_BUDGET) return false;
     // 墙按系数 2 记：穿过一道就 2 > 1.56，等于挡住；开门的话几何里没有这块，不额外加。
-    if (total + wallCrossings(geometry, p, target) * WALL_SIGHT_COST > VISION_BUDGET) return false;
+    if (total + wallSightSum(geometry, p, target) > VISION_BUDGET) return false;
     return !subcellBlockedWith(block, w3, h3, p, target);
   };
   for (let y = 0; y < map.height; y++) for (let x = 0; x < map.width; x++) {
@@ -248,7 +262,7 @@ export function visionDetailOf(world: World, map: GameMap, viewer: Viewer): { vi
       const x3 = x * SUB + sx, y3 = y * SUB + sy;
       const target = { x: (x3 + 0.5) / SUB, y: (y3 + 0.5) / SUB };
       const total = cellSightTotal(costOfMap, map.width, Math.floor(p.x), Math.floor(p.y), Math.floor(target.x), Math.floor(target.y))
-        + wallCrossings(geometry, p, target) * WALL_SIGHT_COST;
+        + wallSightSum(geometry, p, target);
       const blocked = total > VISION_BUDGET || subcellBlockedWith(block, w3, h3, p, target);
       // 主格看不见，整格的小格都不算看见；主格看得见再按 1/3 精度细判。
       sub[subKey(map, x3, y3)] = vis[idx] && !blocked ? 1 : 0;
@@ -293,7 +307,7 @@ export function visiblePoint(world: World, map: GameMap, eye: Viewer, target: Po
   if (eye.facing && !inCone(eye.facing, p.x, p.y, target.x, target.y, coneFor(map, x0, y0))) return false;
   const g = geometry ?? architectureGeometry(map);
   // 墙按系数 2 叠加：一道墙就超过 1.56 的预算，等于挡住；门开着几何里没这块。
-  if (cellSightTotal(cost, map.width, x0, y0, x1, y1) + wallCrossings(g, p, target) * WALL_SIGHT_COST > VISION_BUDGET) return false;
+  if (cellSightTotal(cost, map.width, x0, y0, x1, y1) + wallSightSum(g, p, target) > VISION_BUDGET) return false;
   if (subcellSightBlocked(world, map, p, target)) return false;
   return true;
 }
