@@ -50,6 +50,8 @@ export function declareText(ev: PhysicalEvent): string {
 
 /** 档位怎么说：特大成功和大成功分开，别混成一个词。 */
 export function tierText(c: NonNullable<PhysicalEvent['check']>): string {
+  // 攻击的档位是「落空/命中/大成功/特大成功」，跟判定档位不是一套词；有 outcome 就别再翻译 tier。
+  if (c.outcome) return c.outcome;
   if (c.tier === 'crit') return c.level === '特大' ? '特大成功' : '大成功';
   if (c.tier === 'fumble') return c.level === '特大' ? '特大失败' : '大失败';
   return c.success ? '成功' : '失败';
@@ -74,6 +76,7 @@ export function resultText(ev: PhysicalEvent): string {
     ? `${ev.actor.name} 得知 ${ev.knowledge.map((k) => k.label).join('、')}`
     : '';
   if (know) parts.push(know);
+  if (ev.note) parts.push(ev.note);
   return parts.length ? `${head}：${parts.join('；')}` : head;
 }
 

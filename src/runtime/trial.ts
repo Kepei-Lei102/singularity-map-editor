@@ -4,7 +4,7 @@ import { effectiveLayer } from '../scene/vision';
 import { objectEnabled } from '../core/objectData.js';
 import { beginSandbox, endSandbox, getUI, getWorld, setUI, toast, update, type UIState } from '../core/store';
 import { addMark, autoReveal, cancelPendingPlay, checkEnterTriggers, findMap, ioBusy } from './actions';
-import type { Delta, Facing, GameMap, JumpRequest, MapObject, PhysicalEvent, Stance, World } from '../core/types';
+import type { Delta, Facing, GameMap, JumpRequest, MapObject, Stance, World } from '../core/types';
 import { gridDist, uid } from '../core/util';
 import { blocksMovement, ROUND_MINUTES } from '../scene/perception';
 import { characterPathClear, furnitureSweepBlocked, nextTokenStep, setTokenPosition, tokenPosition } from '../scene/architecture';
@@ -18,7 +18,7 @@ import {
   type JumpCheck, type JumpRoll,
 } from '../rules/jump';
 import { openJudgment } from '../rules/judgments';
-import { appendEvent } from '../rules/events';
+import { appendEvent, newEvent } from '../rules/events';
 import { CELL_METERS, heightAt } from '../scene/height';
 import { cellFloor, hasPitBottom } from '../scene/terrain';
 import { canAffordStep, canTurn, chargeUsedThisTurn, moveBudgetOn, movePool, RUN_MODES, runMeShort, spendCharge, stepPrice, tickCharge, STAND_UP_COST, ROLL_OVER_COST, type ChargeState, type RunMode } from '../rules/move';
@@ -674,8 +674,9 @@ export function trialEndTurn() {
   })();
   // 换回合要把这一回合的账本清干净：跑了什么、拐了几次都是「本回合」的。
   // 不清的话「奔跑只准拐一次」会变成整场只准拐一次，下一回合还会白送一个跑法。
+  // 锐器/钝器是装备选择，不按回合重置——静默回钝器会把「倒地＝昏厥还是濒死」改掉，太危险。
   setTr({ moved: {}, turned: {}, turn: t.turn + 1, acted: {}, runMode: {}, runTurns: {},
-    sharpAttack: {}, opportunity: null, msg: '', charge, movePoints });
+    opportunity: null, msg: '', charge, movePoints });
 }
 
 /** 当前该谁行动（试玩里同一时间只有一个角色能动）。 */
@@ -747,11 +748,14 @@ export function trialAttack(targetTokenId: string, opts: { roll?: number; roller
     pushJudgmentRequest(ctx.pl.pcId);
     return null;
   }
-  return settleAttack(targetTokenId, opts.roll ?? 1 + Math.floor(Math.random() * 100), opts);
+  return settleAttack(targetTokenId, opts.roll ?? 1 + Math.floor(Math.random() * 100), { ...opts, rolledBy: 'host' });
 }
 
 /** 按掷出来的点数结算一次攻击。见证者点「按结果执行」，或 NPC 当场出手时走这里。 */
-export function settleAttack(targetTokenId: string, roll: number, opts: { roller?: Roller; sharp?: boolean } = {}): string | null {
+export function settleAttack(
+  targetTokenId: string, roll: number,
+  opts: { roller?: Roller; sharp?: boolean; rolledBy?: 'player' | 'witness' | 'host' } = {},
+): string | null {
   const ctx = attackContext(targetTokenId, !!opts.sharp);
   if (typeof ctx === 'string') return ctx;
   const { t, pl, target, sharp } = ctx;
@@ -764,25 +768,24 @@ export function settleAttack(targetTokenId: string, roll: number, opts: { roller
   const kind = downedBy(sharp);
   // 攻击也要进事件账本：句子是渲染出来的，不再各处自己拼一段中文。
   const deltas: Delta[] = [];
-  const record = (d: World) => {
+  const record = (d: World, extraNote?: string) => {
     const band = r.band;
-    const ev: PhysicalEvent = {
-      id: uid(), at: Date.now(), session: d.session,
-      actor: { kind: 'pc', id: pl.pcId ?? pl.tokenId, name: pl.name },
-      target: { kind: target.pcId ? 'pc' : 'npc', id: target.pcId ?? target.id, name: target.name },
-      action: { name: sharp ? '攻击（锐器）' : '攻击（钝器）', source: '临场' },
-      check: {
-        scale: 'd100',
-        attrs: [],
-        merge: 'single',
-        dc: 0,
-        total: r.roll,
-        success: r.hit,
-        tier: band === 'super' || band === 'great' ? 'crit' : band === 'miss' ? 'fumble' : null,
-        level: band === 'super' ? '特大' : null,
-      },
-      deltas,
-    };
+    const ev = newEvent(d, Date.now(),
+      { kind: 'pc', id: pl.pcId ?? pl.tokenId, name: pl.name },
+      { name: sharp ? '攻击（锐器）' : '攻击（钝器）', source: '临场' },
+      {
+        target: { kind: target.pcId ? 'pc' : 'npc', id: target.pcId ?? target.id, name: target.name },
+        check: {
+          scale: 'd100', attrs: [], merge: 'single', dc: 0, total: r.roll, success: r.hit,
+          tier: band === 'super' || band === 'great' ? 'crit' : band === 'miss' ? 'fumble' : null,
+          level: band === 'super' ? '特大' : null,
+          // 攻击档位用攻击口径的词（落空/命中/大成功/特大成功）；别再翻成判定那套「失败」。
+          outcome: ATTACK_BAND_LABEL[band],
+          rolledBy: opts.rolledBy ?? 'host',
+        },
+        deltas,
+        ...(extraNote ? { note: extraNote } : {}),
+      });
     appendEvent(d, ev);
   };
   update((d) => {
@@ -792,13 +795,20 @@ export function settleAttack(targetTokenId: string, roll: number, opts: { roller
     const tokenHP = (dt.hpMax ?? 0) > 0 ? { hp: dt.hp ?? dt.hpMax!, max: dt.hpMax! } : null;
     const p = dt.pcId ? d.party.find((x) => x.id === dt.pcId) : null;
     const pool = p ? hpOf(p) : tokenHP;
-    if (!pool) { note = `${dt.name} 没有血条（角色卡和棋子都没填 HP）；伤害记在裁定里`; record(d); return; }
+    if (!pool) {
+      note = `${dt.name} 没有血条（角色卡和棋子都没填 HP）；伤害没落地`;
+      record(d, note);
+      return;
+    }
+    // 旧状态要先留成 from：被打到 0 的人本来可能是晕厥/中毒，不能写成「状态从 无 改为 昏厥」。
+    const already = dt.status?.label === '濒死' ? 'dying' : dt.down ? 'down' : null;
+    const oldLabel = dt.status?.label ?? (dt.down ? downedLabel('down') : null);
     const next = Math.max(0, pool.hp - r.damage);
     hpBefore = pool.hp; hpAfter = next; hpMax = pool.max;
-    deltas.push({ kind: 'hp', id: dt.pcId ?? dt.id, name: dt.name, from: pool.hp, to: next });
+    // 只有真变了才记：落空（伤害 0）不写「HP 从 6 改为 6」。
+    if (next !== pool.hp) deltas.push({ kind: 'hp', id: dt.pcId ?? dt.id, name: dt.name, from: pool.hp, to: next });
     if (p) { p.hp = next; p.hpMax ??= pool.max; }
     else { dt.hp = next; }
-    const already = dt.status?.label === '濒死' ? 'dying' : dt.down ? 'down' : null;
     if (next <= 0) {
       downed = already ?? kind;
       if (downed === 'dying') {
@@ -807,9 +817,11 @@ export function settleAttack(targetTokenId: string, roll: number, opts: { roller
           ? { label: downedLabel('dying'), roundsLeft: DYING_ROUNDS }
           : robotIncoming();
       } else { delete dt.status; dt.down = true; }
-      deltas.push({ kind: 'status', id: dt.pcId ?? dt.id, name: dt.name, from: already ? downedLabel(already as Downed) : null, to: downedLabel(downed) });
+      // 状态本来就一样（已经昏厥又挨钝器）不算变化。
+      if (downed !== already) deltas.push({ kind: 'status', id: dt.id, name: dt.name, from: oldLabel, to: downedLabel(downed) });
     } else downed = already;
-    record(d);
+    if (r.hit && !deltas.length) note = '这一下数值没有变化（目标已经在倒地状态，或没有可扣的血量）';
+    record(d, note || undefined);
   });
   setTr({
     acted: { ...(t.acted ?? {}), [pl.tokenId]: true },
@@ -844,7 +856,9 @@ export function toggleCombat() {
       if (!toCombat && st.roundsLeft !== undefined) { st.endsAt = now + st.roundsLeft * ROUND_MINUTES * 60000; delete st.roundsLeft; }
     }
   });
-  setTr({ combat: toCombat, moved: {}, turned: {}, acted: {}, runMode: {}, runTurns: {}, turn: 1, msg: '' });
+  // 新开一场战斗，点池和蓄力要重算；以前这里留着上一场的 300/414，第一回合直接「点数用完」。
+  setTr({ combat: toCombat, moved: {}, turned: {}, acted: {}, runMode: {}, runTurns: {}, sharpAttack: {},
+    movePoints: {}, charge: {}, turn: 1, msg: '' });
 }
 
 /** 让当前角色暂时不能行动（晕厥、泡温泉……），时长按分钟给；战斗中自动换算成回合。 */

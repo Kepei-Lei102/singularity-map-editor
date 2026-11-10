@@ -592,6 +592,10 @@ export interface PhysicalEvent {
     tier: 'crit' | 'fumble' | null;
     /** 特大成功 / 特大失败；普通极值是 null */
     level?: '特大' | null;
+    /** 人话的档位（落空/命中/大成功/特大成功）。有它就优先用它渲染，别再自己从 tier 猜。 */
+    outcome?: string;
+    /** 骰子是谁掷的：玩家自己、见证者代掷、还是主机给 NPC 现掷 */
+    rolledBy?: 'player' | 'witness' | 'host';
     /** 优势/劣势的第二颗（谁掷的记清楚） */
     extra?: { roll: number; by: 'witness' | 'auto' };
   };
@@ -600,6 +604,8 @@ export interface PhysicalEvent {
   knowledge?: { subject: Id; label: string; tier: string }[];
   /** 见证者当场写的裁定 */
   ruling?: string;
+  /** 不是状态变化的补充说明（比如「目标没有血条，伤害没落地」）。账本里也要能读到，不能只在 UI 卡片上。 */
+  note?: string;
 }
 
 export interface World {

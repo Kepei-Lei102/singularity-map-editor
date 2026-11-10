@@ -75,7 +75,7 @@ function PendingJudgmentPanel({ context }: { context: string }) {
   const onStandInRoll = (roll: DiceTrayRecord) => {
     // 代掷不能只广播一句「判定成了」：跳跃要挪棋子、攻击要扣血，得先落地再广播。
     if (p.jump) { const e = settleJump(p.jump, [roll.value]); if (e) return setMessage(e); }
-    if (p.attack) { const e = settleAttack(p.attack.targetTokenId, roll.value, { sharp: p.attack.sharp }); if (e) return setMessage(e); }
+    if (p.attack) { const e = settleAttack(p.attack.targetTokenId, roll.value, { sharp: p.attack.sharp, rolledBy: 'witness' }); if (e) return setMessage(e); }
     const err = publishJudgment({
       title: p.title, ruling: p.ruling, recipients: world.party.map((x) => x.id),
       roll: { id: roll.id, sides: roll.sides, value: roll.value, tens: roll.tens, units: roll.units, material: roll.material, persona: 'witness', seed: roll.seed },
@@ -110,7 +110,10 @@ function PendingJudgmentPanel({ context }: { context: string }) {
           {p.attack && (
             <button onClick={() => {
               // 攻击骰由发起者掷，落效由见证者确认：扣血/倒地在这里发生，再广播。
-              const err = settleAttack(p.attack!.targetTokenId, result.value, { sharp: p.attack!.sharp });
+              // 骰子是谁掷的要记账：玩家自己掷 / 见证者代掷
+              const err = settleAttack(p.attack!.targetTokenId, result.value, {
+                sharp: p.attack!.sharp, rolledBy: result.byStandIn ? 'witness' : 'player',
+              });
               if (err) setMessage(err);
               broadcast();
             }}>按结果执行（扣血 / 倒地）</button>

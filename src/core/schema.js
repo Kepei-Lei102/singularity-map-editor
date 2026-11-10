@@ -125,6 +125,16 @@ export function repairWorld(w) {
     clampNum(n, 'returnAfterDays', 0, 36500, `NPC「${n?.name}」的回访天数`);
     for (const b of Array.isArray(n?.beats) ? n.beats : []) clampNum(b, 'afterDays', 0, 36500, `NPC「${n?.name}」近况的天数`);
   }
+  // 事件账本：不是数组就清掉，形状不对的条目丢掉，超过 200 条只留最近的。
+  if (w.events !== undefined) {
+    if (!Array.isArray(w.events)) { delete w.events; fixed.push('事件账本不是数组，已清空'); }
+    else {
+      const ok = w.events.filter((e) => e && typeof e === 'object' && typeof e.id === 'string'
+        && e.actor && typeof e.actor === 'object' && e.action && typeof e.action === 'object' && Array.isArray(e.deltas));
+      if (ok.length !== w.events.length) { fixed.push(`事件账本丢了 ${w.events.length - ok.length} 条形状不对的`); w.events = ok; }
+      if (w.events.length > 200) { fixed.push(`事件账本裁到最近 200 条（原 ${w.events.length} 条）`); w.events = w.events.slice(-200); }
+    }
+  }
   return fixed;
 }
 
@@ -566,6 +576,36 @@ export function checkWorld(w, migrated = false) {
       unique(f.edges, `${fa}.edges`);
     });
     unique(w.flows, 'flows');
+  }
+  // 事件账本：可以没有；有就得是数组、条目形状对上。上限跟 src/rules/events.ts 的 EVENT_CAP 一致。
+  if (w.events !== undefined) {
+    arr(w.events, 'events').forEach((e, i) => {
+      const ea = `events[${i}]`;
+      obj(e, ea); id(e.id, `${ea}.id`); num(e.at, `${ea}.at`); num(e.session, `${ea}.session`);
+      obj(e.actor, `${ea}.actor`); oneOf(e.actor.kind, ['pc', 'npc', 'object', 'terrain'], `${ea}.actor.kind`); id(e.actor.id, `${ea}.actor.id`); str(e.actor.name, `${ea}.actor.name`);
+      if (e.target !== undefined) {
+        obj(e.target, `${ea}.target`); oneOf(e.target.kind, ['pc', 'npc', 'object', 'terrain'], `${ea}.target.kind`);
+        id(e.target.id, `${ea}.target.id`); str(e.target.name, `${ea}.target.name`);
+      }
+      obj(e.action, `${ea}.action`); optStr(e.action.id, `${ea}.action.id`); str(e.action.name, `${ea}.action.name`);
+      oneOf(e.action.source, ['动作库', '技能', '临场'], `${ea}.action.source`);
+      arr(e.deltas, `${ea}.deltas`).forEach((d, j) => {
+        const da = `${ea}.deltas[${j}]`;
+        obj(d, da); oneOf(d.kind, ['hp', 'me', 'moved', 'status', 'points', 'object'], `${da}.kind`);
+        id(d.id, `${da}.id`); str(d.name, `${da}.name`);
+      });
+      if (e.check !== undefined) {
+        const ca = `${ea}.check`;
+        obj(e.check, ca); oneOf(e.check.scale, ['d20', 'd100'], `${ca}.scale`); arr(e.check.attrs, `${ca}.attrs`);
+        oneOf(e.check.merge, ['single', 'any', 'all'], `${ca}.merge`);
+        num(e.check.dc, `${ca}.dc`); num(e.check.total, `${ca}.total`); bool(e.check.success, `${ca}.success`);
+        if (e.check.tier !== null && e.check.tier !== undefined) oneOf(e.check.tier, ['crit', 'fumble'], `${ca}.tier`);
+        optStr(e.check.outcome, `${ca}.outcome`);
+        if (e.check.rolledBy !== undefined) oneOf(e.check.rolledBy, ['player', 'witness', 'host'], `${ca}.rolledBy`);
+      }
+      optStr(e.ruling, `${ea}.ruling`); optStr(e.note, `${ea}.note`);
+    });
+    if (w.events.length > 200) fail('events', `事件账本最多留 200 条，现在 ${w.events.length} 条`);
   }
   arr(w.log, 'log').forEach((e, i) => {
     obj(e, `log[${i}]`); id(e.id, `log[${i}].id`); num(e.at, `log[${i}].at`); num(e.session, `log[${i}].session`); str(e.kind, `log[${i}].kind`); str(e.text, `log[${i}].text`); optStr(e.mapId, `log[${i}].mapId`);
