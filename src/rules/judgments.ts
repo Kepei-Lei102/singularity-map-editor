@@ -15,7 +15,8 @@ export function publishJudgment(input: Omit<DiceJudgment, 'id' | 'at' | 'session
     if (input.place.x < 0 || input.place.y < 0 || input.place.x >= m.width || input.place.y >= m.height) return '判定位置超出地图';
   }
   const r = input.roll;
-  if (!r.id?.trim() || !['wood','plastic','metal','stone','rubber'].includes(r.material) || r.persona !== 'witness' || !Number.isSafeInteger(r.seed) || r.seed! < 0) return '骰子记录无效';
+  // persona 是「这颗骰子谁掷的」：玩家自己掷（player）和见证者代掷（witness）都是正式判定，都得能广播。
+  if (!r.id?.trim() || !['wood','plastic','metal','stone','rubber'].includes(r.material) || !['witness','player'].includes(String(r.persona)) || !Number.isSafeInteger(r.seed) || r.seed! < 0) return '骰子记录无效';
   if (![4,6,8,10,12,20,100].includes(r.sides) || !Number.isInteger(r.value) || r.value < 1 || r.value > r.sides) return '骰子结果无效';
   if (r.sides === 100 && (!Number.isInteger(r.tens) || !Number.isInteger(r.units) || r.tens! < 0 || r.tens! > 90 || r.tens! % 10 || r.units! < 0 || r.units! > 9 || (r.tens! + r.units! || 100) !== r.value)) return '百分骰结果不一致';
   if ((w.judgments ?? []).some(j => j.roll.id === r.id)) return '这次掷骰已经发布过';
