@@ -546,7 +546,8 @@ export function checkWorld(w, migrated = false) {
         const p = obj(j.place, `${at}.place`); id(p.mapId, `${at}.place.mapId`); num(p.x, `${at}.place.x`); num(p.y, `${at}.place.y`);
         const m = (w.maps ?? []).find((x) => x.id === p.mapId);
         if (!m) fail(`${at}.place.mapId`, '判定位置的地图不存在');
-        else if (p.x < 0 || p.y < 0 || p.x > m.width || p.y > m.height) fail(`${at}.place`, '判定位置超出地图');
+        // 跟 publishJudgment / visiblePoint 同一口径：x==width / y==height 已经在图外。
+        else if (p.x < 0 || p.y < 0 || p.x >= m.width || p.y >= m.height) fail(`${at}.place`, '判定位置超出地图');
       }
       const r = obj(j.roll, `${at}.roll`); id(r.id, at); oneOf(r.sides, [4,6,8,10,12,20,100], at); int(r.value, at, 1, r.sides); oneOf(r.material, ['wood','plastic','metal','stone','rubber'], at); oneOf(r.persona, ['witness','player'], at); int(r.seed, `${at}.roll.seed`, 0, Number.MAX_SAFE_INTEGER); optStr(r.algorithm, at);
       if (r.sides === 100) { int(r.tens, at, 0, 90); int(r.units, at, 0, 9); if (r.tens % 10 || (r.tens + r.units || 100) !== r.value) fail(at, '百分骰结果不一致'); }

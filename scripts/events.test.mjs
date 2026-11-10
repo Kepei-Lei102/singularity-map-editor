@@ -191,6 +191,20 @@ test('真实路径：A 攻击后切到 B，B 的行动点是满的', () => {
   assert.equal(api.actionsLeft(api.getUI().trial), 1);
 });
 
+test('存档校验：判定锚点不能落在图外（x==width 也不行，跟发布口一致）', () => {
+  const w = api.emptyWorld();
+  const m = w.maps[0];
+  const judgment = (x, y) => ({
+    id: 'j1', title: '判定', ruling: '', recipients: [], at: 1, session: 0,
+    place: { mapId: m.id, x, y },
+    roll: { id: 'r1', sides: 20, value: 10, material: 'wood', persona: 'witness', seed: 1 },
+  });
+  const withPlace = (x, y) => { const c = JSON.parse(JSON.stringify(w)); c.judgments = [judgment(x, y)]; return c; };
+  api.checkWorld(withPlace(23.5, 2));
+  assert.throws(() => api.checkWorld(withPlace(m.width, 2)), /判定位置超出地图/);
+  assert.throws(() => api.checkWorld(withPlace(2, m.height)), /判定位置超出地图/);
+});
+
 test('autoReveal 按棋子建视野表：同一角色两个棋子姿态不同，不能用第一个的眼高去判第二个', () => {
   const w = api.emptyWorld();
   const m = api.newMap('多棋子', '测试', 0, 10, 6, 'floor', false);
