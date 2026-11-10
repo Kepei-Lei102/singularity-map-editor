@@ -1,6 +1,6 @@
 import { useEffect } from 'react';
 import { useUI, useWorld } from '../core/store';
-import { clearTrialEvent, damageLanded } from '../runtime/trial';
+import { clearTrialEvent, damageLanded, damageLost } from '../runtime/trial';
 
 /** 试玩里的大事（攻击、伤害、濒死）：单独一张大卡片浮在地图上方，不跟下面那排小字挤在一起。 */
 export function TrialEventCard() {
@@ -19,7 +19,7 @@ export function TrialEventCard() {
   // 没真扣到血就别报伤害数字：打已经倒地的人、打没血条的 NPC，账本都记「没变化」。
   const landed = isHit && damageLanded(ev);
   // −N 报实际扣掉的血，不是掷出来的伤害（打在残血上，掷 3 只扣 1）；不一样就把掷出的数写小字。
-  const lost = landed && ev.hpBefore !== null && ev.hpAfter !== null ? ev.hpBefore - ev.hpAfter : 0;
+  const lost = damageLost(ev);
   // 濒死/昏厥是这一击最要紧的结果，不能跟着伤害块一起消失。
   const tags = (<>
     {ev.downed === 'dying' && <span className="dying-tag">濒死</span>}

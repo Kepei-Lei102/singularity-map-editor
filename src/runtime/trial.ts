@@ -827,6 +827,8 @@ export function settleAttack(
       const toLabel = already === 'down' && downed === 'down' ? null : newLabel;
       if (oldLabel !== newLabel) deltas.push({ kind: 'status', id: dt.id, name: dt.name, from: oldLabel, to: toLabel });
     } else downed = already;
+    // 命中但没掉血、只改了状态（打 hp0 的晕厥/中毒）：卡片不能只说「数值没有变化」。
+    if (r.hit && deltas.length && !deltas.some((x) => x.kind === 'hp')) note = '这一下没有掉血，只改了状态';
     if (r.hit && !deltas.length) note = '这一下数值没有变化（目标已经在倒地状态，或没有可扣的血量）';
     record(d, note || undefined);
   });
@@ -846,12 +848,17 @@ export function settleAttack(
   return null;
 }
 
+/** 这一击实际扣掉多少血（没掉血就是 0）；卡片用它显示 −N，别把掷出的伤害当扣血。 */
+export function damageLost(ev: { hpBefore: number | null; hpAfter: number | null }): number {
+  return ev.hpBefore !== null && ev.hpAfter !== null && ev.hpAfter < ev.hpBefore ? ev.hpBefore - ev.hpAfter : 0;
+}
+
 /**
  * 这一击真的扣到血了吗：落空、打已经 0 血的人、打没血条的 NPC，都不算。
  * 卡片/玩家窗口用它决定要不要显示「−N 伤害」——账本不记的变化，卡片也不该报。
  */
 export function damageLanded(ev: { damage: number; hpBefore: number | null; hpAfter: number | null }): boolean {
-  return ev.damage > 0 && ev.hpBefore !== null && ev.hpAfter !== null && ev.hpAfter !== ev.hpBefore;
+  return ev.damage > 0 && damageLost(ev) > 0;
 }
 
 /** 关掉大事卡片。 */

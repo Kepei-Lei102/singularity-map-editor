@@ -192,6 +192,26 @@ test('卡片口径：没真扣到血就不算「伤害落地」，别显示 −N
   assert.equal(api.damageLanded(api.getUI().trial.event), false);
 });
 
+test('damageLost 报实际扣血；命中却没掉血、只改状态时 note 要说清楚', () => {
+  assert.equal(api.damageLost({ hpBefore: 1, hpAfter: 0 }), 1);
+  assert.equal(api.damageLost({ hpBefore: 6, hpAfter: 3 }), 3);
+  assert.equal(api.damageLost({ hpBefore: 6, hpAfter: 6 }), 0);
+  assert.equal(api.damageLost({ hpBefore: null, hpAfter: null }), 0);
+
+  // 真实攻击：hp 1 挨 3 点伤害，实际只扣 1
+  fight({ targetHp: 1 });
+  api.trialAttack('tb', { roll: 50, roller: () => 3 });
+  const ev = api.getUI().trial.event;
+  assert.equal(api.damageLost(ev), 1, '卡片要写 −1，不是 −3');
+
+  // hp0 + 未倒地 + 挂晕厥：只改状态，卡片得说出「没有掉血」
+  fight({ targetHp: 0, targetToken: { status: { label: '晕厥', roundsLeft: 2 } } });
+  api.trialAttack('tb', { roll: 50, roller: () => 3 });
+  const ev2 = api.getUI().trial.event;
+  assert.equal(api.damageLanded(ev2), false);
+  assert.match(ev2.note ?? '', /只改了状态/);
+});
+
 test('锐器是「这一击的选择」：打完自动回钝器，勾了没用掉也会在结束回合时清掉', () => {
   fight();
   api.update((d) => { d.party.find((p) => p.id === 'a').sharp = true; }); // 角色卡上带着锐器
