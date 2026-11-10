@@ -191,6 +191,32 @@ test('真实路径：A 攻击后切到 B，B 的行动点是满的', () => {
   assert.equal(api.actionsLeft(api.getUI().trial), 1);
 });
 
+test('autoReveal 按棋子建视野表：同一角色两个棋子姿态不同，不能用第一个的眼高去判第二个', () => {
+  const w = api.emptyWorld();
+  const m = api.newMap('多棋子', '测试', 0, 10, 6, 'floor', false);
+  m.fog = m.fog.map(() => 1);
+  m.objects = [
+    // 矮墙：站着（眼高约 1.61）折算成本能越过，趴下（0.3）直接挡死——刚好能区分两份表
+    { ...api.newObject('object', 3, 2, 2, 1), id: 'wall', name: '矮墙', height: 1 },
+    // 线索本身不能高：物件高度 ≥ 眼高会把自己那格算成全挡，站着也看不见
+    { ...api.newObject('object', 6, 2, 1, 1), id: 'target', name: '线索', height: 0,
+      secrets: [{ id: 's', label: '线索', kind: 'auto', range: 10, check: '', tiers: { crit: '', success: '', fail: '', fumble: '' } }] },
+  ];
+  w.party = [{ id: 'a', name: '甲', color: '#fff', tags: [], sex: '男' }];
+  // 趴着的棋子排在前面：以前 cache 按 pcId 取第一个，就会拿趴姿的眼高去判站姿的棋子
+  m.tokens = [
+    // 朝向必须给：没 facing 的棋子落在默认锥形外，跟姿态无关，测不出想测的东西
+    { id: 't1', pcId: 'a', name: '甲（趴）', color: '#fff', x: 2, y: 2, stance: '趴', facing: '东' },
+    { id: 't2', pcId: 'a', name: '甲（站）', color: '#fff', x: 2, y: 2, stance: '站', facing: '东' },
+  ];
+  w.maps = [m];
+  api.replaceWorld(w);
+  api.setUI({ mode: 'run', mapId: m.id });
+  api.autoReveal(m.id);
+  const target = api.getWorld().maps[0].objects.find((o) => o.id === 'target');
+  assert.ok(target.secrets[0].discoveries?.a, '站姿棋子看得见，线索应当浮现');
+});
+
 test('存档校验：真事件能过校验；events 不是数组/超 200 条要报错，导入时裁到 200', () => {
   fight();
   api.trialAttack('tb', { roll: 50, roller: () => 3 }); // 先落一条真事件

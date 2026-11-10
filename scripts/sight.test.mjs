@@ -121,8 +121,11 @@ test('SightCache 与逐次建表逐点一致（带物件、细分格、朝向）
   const map = mkMap(12, 9);
   map.objects = [{ id: 'o1', name: '箱子', kind: 'object', x: 3, y: 3, w: 2, h: 1, height: 1.4, color: '', icon: '', secrets: [], states: [], state: '', tags: [] }];
   map.subdivisions = [1 * 12 + 4, 2 * 12 + 5];
-  map.subCells = { [4 * 36 + 15]: 'wall' };
+  // key 必须落在细分过的格子上（4*36+13 → 主格 (4,1) 的中间子格）；写错格子上等于没写。
+  map.subCells = { [4 * 36 + 13]: 'wall' };
   const eye = { x: 1, y: 1, sex: '男', facing: '东' };
+  // 绝对断言：这面墙后面的点子格挡死 → 一定看不见
+  assert.equal(visiblePoint(world, map, eye, { x: 5.5, y: 1.5 }), false, '子格挡死后面必须看不见');
   const cache = sightCacheFor(world, map, eye);
   for (let y = 0; y < map.height; y++) for (let x = 0; x < map.width; x++) {
     const t = { x: x + 0.5, y: y + 0.5 };

@@ -11,7 +11,7 @@ import { subKey, terrainAtSubcell } from '../scene/terrain';
 import { materialAtCell, materialAtSubcell } from '../scene/material';
 import { objectRect } from '../scene/architecture';
 import { applyKnowledge, type KnowledgeEffect } from '../rules/interaction';
-import type { Flow, GameMap, LogEntry, MapObject, MediaAttach, Memory, Room, RoomObjectSnapshot, Tier, World } from '../core/types';
+import type { Flow, GameMap, LogEntry, MapObject, MediaAttach, Memory, Room, RoomObjectSnapshot, Tier, Token, World } from '../core/types';
 import { newObject } from '../core/defaults';
 import { NODE_H, NODE_W } from '../rules/flow';
 export { NODE_H, NODE_W, reachable } from '../rules/flow';
@@ -382,21 +382,25 @@ export function checkEnterTriggers(mapId: string, tokenId: string, fromX: number
 export function autoReveal(mapId: string) {
   const w = getWorld(), m = findMap(w, mapId); if (!m) return;
   const effects: KnowledgeEffect[] = [];
-  // 视野表按「眼睛」建：每个队员建一次，物件 × 秘密内层复用。
-  // 以前是物件 × 队员次重建全图代价表，细分地图上一步能到秒级。
-  const eyes = new Map<string, ReturnType<typeof viewerOf>>();
-  for (const p of w.party) {
-    const t = m.tokens.find((x) => x.pcId === p.id);
-    if (t) eyes.set(p.id, viewerOf(t, { sex: p.sex, heightCm: p.heightCm }));
-  }
-  const caches = new Map<string, ReturnType<typeof sightCacheFor>>();
-  for (const [pcId, eye] of eyes) caches.set(pcId, sightCacheFor(w, m, eye));
+  // 视野表按「棋子」建（键 tokenId，不能按 pcId：同一个角色绑两个棋子、姿态不同时眼高就不同），
+  // 遇到第一条待判定的 auto 秘密才惰性建，没有 auto 秘密的图一步都不用建。
+  const cacheByToken = new Map<string, ReturnType<typeof sightCacheFor>>();
+  const cacheForToken = (t: Token) => {
+    let c = cacheByToken.get(t.id);
+    if (!c) {
+      const pc = w.party.find((x) => x.id === t.pcId);
+      c = sightCacheFor(w, m, viewerOf(t, { sex: pc?.sex, heightCm: pc?.heightCm }));
+      cacheByToken.set(t.id, c);
+    }
+    return c;
+  };
   for (const o of m.objects) for (const s of o.secrets) {
     if (s.kind !== 'auto' || s.revealed?.scope === 'party') continue;
     const recipients = new Set<string>();
-    for (const p of w.party) {
-      const tm = { ...m, tokens: m.tokens.filter(t => t.pcId === p.id) };
-      if (pcWithin(w, tm, o, s.range, caches.get(p.id)))
+    for (const p of w.party) for (const t of m.tokens) {
+      if (t.pcId !== p.id) continue;
+      // 一个棋子一次判定：传给 pcWithin 的单棋子地图 + 这个棋子自己的眼高表
+      if (pcWithin(w, { ...m, tokens: [t] }, o, s.range, cacheForToken(t)))
         for (const id of visionMembers(w, p.id)) if (!s.discoveries?.[id]) recipients.add(id);
     }
     if (!recipients.size) continue;

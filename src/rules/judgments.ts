@@ -11,7 +11,8 @@ export function publishJudgment(input: Omit<DiceJudgment, 'id' | 'at' | 'session
   if (input.place) {
     const m = w.maps.find(x => x.id === input.place!.mapId);
     if (!m) return '判定位置的地图不存在';
-    if (input.place.x < 0 || input.place.y < 0 || input.place.x > m.width || input.place.y > m.height) return '判定位置超出地图';
+    // 跟 visiblePoint 的边界口径对齐：x==width / y==height 已经在图外，不能当锚点。
+    if (input.place.x < 0 || input.place.y < 0 || input.place.x >= m.width || input.place.y >= m.height) return '判定位置超出地图';
   }
   const r = input.roll;
   if (!r.id?.trim() || !['wood','plastic','metal','stone','rubber'].includes(r.material) || r.persona !== 'witness' || !Number.isSafeInteger(r.seed) || r.seed! < 0) return '骰子记录无效';
