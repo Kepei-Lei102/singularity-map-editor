@@ -12,8 +12,9 @@ import { terrainBlocksPoint, terrainBlocksRect } from '../scene/terrain';
 import { slidingPuzzleForObject } from '../scene/sliding';
 import { viewerOf, visiblePoint } from '../scene/sight';
 import { describeSense, rollSense, senseHints, type SenseKind } from '../rules/sense';
-import { stepDrop } from '../rules/jump';
+import { gapAhead, stepDrop } from '../rules/jump';
 import { heightAt } from '../scene/height';
+import { cellFloor } from '../scene/terrain';
 import { canAffordStep, canTurn, moveBudgetOn, movePool, RUN_MODES, runMeShort, stepPrice, tickCharge, STAND_UP_COST, ROLL_OVER_COST, type ChargeState, type RunMode } from '../rules/move';
 import { ATTACK_RANGE, DYING_LABEL, DYING_ROUNDS, ENGAGE_RANGE, RESCUED_HP, ROBOT_LABEL, attackTargets, canRescue, canUseSharp, downedBy, downedLabel, hpOf, opportunityTriggers, robotArrived, robotIncoming, rollAttack, rollRescue, settleDeath, stepLimitNear, type AttackTarget, type Downed, type Roller } from '../rules/combat';
 
@@ -253,6 +254,16 @@ export function trialMove(dx: number, dy: number) {
   const landing = { x: Math.floor(step.b.x), y: Math.floor(step.b.y) };
   const occupied = t.combat && m2.tokens.find((k) => k.id !== tok.id && Math.floor(tokenPosition(k).x) === landing.x && Math.floor(tokenPosition(k).y) === landing.y);
   if (occupied) return setTr({ msg: `${occupied.name} 在这里，不能停在同一个格子上` });
+  // 前面是坑？走路撞上去就给跳的提示；是墙就还是「挡住了」。
+  // 技能还没接进来，先按「什么都不会」算。
+  const from = { x: Math.floor(step.a.x), y: Math.floor(step.a.y) };
+  const ahead = gapAhead((x, y) => cellFloor(now, m2, x, y), from, dx, dy);
+  if (ahead.kind === 'gap') {
+    const need = ahead.check ? `要跳 ${ahead.distance} 格，${ahead.check.why}：过【${ahead.check.attr}】` : '';
+    return setTr({ msg: ahead.landing
+      ? `前面是坑（隔 ${ahead.distance - 1} 格）。${need}`
+      : ahead.reason });
+  }
   if (!characterPathClear(now, m2, step.a, step.b, tok.id)) return setTr({ msg: '人物或墙体挡住了路径' });
   // 落差：上一步台阶能走（双倍点数），再高就得上攀跳/攀爬；往下就是跳，会摔。
   const drop = stepDrop(heightAt(m2, Math.floor(step.a.x), Math.floor(step.a.y)), heightAt(m2, landing.x, landing.y));

@@ -350,3 +350,96 @@ export function describeStepDrop(d: StepDrop): string {
     : `下 ${d.height} 格，摔伤 ${INJURY_LABEL[d.injury]} 1D${INJURY_DICE[d.injury]}`;
   return d.reason;
 }
+
+// ---------- 掉进坑里 ----------
+
+/**
+ * 坑的深度：脚下的高度减去坑底的高度。
+ *
+ * 作者口径：
+ * - 同层的坑：深度就是高度差
+ * - 坑底是空的（楼间空隙）：掉一层，按挑高 8 格算
+ */
+export const FALL_TO_NEXT_FLOOR = 8;
+
+export type PitFall = {
+  /** 掉多少格。 */
+  cells: number;
+  /** 是不是掉到了下一层。 */
+  nextFloor: boolean;
+  /** 摔伤档。 */
+  injury: InjuryTier;
+};
+
+/**
+ * 算掉进坑里摔多少。
+ * @param fromHeight 脚下那一格的高度
+ * @param bottomHeight 坑底的高度；null 表示坑底是空的，掉到下一层
+ */
+export function pitFall(fromHeight: number, bottomHeight: number | null): PitFall {
+  if (bottomHeight === null) {
+    return { cells: FALL_TO_NEXT_FLOOR, nextFloor: true, injury: injuryTier(FALL_TO_NEXT_FLOOR) };
+  }
+  const cells = Math.max(0, fromHeight - bottomHeight);
+  return { cells, nextFloor: false, injury: injuryTier(cells) };
+}
+
+/** 掉进坑里，掷一次伤害。 */
+export function rollPitFall(fall: PitFall, roll?: () => number): number {
+  return rollInjury(fall.injury, roll);
+}
+
+/** 给人看的一句话。 */
+export function describePitFall(fall: PitFall, dmg: number): string {
+  const m = (fall.cells * CELL_M).toFixed(2);
+  const where = fall.nextFloor ? `掉到下一层（挑高 ${fall.cells} 格，${m} 米）` : `掉进 ${fall.cells} 格的坑（${m} 米）`;
+  return `${where}：${INJURY_LABEL[fall.injury]} 1D${INJURY_DICE[fall.injury]}，扣 ${dmg} HP`;
+}
+
+// ---------- 走路撞到坑 ----------
+
+export type GapAhead =
+  /** 前面能站，正常走。 */
+  | { kind: 'clear' }
+  /** 前面是堵，跳不过去。 */
+  | { kind: 'blocked'; by: 'wall' }
+  /** 前面是坑。 */
+  | {
+      kind: 'gap';
+      /** 要跳几格（中间隔几格 + 1）。 */
+      distance: number;
+      /** 要掷的检定；null = 不用掷。 */
+      check: JumpCheck | null;
+      /** 落点能不能站；不能就是跳不过去。 */
+      landing: boolean;
+      skills: JumpSkills;
+      reason: string;
+    };
+
+/**
+ * 往 (dx, dy) 方向走一格时，前面到底是什么。
+ *
+ * @param floor 问「这一格能不能站」：'open' 能站 / 'wall' 跳不过去 / 'gap' 是坑
+ * @param heightOf 问某格的高度，用来算落点落差
+ */
+export function gapAhead(
+  floor: (x: number, y: number) => 'open' | 'wall' | 'gap',
+  from: { x: number; y: number }, dx: number, dy: number,
+  skills: JumpSkills = NO_JUMP_SKILLS,
+): GapAhead {
+  const first = floor(from.x + dx, from.y + dy);
+  if (first === 'open') return { kind: 'clear' };
+  if (first === 'wall') return { kind: 'blocked', by: 'wall' };
+
+  // 一格是坑：往后数，找到第一个能站的地方
+  for (let n = 2; n <= 4; n++) {
+    const f = floor(from.x + dx * n, from.y + dy * n);
+    if (f === 'gap') continue; // 连着好几格坑，继续往后看
+    if (f === 'wall') return { kind: 'gap', distance: n, check: null, landing: false, skills,
+      reason: `前面连着 ${n - 1} 格坑，后面是墙，跳不过去` };
+    // 找到能站的地方了
+    const plan = planJump('across', n, skills);
+    return { kind: 'gap', distance: n, check: plan.check, landing: plan.allowed, skills, reason: plan.reason };
+  }
+  return { kind: 'gap', distance: 5, check: null, landing: false, skills, reason: '前面坑太多，跳不过去' };
+}

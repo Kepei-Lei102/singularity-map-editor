@@ -3,12 +3,14 @@ import { uid } from './util';
 
 export const DEFAULT_TERRAINS: Terrain[] = [
   { id: 'floor', name: '地板', color: '#d9cbb0', blocksMove: false, visionCoef: 0.1 },
-  { id: 'wall', name: '墙', color: '#4a4036', blocksMove: true, visionCoef: 99 },
-  { id: 'window', name: '窗', color: '#9cc9e0', blocksMove: true, visionCoef: 0.5 },
+  // 墙和窗：挡住，也跳不过去。
+  { id: 'wall', name: '墙', color: '#4a4036', blocksMove: true, visionCoef: 99, crossable: false },
+  { id: 'window', name: '窗', color: '#9cc9e0', blocksMove: true, visionCoef: 0.5, crossable: false },
   { id: 'grass', name: '草丛', color: '#7fa65a', blocksMove: false, visionCoef: 2 },
   { id: 'rug', name: '地毯', color: '#a8505a', blocksMove: false, visionCoef: 0.1 },
   { id: 'water', name: '水', color: '#5a8fc0', blocksMove: false, visionCoef: 0.1 },
-  { id: 'hole', name: '洞', color: '#1a1420', blocksMove: false, visionCoef: 0.1 },
+  // 洞/坑：脚下没地方站，但能跳过去。作者：天井那种交给分层，这里只管同层的空缺。
+  { id: 'hole', name: '洞', color: '#1a1420', blocksMove: true, visionCoef: 0.1, crossable: true },
 ];
 
 export const DEFAULT_MATERIALS: Material[] = [

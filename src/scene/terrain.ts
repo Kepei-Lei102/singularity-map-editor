@@ -78,3 +78,34 @@ export function terrainVisionCoef(world: Pick<World, 'terrains'>, m: GameMap, x:
   const id = m.cells[y * m.width + x] ?? '';
   return terrainMap(world).get(id)?.visionCoef ?? 0;
 }
+
+/**
+ * 这一格的地形对走路是什么性质。
+ * - open：能站
+ * - wall：挡住，也跳不过去
+ * - gap：挡住，但能跳过去（坑 / 楼间空隙）
+ */
+export type CellFloor = 'open' | 'wall' | 'gap';
+
+export function cellFloor(world: Pick<World, 'terrains'>, m: GameMap, x: number, y: number): CellFloor {
+  if (x < 0 || y < 0 || x >= m.width || y >= m.height) return 'wall';
+  const terrains = terrainMap(world);
+  const idx = y * m.width + x;
+  if (!m.subdivisions?.includes(idx)) {
+    const t = terrains.get(m.cells[idx] ?? '');
+    // 没登记的地形按旧规则当不可通行，也当墙（跳不过去）。
+    if (!t) return 'wall';
+    if (!t.blocksMove) return 'open';
+    return t.crossable === false ? 'wall' : 'gap';
+  }
+  // 细分过的格子：三个子格有任何一个不能站，就按整格算。
+  let sawGap = false;
+  for (let sy = 0; sy < SUB; sy++) for (let sx = 0; sx < SUB; sx++) {
+    const t = terrains.get(terrainAtSubcell(m, x * SUB + sx, y * SUB + sy));
+    if (!t) return 'wall';
+    if (!t.blocksMove) continue;
+    if (t.crossable === false) return 'wall';
+    sawGap = true;
+  }
+  return sawGap ? 'gap' : 'open';
+}

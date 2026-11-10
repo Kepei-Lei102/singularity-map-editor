@@ -7,6 +7,13 @@ export interface Terrain {
   color: string;
   blocksMove: boolean;
   visionCoef: number;
+  /**
+   * 能不能跨过去。只有 blocksMove 为 true 才有意义。
+   * 不填 = true（默认能跨）。
+   * - 墙：false，跳也跳不过去
+   * - 坑：true，挡路但能跳过去
+   */
+  crossable?: boolean;
 }
 
 /** 独立材质层。地形决定通行/视线，材质只决定表面（颜色，贴图/脚步声/摩擦先留字段）。 */

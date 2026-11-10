@@ -328,3 +328,85 @@ test('落差从高往低算，负数看不懂就按绝对值', () => {
   assert.equal(api.stepDrop(3, 4).kind, 'stepUp');
   assert.equal(api.stepDrop(4, 3).kind, 'stepDown');
 });
+
+// ---------- 掉进坑里 ----------
+
+test('同层的坑：深度就是高度差', () => {
+  const f = api.pitFall(3, 0);
+  assert.equal(f.cells, 3);
+  assert.equal(f.nextFloor, false);
+  assert.equal(f.injury, 'medium', '3 格是中伤档');
+});
+
+test('坑底是空的：掉一层，按挑高 8 格算', () => {
+  const f = api.pitFall(5, null);
+  assert.equal(f.cells, 8, '一层挑高 8 格');
+  assert.equal(f.nextFloor, true);
+  assert.equal(f.injury, 'heavy', '8 格落在重伤档');
+  assert.match(api.describePitFall(f, 7), /1D12/);
+});
+
+test('坑底比脚下高：算 0 格', () => {
+  const f = api.pitFall(0, 3);
+  assert.equal(f.cells, 0);
+  assert.equal(f.injury, 'light');
+});
+
+test('掉进坑里的伤害在骰子范围内', () => {
+  const f = api.pitFall(8, null); // 1D12
+  for (let i = 0; i < 50; i++) {
+    const d = api.rollPitFall(f);
+    assert.ok(d >= 1 && d <= 12, `掷出 ${d} 越界`);
+  }
+});
+
+// ---------- 走路撞到坑 ----------
+
+const floorOf = (gapAt) => (x, y) => gapAt.includes(`${x},${y}`) ? 'gap' : 'open';
+
+test('前面能站：正常走', () => {
+  const a = api.gapAhead(floorOf([]), { x: 0, y: 0 }, 1, 0);
+  assert.equal(a.kind, 'clear');
+});
+
+test('前面是坑，隔 1 格能站：要跳 2 格', () => {
+  const a = api.gapAhead(floorOf(['1,0']), { x: 0, y: 0 }, 1, 0);
+  assert.equal(a.kind, 'gap');
+  assert.equal(a.distance, 2, '隔 1 格 + 1 = 跳 2 格');
+  assert.equal(a.landing, true);
+  assert.equal(a.check.attr, '敏捷', '2 格是敏捷');
+});
+
+test('隔 2 格：要跳 3 格，没【跳远】跳不了', () => {
+  const a = api.gapAhead(floorOf(['1,0', '2,0']), { x: 0, y: 0 }, 1, 0);
+  assert.equal(a.kind, 'gap');
+  assert.equal(a.distance, 3);
+  assert.equal(a.landing, false, '没技能跳不了 3 格');
+  assert.match(a.reason, /跳远/);
+});
+
+test('有【跳远】就能跳 3 格', () => {
+  const a = api.gapAhead(floorOf(['1,0', '2,0']), { x: 0, y: 0 }, 1, 0, BOTH);
+  assert.equal(a.landing, true);
+  assert.equal(a.check.attr, '力量');
+});
+
+test('后面是墙：跳不过去', () => {
+  const a = api.gapAhead((x, y) => y === 0 && x === 1 ? 'gap' : y === 0 && x === 2 ? 'wall' : 'open',
+    { x: 0, y: 0 }, 1, 0);
+  assert.equal(a.kind, 'gap');
+  assert.equal(a.landing, false);
+  assert.match(a.reason, /墙/);
+});
+
+test('前面直接是墙：不是坑', () => {
+  const a = api.gapAhead((x, y) => x === 1 && y === 0 ? 'wall' : 'open', { x: 0, y: 0 }, 1, 0);
+  assert.equal(a.kind, 'blocked');
+});
+
+test('坑太多（超过 3 格）就跳不过去', () => {
+  const many = ['1,0', '2,0', '3,0', '4,0'];
+  const a = api.gapAhead(floorOf(many), { x: 0, y: 0 }, 1, 0);
+  assert.equal(a.kind, 'gap');
+  assert.equal(a.landing, false);
+});
