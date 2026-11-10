@@ -511,6 +511,8 @@ export interface PendingJudgment {
   standIn?: boolean;
   /** 这一发判定是为一次跳跃开的：掷完要按结果真的挪棋子/扣血。 */
   jump?: JumpRequest | null;
+  /** 这一发判定是为一次攻击开的：掷完按攻击口径结算知会。 */
+  attack?: { attackerTokenId: string; targetTokenId: string; sharp?: boolean } | null;
 }
 
 /**

@@ -294,6 +294,12 @@ export function send(body: SyncBody, to?: string) {
 }
 
 /** 开出判定后，直接把「轮到你了」推到对应玩家的窗口。 */
+/** 这个角色有没有开着的玩家窗口：有就让他自己掷，没有就见证者代掷。 */
+export function playerWindowFor(pcId: string): boolean {
+  for (const e of players.values()) if (e.pcId === pcId && e.win && !e.win.closed) return true;
+  return false;
+}
+
 export function pushJudgmentRequest(pcId: string): void {
   const p = pendingFor(pcId);
   if (!p) return;

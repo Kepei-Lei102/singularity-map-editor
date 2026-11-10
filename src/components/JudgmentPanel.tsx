@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { getUI, getWorld, setUI, useUI, useWorld, worldContext } from '../core/store';
 import { cancelJudgment, openJudgment, publishJudgment, standInForJudgment } from '../rules/judgments';
 import { pushJudgmentRequest } from '../runtime/sync';
-import { settleJump } from '../runtime/trial';
+import { settleAttack, settleJump } from '../runtime/trial';
 import { tokenPosition } from '../scene/architecture';
 import type { Id } from '../core/types';
 import { DiceTray, type DiceSides, type DiceTrayRecord } from './DiceTray';
@@ -57,7 +57,7 @@ function PendingJudgmentPanel({ context }: { context: string }) {
       roll: {
         id: result.rollId, sides: result.sides as never, value: result.value,
         tens: result.tens, units: result.units, material: result.material as never,
-        persona: 'witness', seed: result.seed,
+        persona: result.byStandIn ? 'witness' : 'player', seed: result.seed,
       },
       subjectId: p.subjectId, place: p.place ?? null,
     }, context);
@@ -73,6 +73,9 @@ function PendingJudgmentPanel({ context }: { context: string }) {
   /** 结算要两颗一起交给引擎；只给一颗，引擎会把它当单掷，优劣势就丢了。 */
   const diceValues = result ? (result.values?.length ? result.values : [result.value]) : [];
   const onStandInRoll = (roll: DiceTrayRecord) => {
+    // 代掷不能只广播一句「判定成了」：跳跃要挪棋子、攻击要扣血，得先落地再广播。
+    if (p.jump) { const e = settleJump(p.jump, [roll.value]); if (e) return setMessage(e); }
+    if (p.attack) { const e = settleAttack(p.attack.targetTokenId, roll.value, { sharp: p.attack.sharp }); if (e) return setMessage(e); }
     const err = publishJudgment({
       title: p.title, ruling: p.ruling, recipients: world.party.map((x) => x.id),
       roll: { id: roll.id, sides: roll.sides, value: roll.value, tens: roll.tens, units: roll.units, material: roll.material, persona: 'witness', seed: roll.seed },
@@ -103,6 +106,14 @@ function PendingJudgmentPanel({ context }: { context: string }) {
               if (err) setMessage(err);
               broadcast();
             }}>按结果执行（挪棋子 / 扣血）</button>
+          )}
+          {p.attack && (
+            <button onClick={() => {
+              // 攻击骰由发起者掷，落效由见证者确认：扣血/倒地在这里发生，再广播。
+              const err = settleAttack(p.attack!.targetTokenId, result.value, { sharp: p.attack!.sharp });
+              if (err) setMessage(err);
+              broadcast();
+            }}>按结果执行（扣血 / 倒地）</button>
           )}
           <button onClick={broadcast}>确认并广播给全队</button>
         </div>

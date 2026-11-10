@@ -1,4 +1,4 @@
-import { clearTrialWindows, openPlayerWindow, pushJudgmentRequest, registerTrialMove, selectTrialViewer } from './sync';
+import { clearTrialWindows, openPlayerWindow, playerWindowFor, pushJudgmentRequest, registerTrialMove, selectTrialViewer } from './sync';
 import { playerObject } from '../scene/identity';
 import { effectiveLayer } from '../scene/vision';
 import { objectEnabled } from '../core/objectData.js';
@@ -682,8 +682,11 @@ export const actionsLeft = (t: Trial | null | undefined): number => {
   return t.acted ? 0 : 1;
 };
 
-/** 攻击当前目标：D100，只有大失败才落空，00 = 特大成功伤害 ×4；伤害默认 1D8。 */
-export function trialAttack(targetTokenId: string, opts: { roll?: number; roller?: Roller; sharp?: boolean } = {}): string | null {
+/**
+ * 攻击的前置：校验 + 取攻击者/目标。返回错误字符串，或者一份可以直接用的上下文。
+ * 校验只写这一份——发起（开判定）和结算（真扣血）都走它，免得两边口径漂。
+ */
+function attackContext(targetTokenId: string, sharp: boolean) {
   const t = tr();
   const pl = t?.players[t.current];
   if (!t || !pl) return '没有正在试玩的角色';
@@ -705,12 +708,37 @@ export function trialAttack(targetTokenId: string, opts: { roll?: number; roller
   if (dist > ATTACK_RANGE) return `超出攻击距离（${dist} 格 > ${ATTACK_RANGE}）`;
   const pc = w.party.find((p) => p.id === pl.pcId);
   // 钝器默认；锐器要攻击者身上带着才行，不带的人勾不了。
-  const sharp = !!opts.sharp;
   if (sharp && !canUseSharp(pc)) return `${pl.name} 身上没有锐器，只能用钝器`;
   const eye = viewerOf(attacker, { sex: pc?.sex, heightCm: pc?.heightCm });
   if (!visiblePoint(w, m, eye, tokenPosition(target))) return '看不见目标，不能攻击';
-  // 骰点默认现掷；测试可以注入 roll（D100 点数）和 roller（伤害骰）。
-  const roll = opts.roll ?? 1 + Math.floor(Math.random() * 100);
+  return { t, pl, w, m, attacker, target, pc, sharp };
+}
+
+/**
+ * 发起攻击。骰子归发起者：玩家发起 → 开一笔判定，骰子进他的窗口；NPC/见证者 → 这边现掷。
+ * 攻击走 D100 攻击口径（000 特大 / 1–5 落空 / 95–99 大成功 / 其余命中），伤害默认 1D8。
+ */
+export function trialAttack(targetTokenId: string, opts: { roll?: number; roller?: Roller; sharp?: boolean } = {}): string | null {
+  const ctx = attackContext(targetTokenId, !!opts.sharp);
+  if (typeof ctx === 'string') return ctx;
+  if (opts.roll === undefined && ctx.pl.pcId && playerWindowFor(ctx.pl.pcId)) {
+    const err = openJudgment({
+      title: `攻击 ${ctx.target.name}`, ruling: '', sides: 100, subjectId: ctx.pl.pcId, place: null,
+      attack: { attackerTokenId: ctx.pl.tokenId, targetTokenId, sharp: ctx.sharp },
+    });
+    if (err) return err;
+    pushJudgmentRequest(ctx.pl.pcId);
+    return null;
+  }
+  return settleAttack(targetTokenId, opts.roll ?? 1 + Math.floor(Math.random() * 100), opts);
+}
+
+/** 按掷出来的点数结算一次攻击。见证者点「按结果执行」，或 NPC 当场出手时走这里。 */
+export function settleAttack(targetTokenId: string, roll: number, opts: { roller?: Roller; sharp?: boolean } = {}): string | null {
+  const ctx = attackContext(targetTokenId, !!opts.sharp);
+  if (typeof ctx === 'string') return ctx;
+  const { t, pl, target, sharp } = ctx;
+
   const r = rollAttack(roll, 8, opts.roller);
   // 伤害这种大事单独给一张卡片（event），底部小字只留一句不起眼的补充。
   let hpBefore: number | null = null, hpAfter: number | null = null, hpMax: number | null = null;

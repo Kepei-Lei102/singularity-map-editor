@@ -128,7 +128,7 @@ export function TrialHud() {
               {targets.map((x) => (
                 <button key={x.tokenId} className="small" disabled={!actionsLeft(t)}
                   title={`${x.distance} 格${x.hp === null ? '' : ` · HP ${x.hp}`}；${bluntMode ? '钝器：打倒成昏厥' : '锐器：打倒成濒死'}`}
-                  onClick={() => { if (confirm(`用${bluntMode ? '钝器' : '锐器'}攻击 ${x.name}？（D100，只有大失败才落空；${bluntMode ? '打到 0 是昏厥' : '打到 0 是濒死'}）`)) trialAttack(x.tokenId, { sharp: !bluntMode }); }}>
+                  onClick={() => { if (confirm(`用${bluntMode ? '钝器' : '锐器'}攻击 ${x.name}？（D100 攻击口径：000 特大 / 1–5 落空 / 95–99 大成功 / 其余命中，${bluntMode ? '打到 0 是昏厥' : '打到 0 是濒死'}；若这个角色开着玩家窗口，骰子会在他的窗口里掷）`)) trialAttack(x.tokenId, { sharp: !bluntMode }); }}>
                   {label(x)}
                 </button>
               ))}
