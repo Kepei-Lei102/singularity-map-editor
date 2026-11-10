@@ -28,7 +28,7 @@ export function TrialEventCard() {
       </div>
       <div className="trial-event-dice">
         <span className={isHit ? 'dice-hit' : 'dice-miss'}>D100 = {ev.roll === 100 ? '00' : ev.roll}</span>
-        {ev.crit && <span className="dice-crit">特大成功 ×4</span>}
+        {(ev.dice ?? 1) > 1 && <span className="dice-crit">{(ev.dice ?? 1) === 4 ? '特大成功 ×4' : '大成功 ×2'}</span>}
         {!isHit && <span className="dice-miss-tag">大失败 · 落空</span>}
       </div>
       {isHit ? (

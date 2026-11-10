@@ -24,12 +24,13 @@
 // 高度恐惧：往下看和跳上去都算（作者说两样都有）。四档见 height.ts。
 import type { PC } from '../core/types';
 import { fearTier, fearRollMode, type FearTier } from '../scene/height';
+import { attrValue, DEFAULT_DC, resolveCheck, type AttributeCheck, type Scale } from './interaction';
 
 /** 一格多少米。跟 height.ts 保持一致。 */
 const CELL_M = 0.75;
 
-/** 默认骰：1..100，100 表示 00。 */
-const rollD100 = (): number => { const v = Math.floor(Math.random() * 100); return v === 0 ? 100 : v; };
+/** 默认骰：D20 区掷 1..20，D100 区掷 1..100（100 表示 00）。 */
+const rollDie = (sides: number): number => 1 + Math.floor(Math.random() * sides);
 
 // ---------- 检定 ----------
 
@@ -42,61 +43,54 @@ export interface JumpCheck {
   mode: 'single' | 'advantage' | 'disadvantage';
   /** 给人看的理由，比如「往下 5 格，劣势敏捷」。 */
   why: string;
+  /**
+   * 检定尺。属性判定分两区：D20 区（小属性，区值 = 属性 ÷ 5，掷 D20 对 DC 20）
+   * 和 D100 区（掷 D100 对 DC 100）。物理这条线走 D20 区，不写就是 D20。
+   * 等做恐怖／心理那条线再切 D100 区。
+   */
+  scale?: Scale;
 }
 
-/** 区值：属性 ÷ 5 向下取整。 */
-export function zoneOf(attributes: Record<string, number> | undefined, attr: string): number {
+/** 区值：D20 区是属性 ÷ 5 向下取整，D100 区就是属性本身。 */
+export function zoneOf(attributes: Record<string, number> | undefined, attr: string, scale: Scale = 'd20'): number {
   const v = attributes?.[attr];
-  if (typeof v !== 'number' || !Number.isFinite(v)) return 0;
-  return Math.floor(v / 5);
+  return attrValue(typeof v === 'number' && Number.isFinite(v) ? v : 0, scale);
 }
 
-export interface JumpRoll {
-  attr: JumpAttr;
-  /** 掷出来的点数（优势/劣势各两个）。 */
-  rolls: number[];
-  /** 实际采信的那个点数。文案和特大成功都按它判，不是按 rolls 里有没有 100。 */
-  used: number;
-  /** 门槛（区值 × 10）。 */
-  target: number;
-  success: boolean;
-  mode: 'single' | 'advantage' | 'disadvantage';
+/** 这个检定掷几面的骰、对多少 DC。 */
+export function jumpScale(check: JumpCheck): { sides: number; dc: number; scale: Scale } {
+  const scale = check.scale ?? 'd20';
+  return { scale, sides: scale === 'd20' ? 20 : 100, dc: DEFAULT_DC[scale] };
 }
 
-export function rollJumpCheck(pc: PC, check: JumpCheck, roll?: () => number): JumpRoll {
-  const r = roll ?? rollD100;
-  const a = r();
-  // 单掷只抽一颗：多抽的随机数会打乱可复现的骰子序列。
-  const b = check.mode === 'single' ? a : r();
-  const rolls = check.mode === 'single' ? [a] : [a, b];
-  const target = zoneOf(pc.attributes, check.attr) * 10;
-  // D100 是「掷得越小越好」（掷 ≤ 门槛算过）。
-  // 所以优势取小的那个（更有利），劣势取大的那个（更不利）。
-  const best = Math.min(...rolls);
-  const worst = Math.max(...rolls);
-  const used = check.mode === 'advantage' ? best : check.mode === 'disadvantage' ? worst : a;
-  // 100（= 00）算特大成功，直接过。
-  const success = used === 100 || (target > 0 && used <= target);
-  return { attr: check.attr, rolls, used, target, success, mode: check.mode };
-}
+/** 跳跃的判定结果：就是统一的判定结果换了个属性名。 */
+export interface JumpRoll extends Omit<AttributeCheck, 'attr'> { attr: JumpAttr }
 
 /**
- * 玩家在窗口里已经掷完了，把那个点数直接变成 JumpRoll。
- * 优势/劣势的两颗骰在掷的时候就定了，这里只判采信哪颗。
+ * 跳跃判定。这套只负责「过哪项属性、优势还是劣势」，
+ * 真正的判定口径在 interaction.resolveCheck()，全项目只有那一处。
  */
 export function judgeValue(check: JumpCheck, pc: PC, values: number[]): JumpRoll {
-  const rolls = values.length ? values.map((v) => Math.max(1, Math.min(100, Math.round(v)))) : [1];
-  const target = zoneOf(pc.attributes, check.attr) * 10;
-  const used = check.mode === 'advantage' ? Math.min(...rolls) : check.mode === 'disadvantage' ? Math.max(...rolls) : rolls[0];
-  return { attr: check.attr, rolls, used, target, success: used === 100 || (target > 0 && used <= target), mode: check.mode };
+  const { scale, dc } = jumpScale(check);
+  const c = resolveCheck({
+    attributes: pc.attributes, attr: check.attr, rolls: values, scale, dc,
+    mode: check.mode === 'single' ? 'normal' : check.mode,
+  });
+  return { ...c, attr: check.attr as JumpAttr };
+}
+
+export function rollJumpCheck(pc: PC, check: JumpCheck, roll: (sides: number) => number = rollDie): JumpRoll {
+  const { sides } = jumpScale(check);
+  // 单掷只抽一颗：多抽的随机数会打乱可复现的骰子序列。
+  const a = roll(sides);
+  return judgeValue(check, pc, check.mode === 'single' ? [a] : [a, roll(sides)]);
 }
 
 export function describeRoll(r: JumpRoll): string {
   const mode = r.mode === 'advantage' ? '优势' : r.mode === 'disadvantage' ? '劣势' : '';
-  const dice = r.rolls.join('/');
-  const head = `【${r.attr}】${mode}检定 ${dice}（门槛 ${r.target}）`;
-  if (!r.success) return `${head}：没过`;
-  return r.used === 100 ? `${head}：特大成功` : `${head}：过了`;
+  const label = r.scale === 'd20' ? '区值' : '属性';
+  const head = `【${r.attr}】${mode}检定 骰点 ${r.rolls.join('/')} + ${label} ${r.value} = ${r.total}（DC ${r.dc}）`;
+  return `${head}：${r.success ? '过了' : '没过'}`;
 }
 
 // ---------- 摔伤 ----------
@@ -274,12 +268,12 @@ export interface JumpOutcome {
  * - 没有检定、但落差够大（6 格以上）= 必摔
  */
 /**
- * @param roll 检定骰，返回 1–100（D100）
+ * @param roll 检定骰，接收面数、返回 1–面数（D20 区掷 20 面，D100 区掷 100 面）
  * @param injuryRoll 摔伤骰，返回 1–面数。**不能拿 D100 当摔伤骰**：
  *   1D4 用 D100 掷会有 97% 掷出 4。不传就用各面数的默认骰。
  */
-export function resolveJump(pc: PC, plan: JumpPlan, roll?: () => number, injuryRoll?: () => number): JumpOutcome {
-  const r = roll ?? rollD100;
+export function resolveJump(pc: PC, plan: JumpPlan, roll: (sides: number) => number = rollDie, injuryRoll?: () => number): JumpOutcome {
+  const r = roll;
   const check = plan.check ? rollJumpCheck(pc, plan.check, r) : null;
 
   let landed: boolean;

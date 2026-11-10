@@ -8,7 +8,7 @@
 //
 // 纯函数为主：结算不碰 store。真正改世界的只有 applyAttack / resolveRoundStart。
 
-import { attrValue, ATTRS, tierOfRoll, type Attr } from './interaction';
+import { attrValue, ATTRS, type Attr } from './interaction';
 import type { GameMap, Token, World } from '../core/types';
 
 /** 默认伤害骰：没有特殊说明就是 1D8。 */
@@ -23,23 +23,49 @@ export const DYING_LABEL = '濒死';
 /** 掷一颗骰（1..sides）。 */
 export type Roller = (sides: number) => number;
 
-/** 骰子落定后的结果。命中用 tierOfRoll({ attack: true })：只有 1 是大失败，100 是特大成功。 */
+/**
+ * 攻击档位。作者口径（2026-11-10）：
+ * 000 特大成功、1–5 落空、95–99 大成功、其余命中。
+ */
+export type AttackBand = 'miss' | 'hit' | 'great' | 'super';
+
+/** 每档掷几颗伤害骰。默认伤害 1D8：大成功 2D8、特大成功 4D8。 */
+export const ATTACK_DICE: Record<AttackBand, number> = { miss: 0, hit: 1, great: 2, super: 4 };
+
+export const ATTACK_BAND_LABEL: Record<AttackBand, string> = { miss: '落空', hit: '命中', great: '大成功', super: '特大成功' };
+
+/** 按 D100 点数定档。100 就是 00。 */
+export function attackBand(roll: number): AttackBand {
+  if (roll === 100) return 'super';
+  if (roll <= 5) return 'miss';
+  if (roll >= 95) return 'great';
+  return 'hit';
+}
+
+/** 骰子落定后的结果。伤害按颗数掷，不是把一颗骰乘几倍。 */
 export interface AttackRoll {
   /** D100 点数，100 表示 00。 */
   roll: number;
+  band: AttackBand;
   hit: boolean;
-  /** 特大成功 = 伤害 ×4。 */
-  crit: boolean;
+  /** 伤害骰颗数：普通 1、大成功 2、特大成功 4。 */
+  dice: number;
+  /** 每颗伤害骰的点数。 */
+  rolls: number[];
+  /** 伤害骰点数和。 */
   damageRoll: number;
   damage: number;
+  /** 兼容旧字段：多于一颗伤害骰就算「大成功及以上」。 */
+  crit: boolean;
 }
 
 export function rollAttack(roll: number, damageDie = DEFAULT_DAMAGE_DIE, roller?: Roller): AttackRoll {
-  const ext = tierOfRoll('d100', roll, undefined, { attack: true });
-  const crit = ext.tier === 'crit';
-  const hit = ext.tier !== 'fumble';
-  const damageRoll = hit ? (roller ?? randomDie)(damageDie) : 0;
-  return { roll, hit, crit, damageRoll, damage: hit ? damageRoll * (crit ? 4 : 1) : 0 };
+  const band = attackBand(roll);
+  const dice = ATTACK_DICE[band];
+  const r = roller ?? randomDie;
+  const rolls = Array.from({ length: dice }, () => r(damageDie));
+  const damageRoll = rolls.reduce((a, b) => a + b, 0);
+  return { roll, band, hit: dice > 0, dice, rolls, damageRoll, damage: damageRoll, crit: dice > 1 };
 }
 
 /** 浏览器里的骰子：crypto 取随机。测试里传自己的 Roller。 */
@@ -129,9 +155,10 @@ export function effectsToMinutes(effects: CombatEffect[], roundMinutes: number):
 
 /** 结构化描述一次攻击，给骰子判定面板用（广播用）：命中与否、伤害多少。 */
 export function describeAttack(actor: string, target: string, r: AttackRoll): string {
-  if (!r.hit) return `${actor} 攻击 ${target}：D100=${fmt(r.roll)}，大失败，没打中。`;
-  const dmg = r.crit ? `${r.damageRoll}×4=${r.damage}` : `${r.damage}`;
-  return `${actor} 攻击 ${target}：D100=${fmt(r.roll)}${r.crit ? '（特大成功）' : ''}，伤害 ${dmg}。`;
+  if (!r.hit) return `${actor} 攻击 ${target}：D100=${fmt(r.roll)}，落空。`;
+  const dmg = r.dice > 1 ? `${r.rolls.join('+')}=${r.damage}` : `${r.damage}`;
+  const tag = r.dice > 1 ? `（${ATTACK_BAND_LABEL[r.band]}，${r.dice} 颗伤害骰）` : '';
+  return `${actor} 攻击 ${target}：D100=${fmt(r.roll)}${tag}，伤害 ${dmg}。`;
 }
 
 /** 100 显示成 00（D100 的习惯写法）。 */
@@ -257,8 +284,8 @@ export interface RescueCheck {
  * 所以照攻击口径走：投 1 是大失败（没救回来），投 00 是特大成功，其余算成功拉起。
  */
 export function rollRescue(roll: number): RescueCheck {
-  const ext = tierOfRoll('d100', roll, undefined, { attack: true });
-  return { roll, success: ext.tier !== 'fumble', crit: ext.tier === 'crit' };
+  // 救治不是攻击，不套 1–5 落空那套：只有掷 1 是没救回来，00 算特大成功。
+  return { roll, success: roll !== 1, crit: roll === 100 };
 }
 
 /** 这个人能不能救治别人：解锁了急救/救治相关技能才行。 */

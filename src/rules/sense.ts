@@ -10,6 +10,7 @@
 // 现在的实现是规则版（从物件的 secrets 里挑），
 // 以后换成本地模型或者因果图，只换实现，调用方一行都不用改。
 import type { GameMap, MapObject, PC, Secret, Tier } from '../core/types';
+import { attrValue, resolveCheck } from './interaction';
 
 /** 感知动作的四种。 */
 export type SenseKind = 'observe' | 'search' | 'smell' | 'listen';
@@ -37,8 +38,8 @@ export const SENSE_CHECKS: Record<SenseKind, SenseCheck[]> = {
   listen: [{ attr: '观察', required: true }],
 };
 
-/** 默认骰：1..100，100 表示 00。 */
-const defaultRoll = () => 1 + Math.floor(Math.random() * 100);
+/** 默认骰：D20 区掷 1..20。 */
+const defaultRoll = (sides: number) => 1 + Math.floor(Math.random() * sides);
 
 /**
  * 一次感知判定的结果。
@@ -53,24 +54,20 @@ export interface SenseRoll {
 }
 
 /**
- * 属性值取区值：÷5 向下取整。
- * D100 判定口径跟武器攻击一致：投 1 大失败，投 100（00）特大成功，其余 ≤ 区值×10 算成功。
+ * 属性值取区值：÷5 向下取整（D20 区）。
+ * 判定口径：骰 D20 ＋ 区值 大于 DC 20 才算过；掷 20 大成功、掷 1 大失败。
  */
 export function senseZone(value: number | undefined): number {
-  return Math.floor((value ?? 0) / 5);
+  return attrValue(typeof value === 'number' && Number.isFinite(value) ? value : 0, 'd20');
 }
 
 /** 掷一次。roll 可以指定（测试、桌面骰用）。 */
 export function rollSense(kind: SenseKind, pc: PC, roll: (sides: number) => number = defaultRoll): SenseRoll {
   const checks = SENSE_CHECKS[kind];
+  // 这里只负责「这项感知过哪项属性」；判定口径在 interaction.resolveCheck()。
   const rolls = checks.map((c) => {
-    const zone = senseZone(pc.attributes?.[c.attr]);
-    const value = roll(100);
-    const fumble = value === 1;
-    const crit = value === 100;
-    // 区值 0 表示这项完全没有：掷出什么都不过。
-    const success = crit || (!fumble && zone > 0 && value <= zone * 10);
-    return { attr: c.attr, value, zone, success, crit, fumble };
+    const r = resolveCheck({ attributes: pc.attributes, attr: c.attr, rolls: [roll(20)] });
+    return { attr: c.attr, value: r.used, zone: r.value, success: r.success, crit: r.tier === 'crit', fumble: r.tier === 'fumble' };
   });
   const success = rolls.every((r) => r.success);
   const tier: Tier = !success
@@ -81,8 +78,7 @@ export function rollSense(kind: SenseKind, pc: PC, roll: (sides: number) => numb
 
 /** 把一次感知判定说成人话，写进日志用。 */
 export function describeSense(r: SenseRoll, pcName: string): string {
-  const d = (v: number) => (v === 100 ? '00' : String(v));
-  const parts = r.rolls.map((x) => `${x.attr} D100=${d(x.value)}${x.success ? '✓' : '✗'}`).join('，');
+  const parts = r.rolls.map((x) => `${x.attr} D20=${x.value}+区值${x.zone}${x.success ? '✓' : '✗'}`).join('，');
   return `${pcName} 的【${SENSE_LABEL[r.kind]}】：${parts} → ${r.success ? '成功' : '失败'}`;
 }
 

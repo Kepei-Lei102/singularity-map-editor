@@ -25,27 +25,45 @@ const api = createRequire(import.meta.url)(bundle);
 const { after } = await import('node:test');
 after(() => rm(temp, { recursive: true, force: true }));
 
-test('攻击：D100 投 1 才是大失败，其余都命中', () => {
-  const one = api.rollAttack(1, 8, () => 5);
-  assert.equal(one.hit, false);
-  assert.equal(one.damage, 0);
-  for (const roll of [2, 7, 15, 50, 99]) {
+test('攻击：1–5 落空，6–94 命中', () => {
+  // 作者口径：000 特大成功、1–5 落空、95–99 大成功、其余命中。
+  for (const roll of [1, 2, 3, 4, 5]) {
+    const r = api.rollAttack(roll, 8, () => 3);
+    assert.equal(r.hit, false, `D100=${roll} 应该落空`);
+    assert.equal(r.damage, 0);
+    assert.equal(r.dice, 0);
+  }
+  for (const roll of [6, 7, 15, 50, 94]) {
     const r = api.rollAttack(roll, 8, () => 3);
     assert.equal(r.hit, true, `D100=${roll} 应该命中`);
+    assert.equal(r.dice, 1, '普通命中掷 1 颗伤害骰');
     assert.equal(r.damage, 3);
   }
 });
 
-test('攻击：00 是特大成功，伤害 ×4', () => {
+test('攻击：95–99 大成功，1D8 变 2D8', () => {
+  for (const roll of [95, 96, 97, 98, 99]) {
+    const r = api.rollAttack(roll, 8, () => 6);
+    assert.equal(r.hit, true);
+    assert.equal(r.band, 'great');
+    assert.equal(r.dice, 2, '大成功伤害骰数量翻倍');
+    assert.equal(r.rolls.length, 2);
+    assert.equal(r.damage, 12);
+    assert.equal(r.crit, true);
+  }
+});
+
+test('攻击：00 是特大成功，1D8 变 4D8', () => {
   const r = api.rollAttack(100, 8, () => 6);
   assert.equal(r.hit, true);
-  assert.equal(r.crit, true);
+  assert.equal(r.band, 'super');
+  assert.equal(r.dice, 4, '特大成功伤害骰 ×4');
   assert.equal(r.damage, 24);
-  assert.match(api.describeAttack('A', 'B', r), /×4/);
+  assert.match(api.describeAttack('A', 'B', r), /4 颗伤害骰/);
 });
 
 test('伤害默认 1D8：每个骰点都在 1..8', () => {
-  for (let roll = 2; roll <= 99; roll++) {
+  for (let roll = 6; roll <= 94; roll++) {
     for (let face = 1; face <= 8; face++) {
       const r = api.rollAttack(roll, 8, () => face);
       assert.equal(r.damage, face);

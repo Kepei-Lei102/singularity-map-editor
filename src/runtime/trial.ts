@@ -21,7 +21,7 @@ import { openJudgment } from '../rules/judgments';
 import { CELL_METERS, heightAt } from '../scene/height';
 import { cellFloor, hasPitBottom } from '../scene/terrain';
 import { canAffordStep, canTurn, chargeUsedThisTurn, moveBudgetOn, movePool, RUN_MODES, runMeShort, spendCharge, stepPrice, tickCharge, STAND_UP_COST, ROLL_OVER_COST, type ChargeState, type RunMode } from '../rules/move';
-import { ATTACK_RANGE, DYING_LABEL, DYING_ROUNDS, ENGAGE_RANGE, RESCUED_HP, ROBOT_LABEL, attackTargets, canRescue, canUseSharp, downedBy, downedLabel, hpOf, opportunityTriggers, robotArrived, robotIncoming, rollAttack, rollRescue, settleDeath, stepLimitNear, type AttackTarget, type Downed, type Roller } from '../rules/combat';
+import { ATTACK_BAND_LABEL, ATTACK_RANGE, DYING_LABEL, DYING_ROUNDS, ENGAGE_RANGE, RESCUED_HP, ROBOT_LABEL, attackTargets, canRescue, canUseSharp, downedBy, downedLabel, hpOf, opportunityTriggers, robotArrived, robotIncoming, rollAttack, rollRescue, settleDeath, stepLimitNear, type AttackTarget, type Downed, type Roller } from '../rules/combat';
 
 // 试玩：放白板玩家进去，用 WASD 走，体验视野。退出时一切恢复原样（沙盒）。
 // 默认是非战斗：不限步数；打开"战斗模式"才是每回合 5 格。
@@ -413,7 +413,7 @@ function beginUpClimb(
     ruling: `${tok.name} 爬到上面 ${climb} 格（${(climb * CELL_METERS).toFixed(2)} 米）高处，过【${plan.check.attr}】。`
       + `没攀住就从 ${climb} 格摔下来：${INJURY_LABEL[tier]} 1D${INJURY_DICE[tier]}。`
       + (plan.usesAction ? '这一下占掉行动点。' : ''),
-    sides: 100, subjectId: pcId,
+    sides: 20, subjectId: pcId,
     place: { mapId: m.id, x: landing.x + 0.5, y: landing.y + 0.5 },
     jump: req,
   });
@@ -447,7 +447,7 @@ function beginDownJump(
     title: `跳下去：落差 ${fall} 格`,
     ruling: `${tok.name} 从 ${fall} 格（${(fall * CELL_METERS).toFixed(2)} 米）跳下去，过【${plan.check.attr}】。`
       + `没过就摔：${INJURY_LABEL[tier]} 1D${INJURY_DICE[tier]}。`,
-    sides: 100, subjectId: pcId,
+    sides: 20, subjectId: pcId,
     place: { mapId: m.id, x: landing.x + 0.5, y: landing.y + 0.5 },
     jump: req,
   });
@@ -492,7 +492,7 @@ function beginGapJump(
     title: `跳跃：坑宽 ${ahead.width} 格`,
     ruling: `${tok.name} 跳过 ${ahead.width} 格宽的坑（${(ahead.width * CELL_METERS).toFixed(2)} 米），过【${plan.check.attr}】。`
       + `没过就摔下去：${INJURY_LABEL[tier]} 1D${INJURY_DICE[tier]}。`,
-    sides: 100, subjectId: pcId,
+    sides: 20, subjectId: pcId,
     place: { mapId: m.id, x: from.x + 0.5, y: from.y + 0.5 },
     jump: req,
   });
@@ -556,10 +556,10 @@ export function settleJump(req: JumpRequest, values: number[]): string {
       const left = Math.max(0, (t.movePoints?.[req.tokenId] ?? 0) - cost);
       setTr({ movePoints: { ...(t.movePoints ?? {}), [req.tokenId]: left },
         ...(req.usesAction ? { acted: true } : {}),
-        msg: `${done}了${roll ? `：${roll.used} / ${roll.target}` : ''}` });
+        msg: `${done}了${roll ? `：骰点 ${roll.used} + 区值 ${roll.value} = ${roll.total} / DC ${roll.dc}` : ''}` });
     } else {
       setTr({ ...(req.usesAction ? { acted: true } : {}),
-        msg: roll ? `${done}了：${roll.used} / ${roll.target}` : `${done}了` });
+        msg: roll ? `${done}了：骰点 ${roll.used} + 区值 ${roll.value} = ${roll.total} / DC ${roll.dc}` : `${done}了` });
     }
     // 跳过去也是走过去了：触发区和自动揭图照常。
     checkEnterTriggers(t.mapId, req.tokenId, before.x, before.y);
@@ -733,7 +733,7 @@ export function trialAttack(targetTokenId: string, opts: { roll?: number; roller
       kind: r.hit ? 'hit' : 'miss',
       attackerPcId: pl.pcId, attackerName: pl.name,
       targetPcId: target.pcId, targetName: target.name,
-      roll: r.roll, crit: r.crit, damage: r.damage,
+      roll: r.roll, crit: r.crit, dice: r.dice, damage: r.damage,
       hpBefore, hpAfter, hpMax, downed, note, at: Date.now(),
     },
   });
@@ -865,7 +865,8 @@ export function trialOpportunityAttack(): string | null {
           noted = ` HP ${hp}→${next}/${max}`;
         }
       }
-      hits.push(`${e.name} 借机攻击 ${mv.name}：D100=${r.roll === 100 ? '00' : r.roll}${r.crit ? '（特大成功 ×4）' : ''}${r.hit ? `，伤害 ${r.damage}` : '，大失败落空'}${noted}`);
+      const tag = r.dice > 1 ? `（${ATTACK_BAND_LABEL[r.band]}，${r.dice} 颗伤害骰）` : '';
+      hits.push(`${e.name} 借机攻击 ${mv.name}：D100=${r.roll === 100 ? '00' : r.roll}${tag}${r.hit ? `，伤害 ${r.damage}` : '，落空'}${noted}`);
     }
   });
   setTr({ opportunity: null, msg: hits.join('；') });

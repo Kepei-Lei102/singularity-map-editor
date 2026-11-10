@@ -93,6 +93,58 @@ export function pickRoll(rolls: number[], advantage: Advantage = 'normal'): numb
   return rolls[0];
 }
 
+/**
+ * 一次检定的结果。判定口径只有这一套，所有模块都走它：
+ * 骰点 ＋ 属性值 严格大于 DC 才算过。D20 区：值 = 属性÷5、骰 D20、DC 20；
+ * D100 区：值 = 属性、骰 D100、DC 100。优势取高、劣势取低。
+ */
+export interface AttributeCheck {
+  scale: Scale;
+  attr: string;
+  /** 采信的点数（优势/劣势已经挑好）。 */
+  rolls: number[];
+  used: number;
+  /** 属性值（D20 区是区值）＋主动调整值。 */
+  value: number;
+  /** 主动调整值（临时加值），默认 0。 */
+  adjust: number;
+  dc: number;
+  total: number;
+  success: boolean;
+  /** 骰面极值定的档；null = 不是极值，按总数判。 */
+  tier: Tier | null;
+  level: CritLevel;
+  mode: Advantage;
+}
+
+/**
+ * 一次属性判定的唯一入口。各模块只管「过哪颗骰、哪项属性」，不算自己的门槛。
+ */
+export function resolveCheck(opts: {
+  attributes?: Record<string, number>;
+  attr: string;
+  rolls: number[];
+  scale?: Scale;
+  dc?: number;
+  mode?: Advantage;
+  /** 主动调整值：见证者当场给的临时加值，默认 0。 */
+  adjust?: number;
+  /** 攻击那套：000 特大成功、1–5 落空、95–99 大成功。 */
+  attack?: boolean;
+}): AttributeCheck {
+  const scale = opts.scale ?? 'd20';
+  const sides = scale === 'd20' ? 20 : 100;
+  const rolls = opts.rolls.length ? opts.rolls.map((v) => Math.max(1, Math.min(sides, Math.round(v)))) : [1];
+  const mode = opts.mode ?? 'normal';
+  const used = pickRoll(rolls, mode);
+  const adjust = opts.adjust ?? 0;
+  const value = attrValue(opts.attributes?.[opts.attr] ?? 0, scale) + adjust;
+  const dc = opts.dc ?? DEFAULT_DC[scale];
+  const total = value + used;
+  const ext = tierOfRoll(scale, used, undefined, opts.attack ? { attack: true } : undefined);
+  return { scale, attr: opts.attr, rolls, used, value, adjust, dc, total, success: total > dc, tier: ext.tier, level: ext.level, mode };
+}
+
 export type CritLevel = 'normal' | '特大' | null;
 
 /**
@@ -107,10 +159,11 @@ export function tierOfRoll(
   critRoll?: number,
   opts?: { attack?: boolean },
 ): { tier: Tier | null; level: CritLevel } {
-  // 攻击命中一律 D100，掷到 00 直接特大成功（伤害×4），不走补投链。
+  // 攻击一律 D100：000 特大成功、1–5 落空、95–99 大成功、其余命中。
   if (opts?.attack) {
     if (roll === 100) return { tier: 'crit', level: '特大' };
-    if (roll === 1) return { tier: 'fumble', level: 'normal' };
+    if (roll <= 5) return { tier: 'fumble', level: 'normal' };
+    if (roll >= 95) return { tier: 'crit', level: 'normal' };
     return { tier: null, level: null };
   }
   if (scale === 'd20') {

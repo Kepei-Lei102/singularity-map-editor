@@ -45,9 +45,9 @@ test('区值按 ÷5 向下取整', () => {
   assert.equal(api.senseZone(undefined), 0);
 });
 
-test('观察掷一次观察，投 100 是大成功，投 1 是大失败', () => {
+test('观察掷一次观察，投 20 是大成功，投 1 是大失败', () => {
   const p = pc({ 观察: 60 });
-  const hit = api.rollSense('observe', p, () => 100);
+  const hit = api.rollSense('observe', p, () => 20);
   assert.equal(hit.success, true);
   assert.equal(hit.tier, 'crit');
   assert.equal(hit.rolls.length, 1);
@@ -58,25 +58,26 @@ test('观察掷一次观察，投 100 是大成功，投 1 是大失败', () => 
   assert.equal(miss.tier, 'fumble');
 });
 
-test('观察：区值内算成功，超出算失败', () => {
-  const p = pc({ 观察: 60 }); // 区值 12，门槛 120 > 100，其实必中
-  assert.equal(api.rollSense('observe', p, () => 99).success, true);
-  const low = pc({ 观察: 30 }); // 区值 6，门槛 60
-  assert.equal(api.rollSense('observe', low, () => 60).success, true);
-  assert.equal(api.rollSense('observe', low, () => 61).success, false);
+test('观察：骰点加区值要严格过 DC 20', () => {
+  const p = pc({ 观察: 60 }); // 区值 12 → 骰点 9 就到 21
+  assert.equal(api.rollSense('observe', p, () => 9).success, true);
+  assert.equal(api.rollSense('observe', p, () => 8).success, false, '12+8=20 只是平 DC');
+  const low = pc({ 观察: 30 }); // 区值 6 → 骰点要 > 14
+  assert.equal(api.rollSense('observe', low, () => 15).success, true);
+  assert.equal(api.rollSense('observe', low, () => 14).success, false);
 });
 
 test('搜索掷两次：敏捷一次、观察一次，两个都过才算成功', () => {
-  const p = pc({ 敏捷: 30, 观察: 30 }); // 两个区值都是 6，门槛都是 60
+  const p = pc({ 敏捷: 30, 观察: 30 }); // 两个区值都是 6 → 骰点要 > 14
   const calls = [];
-  const both = api.rollSense('search', p, () => { calls.push(1); return 50; });
+  const both = api.rollSense('search', p, () => { calls.push(1); return 15; });
   assert.equal(calls.length, 2, '要掷两次');
   assert.equal(both.success, true);
   assert.deepEqual(both.rolls.map((r) => r.attr), ['敏捷', '观察']);
 
   // 一个过一个不过 → 整体失败。这正是「都要过」的意思。
   let n = 0;
-  const half = api.rollSense('search', p, () => (n++ === 0 ? 30 : 90));
+  const half = api.rollSense('search', p, () => (n++ === 0 ? 15 : 3));
   assert.equal(half.rolls[0].success, true);
   assert.equal(half.rolls[1].success, false);
   assert.equal(half.success, false, '只要有一项没过就不算成功');
@@ -183,10 +184,10 @@ test('换掉建议实现，调用方一行都不用改', () => {
 test('判定结果能说成人话', () => {
   const p = pc({ 敏捷: 30, 观察: 30 });
   let n = 0;
-  const r = api.rollSense('search', p, () => (n++ === 0 ? 100 : 90));
+  const r = api.rollSense('search', p, () => (n++ === 0 ? 15 : 3));
   const line = api.describeSense(r, '阿甲');
   assert.match(line, /阿甲/);
   assert.match(line, /搜索/);
-  assert.match(line, /00/, '100 要显示成 00');
+  assert.match(line, /D20=/);
   assert.match(line, /失败/);
 });

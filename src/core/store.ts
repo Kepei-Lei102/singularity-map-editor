@@ -263,7 +263,9 @@ export interface UIState {
       targetPcId: string | null;
       targetName: string;
       roll: number; // D100，100 表示 00
-      crit: boolean; // 特大成功
+      crit: boolean; // 大成功及以上
+      /** 伤害骰颗数：普通 1、大成功 2、特大成功 4。旧卡片没有就当 1 颗。 */
+      dice?: number;
       damage: number;
       hpBefore: number | null;
       hpAfter: number | null;

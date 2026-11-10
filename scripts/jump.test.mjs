@@ -60,10 +60,10 @@ test('平行跳：4 格以上跳不过去', () => {
 });
 
 test('平行跳失败：摔伤按坑深算', () => {
-  // 敏捷区值 = floor(20/5) = 4 → 门槛 40。掷 90 必败。
+  // 敏捷 20 → 区值 4，DC 20 → 骰点要 > 16。掷 5 必败。
   // 作者口径：平行跳失败按落差算，不是一律中伤。
   const plan = api.planJump('across', 2, NO, 3); // 坑深 3 格
-  const out = api.resolveJump(pc({ 敏捷: 20 }), plan, dice(90, 90));
+  const out = api.resolveJump(pc({ 敏捷: 20 }), plan, dice(5, 5));
   assert.equal(out.landed, false);
   assert.equal(plan.injury, 'medium', '3 格落差是中伤');
   assert.ok(out.damage >= 1 && out.damage <= 8, '中伤 1D8');
@@ -134,7 +134,7 @@ test('往上失败：没攀住，按已攀的高度摔', () => {
   // 作者口径：往上失败不是掉回原地不摔，是按已攀的高度摔。
   const plan = api.planJump('up', 2, NO);
   assert.equal(plan.injury, 'light', '2 格落差轻伤');
-  const out = api.resolveJump(pc({ 力量: 20 }), plan, dice(90, 90), () => 3);
+  const out = api.resolveJump(pc({ 力量: 20 }), plan, dice(5, 5), () => 3);
   assert.equal(out.landed, false);
   assert.equal(out.damage, 3);
   assert.match(out.text, /摔下来/);
@@ -238,41 +238,35 @@ test('往下检定过了：稳稳落地不摔', () => {
 
 // ---------- 检定算法 ----------
 
-test('区值 = 属性 ÷ 5 向下取整，门槛 = 区值 × 10', () => {
+test('区值 = 属性 ÷ 5 向下取整，DC 是 20', () => {
   assert.equal(api.zoneOf({ 敏捷: 47 }, '敏捷'), 9);
   assert.equal(api.zoneOf({ 敏捷: 50 }, '敏捷'), 10);
   assert.equal(api.zoneOf({}, '敏捷'), 0);
 });
 
 test('优势取高的那个', () => {
-  const p = pc({ 敏捷: 10 }); // 门槛 20
-  // 优势取高：掷 95 和 30，取 95 → 95 > 20，没过
-  const adv = api.rollJumpCheck(p, { attr: '敏捷', mode: 'advantage', why: '' }, dice(95, 30));
-  assert.equal(adv.success, false, '优势取 95，超过了门槛');
-  // 掷 30 和 95，取 30 → 30 > 20，也没过
-  const adv2 = api.rollJumpCheck(p, { attr: '敏捷', mode: 'advantage', why: '' }, dice(30, 95));
-  assert.equal(adv2.success, false);
-  // 掷 10 和 95，取 10 → 过了
-  const adv3 = api.rollJumpCheck(p, { attr: '敏捷', mode: 'advantage', why: '' }, dice(10, 95));
-  assert.equal(adv3.success, true);
+  const p = pc({ 敏捷: 10 }); // 区值 2，DC 20 → 骰点要 > 18
+  // 优势取高：掷 5 和 18，取 18 → 2+18 = 20，只是平 DC，不算过
+  assert.equal(api.rollJumpCheck(p, { attr: '敏捷', mode: 'advantage', why: '' }, dice(5, 18)).success, false);
+  assert.equal(api.rollJumpCheck(p, { attr: '敏捷', mode: 'advantage', why: '' }, dice(18, 5)).success, false);
+  // 取 19 → 21 > 20，过了
+  assert.equal(api.rollJumpCheck(p, { attr: '敏捷', mode: 'advantage', why: '' }, dice(19, 5)).success, true);
+  assert.equal(api.rollJumpCheck(p, { attr: '敏捷', mode: 'advantage', why: '' }, dice(5, 19)).success, true);
 });
 
-test('劣势取低的那个，掷到低分才过', () => {
-  const p = pc({ 敏捷: 50 }); // 门槛 100
-  const dis = api.rollJumpCheck(p, { attr: '敏捷', mode: 'disadvantage', why: '' }, dice(95, 30));
-  // 取低 = 30 ≤ 100 → 过
-  assert.equal(dis.success, true);
-  const dis2 = api.rollJumpCheck(p, { attr: '敏捷', mode: 'disadvantage', why: '' }, dice(95, 99));
-  assert.equal(dis2.success, true, '取 95，仍 ≤ 100');
-  const low = pc({ 敏捷: 10 }); // 门槛 20
-  const dis3 = api.rollJumpCheck(low, { attr: '敏捷', mode: 'disadvantage', why: '' }, dice(95, 90));
-  assert.equal(dis3.success, false, '取 90 > 20，没过');
+test('劣势取低的那个', () => {
+  const p = pc({ 敏捷: 50 }); // 区值 10，DC 20 → 骰点要 > 10
+  assert.equal(api.rollJumpCheck(p, { attr: '敏捷', mode: 'disadvantage', why: '' }, dice(20, 15)).success, true);
+  assert.equal(api.rollJumpCheck(p, { attr: '敏捷', mode: 'disadvantage', why: '' }, dice(15, 20)).success, true);
+  // 取低 = 2 → 12 ≤ 20，没过
+  assert.equal(api.rollJumpCheck(p, { attr: '敏捷', mode: 'disadvantage', why: '' }, dice(20, 2)).success, false);
 });
 
-test('100 算特大成功，直接过', () => {
-  const p = pc({ 敏捷: 0 }); // 门槛 0
-  const r = api.rollJumpCheck(p, { attr: '敏捷', mode: 'single', why: '' }, dice(100));
-  assert.equal(r.success, true);
+test('D20 区骰 20 是大成功，但一样要过总数', () => {
+  // 区值 0 时 0+20 = 20 只是平 DC，不算过——「大于」才是过。
+  assert.equal(api.rollJumpCheck(pc({ 敏捷: 0 }), { attr: '敏捷', mode: 'single', why: '' }, dice(20)).success, false);
+  // 区值 2 时 2+20 = 22 > 20，过。
+  assert.equal(api.rollJumpCheck(pc({ 敏捷: 10 }), { attr: '敏捷', mode: 'single', why: '' }, dice(20)).success, true);
 });
 
 // ---------- 高度恐惧 ----------
@@ -458,31 +452,33 @@ test('坑宽超过 3 格就跳不过去', () => {
 
 // ---------- 判定流程掷完拿到的点数 ----------
 
-test('judgeValue：单掷只用一颗，优势取小，劣势取大', () => {
+test('judgeValue：单掷只用一颗，优势取高，劣势取低', () => {
   const chk = { attr: '敏捷', mode: 'single', why: '' };
-  const pc50 = pc({ 敏捷: 50 }); // 区值 10 → 门槛 100
+  const pc50 = pc({ 敏捷: 50 }); // 区值 10 → DC 20
   assert.equal(api.judgeValue(chk, pc50, [20]).used, 20);
-  assert.equal(api.judgeValue({ ...chk, mode: 'advantage' }, pc50, [80, 20]).used, 20, '优势取小');
-  assert.equal(api.judgeValue({ ...chk, mode: 'disadvantage' }, pc50, [20, 80]).used, 80, '劣势取大');
+  assert.equal(api.judgeValue({ ...chk, mode: 'advantage' }, pc50, [8, 20]).used, 20, '优势取高');
+  assert.equal(api.judgeValue({ ...chk, mode: 'disadvantage' }, pc50, [20, 8]).used, 8, '劣势取低');
 });
 
-test('judgeValue：30 对 10 点敏捷必败（门槛 20）', () => {
-  const pc10 = pc({ 敏捷: 10 });
-  const r = api.judgeValue({ attr: '敏捷', mode: 'single', why: '' }, pc10, [30]);
-  assert.equal(r.target, 20);
+test('judgeValue：区值 2 掷 18 正好平 DC，不算过', () => {
+  const pc10 = pc({ 敏捷: 10 }); // 区值 2
+  const r = api.judgeValue({ attr: '敏捷', mode: 'single', why: '' }, pc10, [18]);
+  assert.equal(r.dc, 20);
+  assert.equal(r.total, 20);
   assert.equal(r.success, false);
+  assert.equal(api.judgeValue({ attr: '敏捷', mode: 'single', why: '' }, pc10, [19]).success, true);
 });
 
-test('judgeValue：100 算特大成功', () => {
+test('judgeValue：D20 区的骰点不会超过 20', () => {
   const r = api.judgeValue({ attr: '敏捷', mode: 'single', why: '' }, pc({ 敏捷: 10 }), [100]);
+  assert.equal(r.used, 20, '超过面数的点数要夹到 20');
   assert.equal(r.success, true);
 });
 
-test('优势掷出 100/5 别说成特大成功', () => {
-  // 采信的是 5，不是被丢掉的那颗 100。
-  const r = api.judgeValue({ attr: '敏捷', mode: 'advantage', why: '' }, pc({ 敏捷: 50 }), [100, 5]);
-  assert.equal(r.used, 5);
-  assert.doesNotMatch(api.describeRoll(r), /特大成功/);
+test('优势采信的是高的那颗，不是被丢掉的那颗', () => {
+  const r = api.judgeValue({ attr: '敏捷', mode: 'advantage', why: '' }, pc({ 敏捷: 50 }), [5, 20]);
+  assert.equal(r.used, 20);
+  assert.match(api.describeRoll(r), /骰点 5\/20/);
 });
 
 // ---------- 技能 ----------
