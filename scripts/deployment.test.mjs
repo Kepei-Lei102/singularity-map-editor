@@ -153,7 +153,7 @@ test('玩家窗口回传的掷骰结果不会被当成「复制标签页」丢�
   // 回传要直发 opener，不走广播，避免被玩家窗口自己的监听再吃一遍
   assert.match(src, /body\.type === 'judge-roll'[\s\S]{0,200}window\.opener/);
   // 主持人这边要能收
-  assert.match(src, /if \(m\.type === 'judge-roll'\) \{ onJudgeRoll\(m\); return; \}/);
+  assert.match(src, /if \(m\.type === 'judge-roll'\) \{ onJudgeRoll\(m, source\); return; \}/);
 });
 
 test('战斗通报只发给当事人，且只带结果不带骰子细节', async () => {
@@ -181,4 +181,8 @@ test('玩家窗口回传的消息（掷骰、说话、走一格）都送到见�
   const handler = src.split('function onSay')[1].split('function onJudgeRoll')[0];
   assert.match(handler, /players\.entries\(\)[\s\S]{0,80}p\.win === source/);
   assert.match(handler, /p\.pcId/);
+  // 掷骰也只认绑给「判定角色」的那个窗口，不信消息里自报的身份
+  const judge = src.split('function onJudgeRoll')[1].split('function reportJudgmentRoll')[0];
+  assert.match(judge, /players\.values\(\)[\s\S]{0,120}e\.win === source/);
+  assert.match(judge, /entry\.pcId !== p\.subjectId/);
 });

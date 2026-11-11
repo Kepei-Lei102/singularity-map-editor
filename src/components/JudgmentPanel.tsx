@@ -1,8 +1,8 @@
 import { useState } from 'react';
-import { getUI, getWorld, setUI, useUI, useWorld, worldContext } from '../core/store';
-import { openJudgment, publishJudgment, standInForJudgment } from '../rules/judgments';
+import { getUI, getWorld, useUI, useWorld, worldContext } from '../core/store';
+import { openJudgment, standInForJudgment } from '../rules/judgments';
 import { pushJudgmentRequest } from '../runtime/sync';
-import { cancelPendingJudgment, settleAttack, settleJump } from '../runtime/trial';
+import { cancelPendingJudgment, settlePendingJudgment, type JudgmentRollInput } from '../runtime/trial';
 import { tokenPosition } from '../scene/architecture';
 import type { Id } from '../core/types';
 import { DiceTray, type DiceSides, type DiceTrayRecord } from './DiceTray';
@@ -37,12 +37,12 @@ export function JudgmentPanel() {
   useUI();
   const context = worldContext();
   const pending = getUI().pendingJudgment;
-  if (pending) return <PendingJudgmentPanel key={`${context}-${pending.id}`} context={context} />;
+  if (pending) return <PendingJudgmentPanel key={`${context}-${pending.id}`} />;
   return <JudgmentForm key={context} context={context} />;
 }
 
 /** 判定已经开出去了：等玩家掷，见证者这一格只能等、取消，或者代掷。 */
-function PendingJudgmentPanel({ context }: { context: string }) {
+function PendingJudgmentPanel() {
   const world = useWorld();
   const p = getUI().pendingJudgment!;
   const rawResult = getUI().judgmentResult;
@@ -50,19 +50,17 @@ function PendingJudgmentPanel({ context }: { context: string }) {
   const result = rawResult && rawResult.judgmentId === p.id ? rawResult : null;
   const subject = world.party.find((x) => x.id === p.subjectId);
   const [message, setMessage] = useState('');
+  // 一颗骰子确认到底：跳跃/攻击的落地、广播、收掉两边的等待状态都在 runtime 里一次做完，
+  // 免得「结算了但忘了通知玩家窗口」这类漏路径再出现。
+  const finish = (input: JudgmentRollInput, byStandIn: boolean) => {
+    const err = settlePendingJudgment(input, byStandIn);
+    if (err) setMessage(err);
+  };
   const broadcast = () => {
-    if (!result) return;
-    const err = publishJudgment({
-      title: p.title, ruling: p.ruling, recipients: world.party.map((x) => x.id),
-      roll: {
-        id: result.rollId, sides: result.sides as never, value: result.value,
-        tens: result.tens, units: result.units, material: result.material as never,
-        persona: result.byStandIn ? 'witness' : 'player', seed: result.seed,
-      },
-      subjectId: p.subjectId, place: p.place ?? null,
-    }, context);
-    if (err) return setMessage(err);
-    setUI({ pendingJudgment: null, judgmentResult: null });
+    const raw = getUI().judgmentResult;
+    const r = raw && raw.judgmentId === p.id ? raw : null;
+    if (!r) return;
+    finish({ rollId: r.rollId, sides: r.sides, value: r.value, values: r.values, tens: r.tens, units: r.units, material: r.material, seed: r.seed }, r.byStandIn);
   };
   const standIn = !!p.standIn;
   // 优劣势的骰由发起者自己掷两次（作者 2026-11-10 定）：玩家窗口会把两颗都送过来，
@@ -72,18 +70,9 @@ function PendingJudgmentPanel({ context }: { context: string }) {
   const fmt = (v: number) => (v === 100 ? '000' : String(v));
   /** 结算要两颗一起交给引擎；只给一颗，引擎会把它当单掷，优劣势就丢了。 */
   const diceValues = result ? (result.values?.length ? result.values : [result.value]) : [];
-  const onStandInRoll = (roll: DiceTrayRecord) => {
-    // 代掷不能只广播一句「判定成了」：跳跃要挪棋子、攻击要扣血，得先落地再广播。
-    if (p.jump) { const e = settleJump(p.jump, [roll.value]); if (e) return setMessage(e); }
-    if (p.attack) { const e = settleAttack(p.attack.targetTokenId, roll.value, { sharp: p.attack.sharp, rolledBy: 'witness' }); if (e) return setMessage(e); }
-    const err = publishJudgment({
-      title: p.title, ruling: p.ruling, recipients: world.party.map((x) => x.id),
-      roll: { id: roll.id, sides: roll.sides, value: roll.value, tens: roll.tens, units: roll.units, material: roll.material, persona: 'witness', seed: roll.seed },
-      subjectId: p.subjectId, place: p.place ?? null,
-    }, context);
-    if (err) return setMessage(err);
-    setUI({ pendingJudgment: null, judgmentResult: null });
-  };
+  const onStandInRoll = (roll: DiceTrayRecord) => finish({
+    rollId: roll.id, sides: roll.sides, value: roll.value, tens: roll.tens, units: roll.units, material: roll.material, seed: roll.seed,
+  }, true);
   return <section className="judgment-panel">
     <h3>{standIn ? '代掷中' : `判定已经开出去了 · 等 ${subject?.name ?? '玩家'} 掷骰`}</h3>
     <div><b>{p.title}</b> · D{p.sides} · {subject?.name ?? '角色'}{needTwo ? (dice === 'advantage' ? ' · 优势骰' : ' · 劣势骰') : ''}</div>
@@ -100,32 +89,14 @@ function PendingJudgmentPanel({ context }: { context: string }) {
             ? `D${result.sides} = ${diceValues.map(fmt).join(' / ')} → 采信 ${fmt(result.value)}`
             : `D${result.sides} = ${fmt(result.value)}`}
           {p.jump && (
-            <button onClick={() => {
-              // 跳跃走「骰出即生效、生什么效见证者确认」：你按结果执行，再广播。
-              const err = settleJump(p.jump!, diceValues);
-              if (err) setMessage(err);
-              broadcast();
-            }}>按结果执行（挪棋子 / 扣血）</button>
+            <button onClick={broadcast}>按结果执行（挪棋子 / 扣血）</button>
           )}
           {p.attack && (
-            <button onClick={() => {
-              // 攻击骰由发起者掷，落效由见证者确认：扣血/倒地在这里发生，再广播。
-              // 骰子是谁掷的要记账：玩家自己掷 / 见证者代掷
-              const err = settleAttack(p.attack!.targetTokenId, result.value, {
-                sharp: p.attack!.sharp, rolledBy: result.byStandIn ? 'witness' : 'player',
-              });
-              if (err) setMessage(err);
-              broadcast();
-            }}>按结果执行（扣血 / 倒地）</button>
+            <button onClick={broadcast}>按结果执行（扣血 / 倒地）</button>
           )}
           <button onClick={broadcast}>确认并广播给全队</button>
         </div>
       : <div className="muted">等结果…</div>)}
-    {standIn && p.jump && result && (
-      <div>
-        <button onClick={() => { const err = settleJump(p.jump!, [result.value]); if (err) setMessage(err); broadcast(); }}>按结果执行（挪棋子 / 扣血）</button>
-      </div>
-    )}
     <div className="btns">
       {!standIn && <button onClick={() => { const e = standInForJudgment(); if (e) setMessage(e); }}>代掷（玩家不在电脑前 / 实体骰）</button>}
       <button onClick={() => setMessage(cancelPendingJudgment() ?? '已取消这个判定')}>取消整个判定</button>

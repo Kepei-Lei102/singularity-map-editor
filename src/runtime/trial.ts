@@ -1,9 +1,9 @@
-import { clearTrialWindows, openPlayerWindow, playerWindowFor, pushJudgeCancel, pushJudgmentRequest, registerTrialMove, selectTrialViewer } from './sync';
-import { cancelJudgment } from '../rules/judgments';
+import { clearTrialWindows, closePendingJudgment, openPlayerWindow, playerWindowFor, pushJudgeCancel, pushJudgmentRequest, registerTrialMove, selectTrialViewer } from './sync';
+import { cancelJudgment, publishJudgment } from '../rules/judgments';
 import { playerObject } from '../scene/identity';
 import { effectiveLayer } from '../scene/vision';
 import { objectEnabled } from '../core/objectData.js';
-import { beginSandbox, endSandbox, getUI, getWorld, setUI, toast, update, type UIState } from '../core/store';
+import { beginSandbox, endSandbox, getUI, getWorld, setUI, toast, update, worldContext, type UIState } from '../core/store';
 import { addMark, autoReveal, cancelPendingPlay, checkEnterTriggers, findMap, ioBusy } from './actions';
 import type { Delta, Facing, GameMap, JumpRequest, MapObject, Stance, World } from '../core/types';
 import { gridDist, uid } from '../core/util';
@@ -183,6 +183,8 @@ export function switchTrialPlayer(i?: number) {
 }
 
 export function endTrial() {
+  // 试玩结束：这笔判定跟着试玩一起作废，主持端和玩家窗口都不该再等它。
+  closePendingJudgment();
   clearTrialWindows();
   cancelPendingPlay();
   endSandbox();
@@ -863,6 +865,35 @@ export function damageLanded(ev: { damage: number; hpBefore: number | null; hpAf
 }
 
 /** 取消整个判定，并通知正在等这颗骰子的玩家窗口收掉骰盘（不然它会一直挂着，掷了也没人接）。 */
+export interface JudgmentRollInput {
+  rollId: string; sides: number; value: number; values?: number[];
+  tens?: number | null; units?: number | null; material: string; seed: number;
+}
+
+/** 见证者确认这颗骰子：先落地（跳跃挪棋子 / 攻击扣血），再广播，最后把两边的等待状态一起收掉。 */
+export function settlePendingJudgment(input: JudgmentRollInput, byStandIn = false): string | null {
+  const p = getUI().pendingJudgment;
+  if (!p) return '没有待掷的判定';
+  const diceValues = input.values?.length ? input.values : [input.value];
+  if (p.jump) { const e = settleJump(p.jump, diceValues); if (e) return e; }
+  if (p.attack) {
+    const e = settleAttack(p.attack.targetTokenId, input.value, { sharp: p.attack.sharp, rolledBy: byStandIn ? 'witness' : 'player' });
+    if (e) return e;
+  }
+  const err = publishJudgment({
+    title: p.title, ruling: p.ruling, recipients: getWorld().party.map((x) => x.id),
+    roll: {
+      id: input.rollId, sides: input.sides as never, value: input.value,
+      tens: input.tens ?? null, units: input.units ?? null,
+      material: input.material as never, persona: byStandIn ? 'witness' : 'player', seed: input.seed,
+    },
+    subjectId: p.subjectId, place: p.place ?? null,
+  }, worldContext());
+  if (err) return err;
+  closePendingJudgment();
+  return null;
+}
+
 export function cancelPendingJudgment(): string | null {
   const p = getUI().pendingJudgment;
   const msg = cancelJudgment();

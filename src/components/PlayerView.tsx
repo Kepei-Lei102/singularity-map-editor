@@ -63,8 +63,11 @@ export function PlayerView() {
         setPathway(m.pathway ?? null);
         setAvatar(m.avatar ?? null);
         if (m.world.combatNotice) setNotice((cur) => (cur?.id === m.world.combatNotice!.id ? cur : m.world.combatNotice!));
-        // 世界推送里也带一份自己的待掷判定：刷新后不丢
-        if (m.world.pendingJudgment) setPending((cur) => (cur?.id === m.world.pendingJudgment!.id ? cur : m.world.pendingJudgment!));
+        // 世界推送里也带一份自己的待掷判定：刷新后不丢；
+        // 推送里没有判定（或不是这一笔）说明已经结束，顺手收掉骰盘——兜住所有忘了发 judge-cancel 的路径。
+        const pending = m.world.pendingJudgment;
+        if (pending) setPending((cur) => (cur?.id === pending.id ? cur : pending));
+        else { setPending(null); setRolled(null); }
       } else if (m.type === 'judge-request') { setPending(m.judgment); setRolled(null); }
       else if (m.type === 'judge-cancel') { setPending(null); setRolled(null); }
       else if (m.type === 'clear') { setWorld(null); setMedia(null); setFocus(null); setCast(null); setPending(null); setRolled(null); }

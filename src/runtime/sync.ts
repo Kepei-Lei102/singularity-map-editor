@@ -237,6 +237,8 @@ export function playerMap(m: GameMap, L: VisionLayer, pcId?: string): GameMap {
 }
 
 onProjectReplaced(() => {
+  // 换工程：主持端还等着的判定跨工程没有意义，先收掉；下面会给所有窗口发 clear。
+  setUI({ pendingJudgment: null, judgmentResult: null });
   for (const p of players.values()) if (p.win && !p.win.closed) {
     try { p.win.postMessage({ type: 'clear', __ts: 'ts-map', seq: rand(), from: SESSION, inst: INST, born: BORN }, target()); } catch { /* closed */ }
   }
@@ -293,6 +295,11 @@ export function send(body: SyncBody, to?: string) {
   try { channel?.postMessage(out); } catch { /* unavailable */ }
 }
 
+/** 这条消息该发到哪一类窗口：试玩里的判定只发给试玩窗口，真实世界的判定只发给真实窗口。 */
+function sameContextWindow(entry: { trialContext?: string }): boolean {
+  return (entry.trialContext ?? null) === (getUI().trial ? worldContext() : null);
+}
+
 /** 开出判定后，直接把「轮到你了」推到对应玩家的窗口。 */
 /** 这个角色有没有开着的玩家窗口：有就让他自己掷，没有就见证者代掷。 */
 export function playerWindowFor(pcId: string): boolean {
@@ -307,7 +314,7 @@ export function pushJudgmentRequest(pcId: string): void {
   // jump 里带着落点、摔伤档，推给玩家等于把结果提前告诉他。
   const judgment: PendingJudgment = { ...p, jump: null };
   for (const [binding, entry] of players) {
-    if (entry.pcId !== pcId || !entry.win || entry.win.closed) continue;
+    if (entry.pcId !== pcId || !entry.win || entry.win.closed || !sameContextWindow(entry)) continue;
     const msg: SyncMsg = { type: 'judge-request', judgment, __ts: 'ts-map', seq: rand(), from: SESSION, inst: INST, born: BORN };
     try { entry.win.postMessage(msg, target()); } catch { /* closed */ }
     void binding;
@@ -317,10 +324,18 @@ export function pushJudgmentRequest(pcId: string): void {
 /** 取消判定时把「别等了」推到那个玩家的窗口：不然他的骰盘会一直挂着，掷了也没人接。 */
 export function pushJudgeCancel(pcId: string, judgmentId: string): void {
   for (const [, entry] of players) {
-    if (entry.pcId !== pcId || !entry.win || entry.win.closed) continue;
+    if (entry.pcId !== pcId || !entry.win || entry.win.closed || !sameContextWindow(entry)) continue;
     const msg: SyncMsg = { type: 'judge-cancel', id: judgmentId, __ts: 'ts-map', seq: rand(), from: SESSION, inst: INST, born: BORN };
     try { entry.win.postMessage(msg, target()); } catch { /* closed */ }
   }
+}
+
+/** 一笔判定走完了（玩家掷完广播 / 见证者代掷结算）：清掉主持端的等待状态，并让还在等这颗骰子的窗口收掉骰盘。 */
+export function closePendingJudgment(): void {
+  const p = getUI().pendingJudgment;
+  if (!p) return;
+  setUI({ pendingJudgment: null, judgmentResult: null });
+  if (p.subjectId) pushJudgeCancel(p.subjectId, p.id);
 }
 
 /** 玩家窗口掷完，主持人这边收下来，等着确认广播。 */
@@ -378,9 +393,12 @@ function onMove(m: Extract<SyncMsg, { type: 'move' }>, source: MessageEventSourc
   replyMove(entry, !msg, msg);
 }
 
-function onJudgeRoll(m: Extract<SyncMsg, { type: 'judge-roll' }>): void {
+export function onJudgeRoll(m: Extract<SyncMsg, { type: 'judge-roll' }>, source: MessageEventSource | null): void {
   const p = getUI().pendingJudgment;
   if (!p || p.id !== m.id) return;
+  // 这颗骰子必须来自绑给「判定角色」的那个窗口：别的玩家窗口、甚至别的标签页塞来的都不算。
+  const entry = [...players.values()].find((e) => e.win === source);
+  if (!entry || entry.pcId !== p.subjectId) return;
   // 这里以前只比一个 id：任何同源标签页（甚至 BroadcastChannel，source 是 null 会跳过来源检查）
   // 都能往待掷判定里塞一颗骰子，包括不可能的 D20=999。骰子是这个程序最核心的承诺，得验。
   if (m.from !== SESSION) return;
@@ -454,7 +472,7 @@ export function listenAsEditor(onHello: () => void) {
       return;
     }
     if (m.type === 'claim' || m.type === 'taken' || m.type === 'alive') return;
-    if (m.type === 'judge-roll') { onJudgeRoll(m); return; }
+    if (m.type === 'judge-roll') { onJudgeRoll(m, source); return; }
     if (m.type === 'say') { onSay(m, source); return; }
     if (m.type === 'move') { onMove(m, source); return; }
     if (m.type !== 'hello' || (m.to && m.to !== SESSION)) return;
