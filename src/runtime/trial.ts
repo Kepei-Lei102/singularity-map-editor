@@ -703,9 +703,11 @@ export function settleJump(req: JumpRequest, values: number[], opts: JumpSettleO
           delete dt.status;
           dt.down = true;
         }
-        const newLabel = downedLabel(downed);
-        if (oldLabel !== newLabel) {
-          deltas.push({ kind: 'status', id: dt.id, name: dt.name, from: oldLabel, to: newLabel });
+        // 状态的“真值”要看棋子实际挂着的 label：非战斗濒死其实挂的是急救机器人，
+        // 不能把语义上的『濒死』直接写成一条假的 status delta。
+        const actualLabel = dt.status?.label ?? (dt.down ? downedLabel('down') : null);
+        if (oldLabel !== actualLabel) {
+          deltas.push({ kind: 'status', id: dt.id, name: dt.name, from: oldLabel, to: actualLabel });
         }
       }
     }
@@ -729,11 +731,13 @@ export function settleJump(req: JumpRequest, values: number[], opts: JumpSettleO
       if (fallInfo?.nextFloor) note += '；掉到下一层，棋子要见证者手动挪';
       if (!pool) note += '；没有血条，摔伤没落地';
       else if (hpAfter === 0) {
-        const newLabel = downedLabel(downed ?? 'down');
-        if (oldLabel === newLabel) {
-          note += oldLabel === DYING_LABEL ? '；本来就已经是濒死，倒计时没有重置' : '；本来就已经是昏厥，状态没有变';
+        const actualLabel = dt.status?.label ?? (dt.down ? downedLabel('down') : null);
+        if (oldLabel === actualLabel) {
+          if (oldLabel === DYING_LABEL) note += '；本来就已经是濒死，倒计时没有重置';
+          else if (oldLabel === downedLabel('down')) note += '；本来就已经是昏厥，状态没有变';
+          else note += `；状态已经是「${oldLabel ?? '无'}」，这次没有变`;
         } else {
-          note += damageRoll > 10 ? '；单次摔伤超过 10 点，HP 归零 → 濒死' : '；HP 归零 → 昏厥';
+          note += damageRoll > 10 ? `；单次摔伤超过 10 点，HP 归零 → ${actualLabel}` : `；HP 归零 → ${actualLabel}`;
         }
       } else if (damageRoll > 10) note += `；摔伤超过 10 点，但 HP 还剩 ${hpAfter}，没进濒死`;
       if (pool && hpBefore !== null && hpAfter !== null && hpBefore > 0 && hpBefore < damageRoll) note += `；实扣 ${hpBefore}（掷出 ${damageRoll}）`;

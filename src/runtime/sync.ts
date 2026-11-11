@@ -103,6 +103,8 @@ function forPlayer(p: PendingJudgment): PendingJudgment {
   delete copy.door;
   delete copy.fall;
   delete copy.place;
+  delete copy.attack;
+  delete copy.standIn;
   copy.dice = dice;
   return copy;
 }

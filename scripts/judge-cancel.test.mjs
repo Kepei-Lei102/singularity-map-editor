@@ -82,6 +82,7 @@ test('world 广播不把 jump/fall 结算数据交给玩家', () => {
   api.openJudgment({
     title: '跳跃：往下 6 格', ruling: '', sides: 20, subjectId: 'a',
     jump: { tokenId: 'ta', dx: 0, dy: 1, kind: 'down', cells: 6, fall: 6, attr: '敏捷', dice: 'single', landing: { x: 2, y: 3 }, injury: 'heavy', moveMultiplier: 1 },
+    attack: { attackerTokenId: 'ta', targetTokenId: 'tb' },
     place: { mapId: 'm1', x: 1, y: 1 },
   });
   api.send({ type: 'world' });
@@ -92,6 +93,7 @@ test('world 广播不把 jump/fall 结算数据交给玩家', () => {
   assert.equal(p.jump, undefined, '落点/摔伤档不能给玩家');
   assert.equal(p.fall, undefined);
   assert.equal(p.place, undefined, '判定地点也不给');
+  assert.equal(p.attack, undefined, '攻击对象也不给');
   assert.equal(p.dice, 'single', '只给“掷几次”');
 });
 

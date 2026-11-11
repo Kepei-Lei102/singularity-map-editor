@@ -88,6 +88,22 @@ function PendingJudgmentPanel() {
       }, true);
       return;
     }
+    // 跳跃的优/劣势也要替玩家掷两颗，取高/低后把两颗一起交给引擎；只给一颗等于把优劣势降成单骰。
+    if (needTwo) {
+      const rolls = [...standInRolls, roll];
+      if (rolls.length < 2) {
+        setStandInRolls(rolls);
+        setMessage(`已掷 D${roll.sides}=${fmt(roll.value)}；再掷一颗，取${dice === 'advantage' ? '高' : '低'}`);
+        return;
+      }
+      const taken = dice === 'advantage' ? Math.max(...rolls.map((x) => x.value)) : Math.min(...rolls.map((x) => x.value));
+      const chosen = rolls.find((x) => x.value === taken)!;
+      finish({
+        rollId: chosen.id, sides: chosen.sides, value: taken, values: rolls.map((x) => x.value),
+        tens: chosen.tens, units: chosen.units, material: chosen.material, seed: chosen.seed,
+      }, true);
+      return;
+    }
     finish({
       rollId: roll.id, sides: roll.sides, value: roll.value, tens: roll.tens, units: roll.units, material: roll.material, seed: roll.seed,
     }, true);
@@ -99,7 +115,7 @@ function PendingJudgmentPanel() {
     <div className="muted">骰子在他的窗口里。见证者默认不能代掷。</div>
     {standIn && <div>
       <div className="muted">玩家不在电脑前 / 用的是实体骰，你替他掷。</div>
-      {isCheck && standInRolls.length > 0 && <div className="muted">{standInRolls.map((r, i) => `${checkAttrs[i].attr} D${r.sides} = ${fmt(r.value)}`).join(' / ')}</div>}
+      {standInRolls.length > 0 && <div className="muted">{standInRolls.map((r, i) => `${isCheck ? `${checkAttrs[i]?.attr ?? ''} ` : ''}D${r.sides} = ${fmt(r.value)}`).join(' / ')}</div>}
       <DiceTray persona="witness" sides={p.sides} displayResult={result && !isCheck ? { id: result.rollId, sides: result.sides as never, value: result.value, seed: result.seed, material: result.material as never, tens: result.tens, units: result.units } : null}
         onResult={onStandInRoll} onError={setMessage} />
     </div>}

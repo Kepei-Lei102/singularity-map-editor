@@ -28,7 +28,7 @@ after(() => rm(temp, { recursive: true, force: true }));
 
 const ATTRS = { 力量: 30, 敏捷: 30, 意志: 30, 观察: 30, 智慧: 30, 魅力: 30 };
 
-function setup({ hp, hpMax, window = true } = {}) {
+function setup({ hp, hpMax, window = true, combat = true } = {}) {
   const w = api.emptyWorld();
   const m = api.newMap('跳跃测试', '现实', 1, 10, 10, 'floor', false);
   m.objects = [];
@@ -39,7 +39,7 @@ function setup({ hp, hpMax, window = true } = {}) {
   api.replaceWorld(w);
   api.setUI({ mapId: m.id });
   api.startTrial();
-  api.setUI({ trial: { mapId: m.id, players: [{ tokenId: 'ta', pcId: 'a', name: '甲' }], current: 0, combat: true,
+  api.setUI({ trial: { mapId: m.id, players: [{ tokenId: 'ta', pcId: 'a', name: '甲' }], current: 0, combat,
     moved: {}, turned: {}, acted: {}, turn: 1, movePoints: {}, charge: {}, msg: '', markSymbol: '!', markText: '', markMode: false } });
   // 让这个角色有试玩窗口，两阶段才走玩家窗口那条路；测试里 window.open 是假的。
   if (window) api.openPlayerWindow('a', true);
@@ -146,6 +146,34 @@ test('已濒死再摔：不重置倒计时，note 不写成昏厥', () => {
   assert.match(w.events[0].note, /本来就已经是濒死/);
 });
 
+test('非战斗高摔：账本挂急救机器人，不写假的“→濒死”', () => {
+  setup({ hp: 0, hpMax: 6, combat: false });
+  api.update((d) => {
+    const t = d.maps[0].tokens[0];
+    t.hp = 0;
+    t.status = { label: '急救机器人正在赶来', endsAt: Date.now() + 60000 };
+  });
+  assert.equal(api.settleJump(jumpDown({ injury: 'heavy' }), [], { injuryRoll: 12, injuryBy: 'player' }), '');
+  const ev = api.getWorld().events[0];
+  const tok = api.getWorld().maps[0].tokens[0];
+  assert.equal(tok.status.label, '急救机器人正在赶来');
+  assert.ok(!ev.deltas.some((d) => d.kind === 'status'), '状态实际没变，不许写 delta');
+  assert.match(ev.note, /状态已经是「急救机器人正在赶来」/);
+  assert.doesNotMatch(ev.note, /→ 濒死/);
+});
+
+test('非战斗高摔且原无状态：账本挂急救机器人，不是“濒死”', () => {
+  setup({ hp: 0, hpMax: 6, combat: false });
+  assert.equal(api.settleJump(jumpDown({ injury: 'heavy' }), [], { injuryRoll: 12, injuryBy: 'player' }), '');
+  const ev = api.getWorld().events[0];
+  const tok = api.getWorld().maps[0].tokens[0];
+  assert.equal(tok.status.label, '急救机器人正在赶来');
+  const status = ev.deltas.find((d) => d.kind === 'status');
+  assert.equal(status.from, null);
+  assert.equal(status.to, '急救机器人正在赶来');
+  assert.match(ev.note, /→ 急救机器人正在赶来/);
+});
+
 test('已昏厥再摔：状态不变，note 不写“实扣 0”', () => {
   setup({ hp: 0, hpMax: 6 });
   api.update((d) => {
@@ -202,6 +230,21 @@ test('第二颗广播前先查棋子：删了棋子就不发第二颗、不留 p
   assert.equal(api.getUI().pendingJudgment, null);
   assert.equal((api.getWorld().judgments ?? []).length, 1, '第二颗不许广播');
   assert.equal((api.getWorld().events ?? []).length, 0);
+});
+
+test('见证者代掷劣势跳：两颗一起结算，取低', () => {
+  setup();
+  api.openJudgment({
+    title: '跳跃：劣势代掷', ruling: '', sides: 20, subjectId: 'a',
+    jump: { tokenId: 'ta', dx: 0, dy: 1, kind: 'down', cells: 4, fall: 4, attr: '敏捷', dice: 'disadvantage', landing: { x: 2, y: 3 }, injury: 'medium', moveMultiplier: 1 },
+  });
+  assert.equal(api.settlePendingJudgment({ rollId: 'so1', sides: 20, value: 5, values: [20, 5], tens: null, units: null, material: 'wood', seed: 8 }, true), null);
+  const w = api.getWorld();
+  assert.equal((w.events ?? []).length, 1);
+  assert.equal(w.events[0].damage.by, 'witness');
+  assert.equal(w.events[0].check.attrs[0].used, 5, '劣势取低');
+  assert.deepEqual(w.judgments[0].roll.values, [20, 5], '两颗都要留');
+  assert.equal(w.judgments[0].roll.persona, 'witness');
 });
 
 test('玩家骰型只看公开字段，不靠被剥掉的 jump', () => {
