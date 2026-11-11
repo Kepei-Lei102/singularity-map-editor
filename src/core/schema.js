@@ -157,7 +157,8 @@ export function repairDoorOpenStates(w, opts = {}) {
   for (const m of Array.isArray(w?.maps) ? w.maps : []) {
     for (const o of Array.isArray(m?.objects) ? m.objects : []) {
       const op = o?.opening;
-      if (!op || !Array.isArray(op.openStates)) continue;
+      if (!op) continue;
+      if (!Array.isArray(op.openStates)) op.openStates = [];
       const states = Array.isArray(o.states) ? o.states : [];
       const label = typeof o.name === 'string' && o.name ? o.name : (typeof o.id === 'string' ? o.id : '门');
       if (!op.openStates.length) {
@@ -166,12 +167,12 @@ export function repairDoorOpenStates(w, opts = {}) {
         const blocks = Array.isArray(o.blocksWhen) ? o.blocksWhen.filter((v) => Number.isInteger(v) && v >= 0 && v < states.length) : [];
         if (i < 0 && blocks.length && blocks.length < states.length) {
           const open = states.map((_, k) => k).filter((k) => !blocks.includes(k));
-          const pick = open.find((k) => k !== o.state) ?? open[0];
+          const pick = open.includes(o.state) ? o.state : open[0];
           if (pick !== undefined) i = pick;
         }
         if (i < 0 && opts.guess && states.length) {
           // 用户在导入时明确确认过「把最后一个状态当打开」才走到这里，不是静默猜。
-          i = states.length > 1 ? (o.state === states.length - 1 ? 0 : states.length - 1) : 0;
+          i = states.length ? states.length - 1 : 0;
           fixed.push(`门「${label}」按确认把「${states[i]}」当作打开`);
         }
         if (i < 0) { fixed.push(`门「${label}」没有打开状态，状态名和挡路列表都读不出来，请手工在检查器里勾一个`); continue; }

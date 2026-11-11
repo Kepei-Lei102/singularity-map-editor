@@ -484,9 +484,11 @@ export function setObjectStates(mapId: string, objId: string, states: string[]) 
         if (named >= 0) mapped.push(named);
         else {
           const cur = Math.max(0, to(o.state));
-          const candidates = nextStates.map((_, i) => i).filter((i) => !(nextBlocks ?? []).includes(i) && i !== cur);
+          const candidates = nextBlocks && nextBlocks.length
+            ? nextStates.map((_, i) => i).filter((i) => !nextBlocks!.includes(i) && i !== cur)
+            : [];
           if (candidates.length) mapped.push(candidates[0]);
-          else { toast('门至少要留一个「打开」状态：先把某个状态改成「打开」，或删掉挡路状态'); return; }
+          else { toast('门至少要留一个「打开」状态：先把某个状态改成「打开」；没有挡路列表就别硬猜'); return; }
         }
       }
       nextOpen = mapped;

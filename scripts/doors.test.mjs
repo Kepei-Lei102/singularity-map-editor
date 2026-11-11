@@ -140,6 +140,11 @@ test('导入确认后可按「最后一个状态」兜底，但仍要让用户�
   assert.deepEqual(w.maps[0].objects[0].opening.openStates, [1], '确认后把最后状态当打开');
   assert.deepEqual(w.maps[0].objects[0].blocksWhen, [0], '打开状态从挡路列表里移除');
   assert.match(fixed.join('\n'), /按确认把「锁着」当作打开/);
+  // 当前状态正好是最后一个：仍按 confirm 说的“最后一个”，不跳回第一个
+  const wLast = api.emptyWorld();
+  wLast.maps[0].objects = [{ ...DOOR(null), states: ['关着', '锁着'], state: 1, blocksWhen: [0, 1], opening: { wallId: 'wall1', offset: 0, width: 3, openStates: [] } }];
+  api.repairDoorOpenStates(wLast, { guess: true });
+  assert.deepEqual(wLast.maps[0].objects[0].opening.openStates, [1]);
 });
 
 test('猜不到状态名时用挡路列表反推，不去猜当前状态', () => {
@@ -171,6 +176,25 @@ test('检查器改状态列表：不能把门最后一个打开态删掉', () =>
   assert.deepEqual(after.blocksWhen, [0]);
   api.setObjectStates(w.maps[0].id, 'door1', ['']);
   assert.deepEqual(api.getWorld().maps[0].objects[0].states, ['关闭', '打开'], '清空状态也拒绝');
+  // 没有 blocksWhen 就没有“哪一格挡路”的信息，不能拿空数组当“全部不挡路”
+  const w2 = api.emptyWorld();
+  w2.party = [];
+  const door2 = { ...DOOR(null), states: ['关闭', '打开', '备用'], blocksWhen: undefined, opening: { wallId: 'wall1', offset: 0, width: 3, openStates: [1] } };
+  w2.maps[0].objects = [door2];
+  api.replaceWorld(w2);
+  api.setObjectStates(w2.maps[0].id, 'door1', ['关闭', '锁着']);
+  const after2 = api.getWorld().maps[0].objects[0];
+  assert.deepEqual(after2.states, ['关闭', '打开', '备用'], 'blocksWhen 缺失时删打开态要整次拒绝');
+  assert.deepEqual(after2.opening.openStates, [1]);
+  assert.equal(after2.blocksWhen, undefined);
+});
+
+test('openStates 缺失时迁移不抛裸 TypeError，能按名字补', () => {
+  const w = api.emptyWorld();
+  w.maps[0].objects = [{ ...DOOR(null), opening: { wallId: 'wall1', offset: 0, width: 3 } }];
+  const fixed = api.repairDoorOpenStates(w);
+  assert.deepEqual(w.maps[0].objects[0].opening.openStates, [1]);
+  assert.match(fixed.join('\n'), /补成「打开」/);
 });
 
 test('schema 不接受没有「打开」状态的门', () => {
