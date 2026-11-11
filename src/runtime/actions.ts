@@ -462,30 +462,44 @@ export function setObjectStates(mapId: string, objId: string, states: string[]) 
     const o = findObj(d, mapId, objId);
     if (!o) return;
     const before = [...o.states];
+    const nextStates = states.length ? states : [''];
     const map = new Map<number, number>();
     const used = new Set<number>();
     before.forEach((s, i) => {
-      const j = states.findIndex((t, k) => t === s && !used.has(k));
+      const j = nextStates.findIndex((t, k) => t === s && !used.has(k));
       if (j >= 0 && before.filter((x) => x === s).length === 1) { map.set(i, j); used.add(j); }
     });
-    if (states.length === before.length) before.forEach((_, i) => { if (!map.has(i) && !used.has(i)) { map.set(i, i); used.add(i); } });
+    if (nextStates.length === before.length) before.forEach((_, i) => { if (!map.has(i) && !used.has(i)) { map.set(i, i); used.add(i); } });
     const to = (i: number) => map.get(i) ?? -1;
-    o.states = states.length ? states : [''];
+
+    // 门至少要留一个能开的状态。先在映射后的新名字里找，找不到再用挡路列表反推；都不行就拒绝这次改名，
+    // 别把一个关着的状态偷偷标成“打开”（那会让锁着的门几何上变成可穿过）。
+    let nextBlocks = o.blocksWhen ? [...new Set(o.blocksWhen.map(to).filter((i) => i >= 0))] : undefined;
+    let nextOpen: number[] | undefined;
+    if (o.opening) {
+      if (!nextStates.some((s) => s.trim())) { toast('门至少要有一个状态'); return; }
+      const mapped = [...new Set(o.opening.openStates.map(to).filter((i) => i >= 0))];
+      if (!mapped.length) {
+        const named = nextStates.findIndex((s) => /^(打开|开门|开着|开启|开|已打开|open|opened)$/i.test(s.trim()));
+        if (named >= 0) mapped.push(named);
+        else {
+          const cur = Math.max(0, to(o.state));
+          const candidates = nextStates.map((_, i) => i).filter((i) => !(nextBlocks ?? []).includes(i) && i !== cur);
+          if (candidates.length) mapped.push(candidates[0]);
+          else { toast('门至少要留一个「打开」状态：先把某个状态改成「打开」，或删掉挡路状态'); return; }
+        }
+      }
+      nextOpen = mapped;
+      if (nextBlocks) nextBlocks = nextBlocks.filter((i) => !nextOpen!.includes(i));
+    }
+
     // 当前状态只是换了序号（还是同一个状态）：不算"状态被改过"，流程图里记的版本跟着走
     const rev0 = o.stateRev ?? 0, cur = to(o.state);
     const renumbered = cur >= 0 && cur !== o.state;
+    o.states = nextStates;
     o.state = Math.max(0, cur);
-    if (o.opening) {
-      const mapped = [...new Set(o.opening.openStates.map(to).filter(i => i >= 0))];
-      // 给门改名/删状态时别把「打开」弄丢：先按名字找，找不到就保留原来的位置。
-      if (!mapped.length) {
-        const named = o.states.findIndex((s) => /^(打开|开门|开着|开启|open|opened)$/i.test(s.trim()));
-        if (named >= 0) mapped.push(named);
-        else if (o.opening.openStates.length) mapped.push(Math.min(o.opening.openStates[0], o.states.length - 1));
-      }
-      o.opening.openStates = mapped;
-    }
-    if (o.blocksWhen) o.blocksWhen = [...new Set(o.blocksWhen.map(to).filter((i) => i >= 0))];
+    if (o.opening && nextOpen) o.opening.openStates = nextOpen;
+    if (nextBlocks !== undefined) o.blocksWhen = nextBlocks;
     for (const r of findMap(d, mapId)!.rooms) for (const s of [...r.reset?.objects ?? [], ...r.layouts?.flatMap((l) => l.objects) ?? []])
       if (s.id === objId) s.state = Math.max(0, to(s.state));
     if (renumbered) o.stateRev = rev0 + 1;
@@ -505,7 +519,6 @@ export function setObjectStates(mapId: string, objId: string, states: string[]) 
   lost = [...new Set(lost)];
   if (lost.length) toast(`这些事件引用的状态被删掉了，已改成第一个状态：${lost.join('、')}`);
 }
-
 /** 一个事件可能是从哪几条连线过来的：起点已经发生了的连线，条件满足的排前面，同样满足的按起点发生的时间从近到远。 */
 export function incomingCandidates(f: Flow | Draft<Flow>, nodeId: string, tags: Set<string>) {
   const byId = new Map(f.nodes.map((n) => [n.id, n]));
@@ -825,7 +838,10 @@ async function buildProjectZip(allowMissing = false) {
   const w = structuredClone(getWorld());
   const dropped = repairOrphanSubcells(w);
   if (dropped) toast(`导出前清理了 ${dropped} 个失效子格`);
-  repairDoorOpenStates(w);
+  const doorHints = repairDoorOpenStates(w);
+  const unresolved = doorHints.filter((h) => h.includes('请手工'));
+  if (unresolved.length) throw new Error(unresolved.join('；'));
+  if (doorHints.length) toast(doorHints.join('；'));
   checkWorld(w);
   const zip = new JSZip();
   zip.file('world.json', JSON.stringify(w, null, 2));
@@ -860,7 +876,10 @@ export function exportWorldJson() {
   const w = structuredClone(getWorld());
   const dropped = repairOrphanSubcells(w);
   if (dropped) toast(`导出前清理了 ${dropped} 个失效子格`);
-  repairDoorOpenStates(w);
+  const doorHints = repairDoorOpenStates(w);
+  const unresolved = doorHints.filter((h) => h.includes('请手工'));
+  if (unresolved.length) return toast('导出失败：' + unresolved.join('；'));
+  if (doorHints.length) toast(doorHints.join('；'));
   try { checkWorld(w); } catch (e) { return toast('导出失败：' + (e as Error).message); }
   download(`${w.name || '世界'}.json`, JSON.stringify(w, null, 2), 'application/json');
   toast(w.media.length ? `已导出 JSON（不含 ${w.media.length} 个媒体文件；换电脑请用「导出成 zip」）` : '已导出 JSON');
@@ -893,11 +912,14 @@ export async function saveToDisk() {
 }
 
 /** 导入前的校验：任何写入（媒体、世界）之前先过这一关（和命令行共用 schema.js）。 */
-function parseWorld(text: string): World {
+function parseWorld(text: string, autoOpen = false): World {
   let w: unknown;
   try { w = JSON.parse(text); } catch { throw new Error('world.json 不是有效的 JSON'); }
   repairWorld(w); // 旧版允许过的超范围数值先夹回来
   repairOrphanSubcells(w); // 旧版取消细分留下的孤儿子格：丢掉，不然严格校验会拒绝导入
+  const doorHints = repairDoorOpenStates(w, autoOpen ? { guess: true } : undefined);
+  const unresolved = doorHints.filter((h) => h.includes('请手工'));
+  if (unresolved.length) throw new Error(unresolved.join('；'));
   checkWorld(w);
   migrateWorld(w);
   checkWorld(w, true); // 补完旧字段以后再严格查一遍，确保交给编辑器的是完整的工程
@@ -1012,17 +1034,27 @@ async function commitImport(w: World, files: { id: string; blob: Blob }[], ctx =
   return true;
 }
 
+function parseWorldWithConfirm(text: string): World {
+  try { return parseWorld(text); }
+  catch (e) {
+    if (e instanceof Error && e.message.includes('请手工') && confirm(`${e.message}\n\n这些门读不出哪一个是打开状态。要把每扇门的最后一个状态当作「打开」继续导入吗？`)) {
+      return parseWorld(text, true);
+    }
+    throw e;
+  }
+}
+
 async function importProject(file: File, ctx: string): Promise<boolean> {
   try {
     let w: World;
     const files: { id: string; blob: Blob }[] = [];
     if (/\.json$/i.test(file.name)) {
-      w = parseWorld(await file.text()); // 单独的 JSON 不带媒体文件：浏览器里有的照用
+      w = parseWorldWithConfirm(await file.text()); // 单独的 JSON 不带媒体文件：浏览器里有的照用
     } else {
       const zip = await JSZip.loadAsync(file);
       const json = zip.file('world.json');
       if (!json) throw new Error('压缩包里没有 world.json');
-      w = parseWorld(await json.async('string'));
+      w = parseWorldWithConfirm(await json.async('string'));
       for (const m of w.media) {
         const f = zip.file(`media/${m.id}`);
         if (f) files.push({ id: m.id, blob: new Blob([await f.async('arraybuffer')], { type: m.mime }) });
@@ -1083,7 +1115,7 @@ export async function restoreBackup() {
     try {
       const b = readBackup();
       if (!b) return;
-      const w = parseWorld(JSON.stringify(b.world));
+      const w = parseWorldWithConfirm(JSON.stringify(b.world));
       if (b.swapped?.length) {
         // 旧版备份：那时导入会覆盖同 ID 的文件，旧文件存在 __backup__/ 里。把它们存成新文件（不再覆盖），世界改为引用新文件
         const files: { id: string; blob: Blob }[] = [];

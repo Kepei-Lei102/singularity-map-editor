@@ -19,7 +19,8 @@ export * from './src/core/schema.js';
 export * from './src/runtime/sync';
 export * from './src/runtime/trial';
 export * from './src/rules/judgments';
-export * from './src/rules/events';`,
+export * from './src/rules/events';
+export * from './src/runtime/actions';`,
     resolveDir: root,
   },
   outfile: bundle, bundle: true, platform: 'node', format: 'cjs', logLevel: 'silent',
@@ -128,8 +129,48 @@ test('旧工程的门没有打开状态：按状态名补，猜不到就明说',
   const w2 = api.emptyWorld();
   w2.maps[0].subdivisions = [2 * w2.maps[0].width + 1, 2 * w2.maps[0].width + 2];
   w2.maps[0].objects = [WALL('wall1'), { ...DOOR(null), opening: { wallId: 'wall1', offset: 0, width: 3, openStates: [] } }];
-  assert.match(api.repairWorld(w2).join('\n'), /按状态名补成/);
+  assert.match(api.repairWorld(w2).join('\n'), /补成「打开」/);
   assert.doesNotThrow(() => api.checkWorld(w2));
+});
+
+test('导入确认后可按「最后一个状态」兜底，但仍要让用户点头', () => {
+  const w = api.emptyWorld();
+  w.maps[0].objects = [{ ...DOOR(null), states: ['关着', '锁着'], state: 0, blocksWhen: [0, 1], opening: { wallId: 'wall1', offset: 0, width: 3, openStates: [] } }];
+  const fixed = api.repairDoorOpenStates(w, { guess: true });
+  assert.deepEqual(w.maps[0].objects[0].opening.openStates, [1], '确认后把最后状态当打开');
+  assert.deepEqual(w.maps[0].objects[0].blocksWhen, [0], '打开状态从挡路列表里移除');
+  assert.match(fixed.join('\n'), /按确认把「锁着」当作打开/);
+});
+
+test('猜不到状态名时用挡路列表反推，不去猜当前状态', () => {
+  const w = api.emptyWorld();
+  w.maps[0].objects = [{ ...DOOR(null), states: ['关着', '备用'], state: 0, blocksWhen: [0], opening: { wallId: 'wall1', offset: 0, width: 3, openStates: [] } }];
+  const fixed = api.repairDoorOpenStates(w);
+  assert.deepEqual(w.maps[0].objects[0].opening.openStates, [1], '不在挡路列表里的才是能开的');
+  assert.deepEqual(w.maps[0].objects[0].blocksWhen, [0], '关着的那格继续挡路');
+  assert.match(fixed.join('\n'), /补成「备用」/);
+});
+
+test('打开状态不能同时在挡路列表里（schema 不变量）', () => {
+  const w = api.emptyWorld();
+  const m = w.maps[0];
+  m.subdivisions = [2 * m.width + 1, 2 * m.width + 2];
+  m.objects = [WALL('wall1'), { ...DOOR(null), blocksWhen: [1], opening: { wallId: 'wall1', offset: 0, width: 3, openStates: [1] } }];
+  assert.throws(() => api.checkWorld(w), /挡路/);
+});
+
+test('检查器改状态列表：不能把门最后一个打开态删掉', () => {
+  const w = api.emptyWorld();
+  w.party = [];
+  w.maps[0].objects = [DOOR(null)];
+  api.replaceWorld(w);
+  api.setObjectStates(w.maps[0].id, 'door1', ['关闭']);
+  const after = api.getWorld().maps[0].objects[0];
+  assert.deepEqual(after.states, ['关闭', '打开'], '拒绝改名，状态列表原样');
+  assert.deepEqual(after.opening.openStates, [1]);
+  assert.deepEqual(after.blocksWhen, [0]);
+  api.setObjectStates(w.maps[0].id, 'door1', ['']);
+  assert.deepEqual(api.getWorld().maps[0].objects[0].states, ['关闭', '打开'], '清空状态也拒绝');
 });
 
 test('schema 不接受没有「打开」状态的门', () => {

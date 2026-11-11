@@ -8,7 +8,7 @@ export function safeId(id: unknown): boolean;
 export function checkWorld(w: unknown, migrated?: boolean): asserts w is World;
 /** 旧版允许过、现在不允许的数值夹回范围，返回改了什么。 */
 export function repairWorld(w: unknown): string[];
-export function repairDoorOpenStates(w: unknown): string[];
+export function repairDoorOpenStates(w: unknown, opts?: { guess?: boolean }): string[];
 /** 丢掉取消了细分、却还留在 subCells/materialSubCells/子格记忆里的孤儿键；返回丢掉的数量。 */
 export function repairOrphanSubcells(w: unknown): number;
 /** 检查一位 NPC；partial = 单独导入的 JSON（id、progress 等可以缺）。 */

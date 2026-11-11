@@ -151,25 +151,44 @@ export function repairWorld(w) {
  * 旧工程的门可能没有「打开」状态。按状态名补一个；猜不到就别动，让严格校验给出可操作提示。
  * 导出/保存前也要调用：内存里的旧工程不一定跑过加载迁移。
  */
-export function repairDoorOpenStates(w) {
+export function repairDoorOpenStates(w, opts = {}) {
   const fixed = [];
-  const OPEN = /^(打开|开门|开着|开启|open|opened)$/i;
+  const OPEN = /^(打开|开门|开着|开启|开|已打开|open|opened)$/i;
   for (const m of Array.isArray(w?.maps) ? w.maps : []) {
     for (const o of Array.isArray(m?.objects) ? m.objects : []) {
       const op = o?.opening;
-      if (!op || !Array.isArray(op.openStates) || op.openStates.length) continue;
+      if (!op || !Array.isArray(op.openStates)) continue;
       const states = Array.isArray(o.states) ? o.states : [];
       const label = typeof o.name === 'string' && o.name ? o.name : (typeof o.id === 'string' ? o.id : '门');
-      const i = states.findIndex((s) => typeof s === 'string' && OPEN.test(s.trim()));
-      if (i < 0) { fixed.push(`门「${label}」没有打开状态，状态名里也没有「打开/开门/open」，请手工设一个`); continue; }
-      op.openStates = [i];
-      if (Array.isArray(o.blocksWhen)) o.blocksWhen = o.blocksWhen.filter((v) => v !== i);
-      fixed.push(`门「${label}」没有打开状态，按状态名补成「${states[i]}」`);
+      if (!op.openStates.length) {
+        let i = states.findIndex((s) => typeof s === 'string' && OPEN.test(s.trim()));
+        // 状态名猜不到时，用 blocksWhen 反推：不在挡路列表里的状态才是能开的。
+        const blocks = Array.isArray(o.blocksWhen) ? o.blocksWhen.filter((v) => Number.isInteger(v) && v >= 0 && v < states.length) : [];
+        if (i < 0 && blocks.length && blocks.length < states.length) {
+          const open = states.map((_, k) => k).filter((k) => !blocks.includes(k));
+          const pick = open.find((k) => k !== o.state) ?? open[0];
+          if (pick !== undefined) i = pick;
+        }
+        if (i < 0 && opts.guess && states.length) {
+          // 用户在导入时明确确认过「把最后一个状态当打开」才走到这里，不是静默猜。
+          i = states.length > 1 ? (o.state === states.length - 1 ? 0 : states.length - 1) : 0;
+          fixed.push(`门「${label}」按确认把「${states[i]}」当作打开`);
+        }
+        if (i < 0) { fixed.push(`门「${label}」没有打开状态，状态名和挡路列表都读不出来，请手工在检查器里勾一个`); continue; }
+        op.openStates = [i];
+        fixed.push(`门「${label}」没有打开状态，补成「${states[i]}」`);
+      }
+      if (Array.isArray(o.blocksWhen)) {
+        const overlap = o.blocksWhen.filter((v) => op.openStates.includes(v));
+        if (overlap.length) {
+          o.blocksWhen = o.blocksWhen.filter((v) => !op.openStates.includes(v));
+          fixed.push(`门「${label}」的打开状态同时被标成挡路，已从挡路里移除`);
+        }
+      }
     }
   }
   return fixed;
 }
-
 /** 纯 JS 建筑校验，命令行与编辑器都拒绝悬空门洞和未细分墙。 */
 export function checkArchitecture(m) {
   const c = checker('建筑数据有问题：');
@@ -417,6 +436,7 @@ export function checkWorld(w, migrated = false) {
         arr(o.opening.openStates, `${oa}.opening.openStates`).forEach(i => int(i, `${oa}.opening.openStates`, 0, o.states.length - 1));
         if (new Set(o.opening.openStates).size !== o.opening.openStates.length) fail(oa, '打开状态重复');
         if (o.opening.openStates.length === 0) fail(`${oa}.opening.openStates`, '门至少要有一个打开状态');
+        if (Array.isArray(o.blocksWhen) && o.opening.openStates.some(i => o.blocksWhen.includes(i))) fail(`${oa}.opening.openStates`, '打开的状态不能同时在挡路列表里');
       }
       if (isArchitectureObject(o) && (o.kind !== 'object' || o.geometry && o.opening || o.pushable || o.heavy)) fail(oa, '建筑组件必须是静态物件，不能同时是墙和门洞');
       if (o.physical !== undefined) { obj(o.physical, `${oa}.physical`); optBool(o.physical.blocksMove, `${oa}.physical.blocksMove`); optBool(o.physical.blocksSight, `${oa}.physical.blocksSight`); }
