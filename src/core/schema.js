@@ -395,6 +395,11 @@ export function checkWorld(w, migrated = false) {
       }
       if (isArchitectureObject(o) && (o.kind !== 'object' || o.geometry && o.opening || o.pushable || o.heavy)) fail(oa, '建筑组件必须是静态物件，不能同时是墙和门洞');
       if (o.physical !== undefined) { obj(o.physical, `${oa}.physical`); optBool(o.physical.blocksMove, `${oa}.physical.blocksMove`); optBool(o.physical.blocksSight, `${oa}.physical.blocksSight`); }
+      if (o.lock !== undefined) {
+        obj(o.lock, `${oa}.lock`);
+        oneOf(o.lock.kind, ['physical', 'electronic'], `${oa}.lock.kind`);
+        bool(o.lock.locked, `${oa}.lock.locked`); bool(o.lock.keyable, `${oa}.lock.keyable`);
+      }
       optBool(o.pushable, `${oa}.pushable`);
       optBool(o.heavy, `${oa}.heavy`);
       optNum(o.stateRev, `${oa}.stateRev`);
@@ -609,7 +614,7 @@ export function checkWorld(w, migrated = false) {
         oneOf(e.check.merge, ['single', 'any', 'all'], `${ca}.merge`);
         if (e.check.kind !== undefined) oneOf(e.check.kind, ['check', 'attack'], `${ca}.kind`);
         if (e.check.band !== undefined) oneOf(e.check.band, ['miss', 'hit', 'great', 'super'], `${ca}.band`);
-        optNum(e.check.dc, `${ca}.dc`); num(e.check.total, `${ca}.total`); bool(e.check.success, `${ca}.success`);
+        optNum(e.check.dc, `${ca}.dc`); optNum(e.check.total, `${ca}.total`); bool(e.check.success, `${ca}.success`);
         if (e.check.tier !== null && e.check.tier !== undefined) oneOf(e.check.tier, ['crit', 'fumble'], `${ca}.tier`);
         optStr(e.check.outcome, `${ca}.outcome`);
         if (e.check.rolledBy !== undefined) oneOf(e.check.rolledBy, ['player', 'witness', 'host'], `${ca}.rolledBy`);

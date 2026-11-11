@@ -50,6 +50,7 @@ function PendingJudgmentPanel() {
   const result = rawResult && rawResult.judgmentId === p.id ? rawResult : null;
   const subject = world.party.find((x) => x.id === p.subjectId);
   const [message, setMessage] = useState('');
+  const [standInRolls, setStandInRolls] = useState<DiceTrayRecord[]>([]);
   // 一颗骰子确认到底：跳跃/攻击的落地、广播、收掉两边的等待状态都在 runtime 里一次做完，
   // 免得「结算了但忘了通知玩家窗口」这类漏路径再出现。
   const finish = (input: JudgmentRollInput, byStandIn: boolean) => {
@@ -66,33 +67,57 @@ function PendingJudgmentPanel() {
   // 优劣势的骰由发起者自己掷两次（作者 2026-11-10 定）：玩家窗口会把两颗都送过来，
   // 这里只管用。见证者决定的是「这次算不算优劣势」，不是替玩家掷骰。
   const dice = p.jump?.dice ?? 'single';
-  const needTwo = dice !== 'single';
+  const checkAttrs = p.check?.attrs ?? [];
+  const isCheck = checkAttrs.length > 0;
+  const needTwo = !isCheck && dice !== 'single';
   const fmt = (v: number) => (v === 100 ? '000' : String(v));
   /** 结算要两颗一起交给引擎；只给一颗，引擎会把它当单掷，优劣势就丢了。 */
   const diceValues = result ? (result.values?.length ? result.values : [result.value]) : [];
-  const onStandInRoll = (roll: DiceTrayRecord) => finish({
-    rollId: roll.id, sides: roll.sides, value: roll.value, tens: roll.tens, units: roll.units, material: roll.material, seed: roll.seed,
-  }, true);
+  const onStandInRoll = (roll: DiceTrayRecord) => {
+    // 多属性判定要替玩家掷 N 颗（撬锁是两颗）；一颗一颗来，掷齐再一起结算。
+    if (isCheck && checkAttrs.length > 1) {
+      const rolls = [...standInRolls, roll];
+      if (rolls.length < checkAttrs.length) {
+        setStandInRolls(rolls);
+        setMessage(`已掷 ${checkAttrs[rolls.length - 1].attr}：D${roll.sides}=${fmt(roll.value)}；再掷 ${checkAttrs[rolls.length].attr}`);
+        return;
+      }
+      finish({
+        rollId: rolls[0].id, sides: rolls[0].sides, value: rolls[0].value, values: rolls.map((x) => x.value),
+        tens: rolls[0].tens, units: rolls[0].units, material: rolls[0].material, seed: rolls[0].seed,
+      }, true);
+      return;
+    }
+    finish({
+      rollId: roll.id, sides: roll.sides, value: roll.value, tens: roll.tens, units: roll.units, material: roll.material, seed: roll.seed,
+    }, true);
+  };
   return <section className="judgment-panel">
     <h3>{standIn ? '代掷中' : `判定已经开出去了 · 等 ${subject?.name ?? '玩家'} 掷骰`}</h3>
-    <div><b>{p.title}</b> · D{p.sides} · {subject?.name ?? '角色'}{needTwo ? (dice === 'advantage' ? ' · 优势骰' : ' · 劣势骰') : ''}</div>
+    <div><b>{p.title}</b> · D{p.sides} · {subject?.name ?? '角色'}{isCheck ? ` · ${checkAttrs.map((a) => a.attr).join('＋')}（都要过，DC ${p.check!.dc}）` : needTwo ? (dice === 'advantage' ? ' · 优势骰' : ' · 劣势骰') : ''}</div>
     {p.ruling && <div className="muted">你预先写好的裁定（已锁）：{p.ruling}</div>}
     <div className="muted">骰子在他的窗口里。见证者默认不能代掷。</div>
     {standIn && <div>
       <div className="muted">玩家不在电脑前 / 用的是实体骰，你替他掷。</div>
-      <DiceTray persona="witness" sides={p.sides} displayResult={result ? { id: result.rollId, sides: result.sides as never, value: result.value, seed: result.seed, material: result.material as never, tens: result.tens, units: result.units } : null}
+      {isCheck && standInRolls.length > 0 && <div className="muted">{standInRolls.map((r, i) => `${checkAttrs[i].attr} D${r.sides} = ${fmt(r.value)}`).join(' / ')}</div>}
+      <DiceTray persona="witness" sides={p.sides} displayResult={result && !isCheck ? { id: result.rollId, sides: result.sides as never, value: result.value, seed: result.seed, material: result.material as never, tens: result.tens, units: result.units } : null}
         onResult={onStandInRoll} onError={setMessage} />
     </div>}
     {!standIn && (result
       ? <div>
-          他掷出了：{diceValues.length > 1
-            ? `D${result.sides} = ${diceValues.map(fmt).join(' / ')} → 采信 ${fmt(result.value)}`
-            : `D${result.sides} = ${fmt(result.value)}`}
+          他掷出了：{isCheck
+            ? checkAttrs.map((a, i) => `${a.attr} D${result.sides} = ${fmt(diceValues[i] ?? result.value)}`).join(' / ')
+            : diceValues.length > 1
+              ? `D${result.sides} = ${diceValues.map(fmt).join(' / ')} → 采信 ${fmt(result.value)}`
+              : `D${result.sides} = ${fmt(result.value)}`}
           {p.jump && (
             <button onClick={broadcast}>按结果执行（挪棋子 / 扣血）</button>
           )}
           {p.attack && (
             <button onClick={broadcast}>按结果执行（扣血 / 倒地）</button>
+          )}
+          {p.door && (
+            <button onClick={broadcast}>按结果执行（开锁 / 卡死）</button>
           )}
           <button onClick={broadcast}>确认并广播给全队</button>
         </div>

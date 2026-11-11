@@ -5,14 +5,15 @@ import { effectiveLayer } from '../scene/vision';
 import { objectEnabled } from '../core/objectData.js';
 import { beginSandbox, endSandbox, getUI, getWorld, setUI, toast, update, worldContext, type UIState } from '../core/store';
 import { addMark, autoReveal, cancelPendingPlay, checkEnterTriggers, findMap, ioBusy } from './actions';
-import type { Delta, Facing, GameMap, JumpRequest, MapObject, Stance, World } from '../core/types';
+import type { Delta, Facing, GameMap, Id, JumpRequest, MapObject, PC, Stance, Token, World } from '../core/types';
 import { gridDist, uid } from '../core/util';
 import { blocksMovement, ROUND_MINUTES } from '../scene/perception';
-import { characterPathClear, furnitureSweepBlocked, nextTokenStep, setTokenPosition, tokenPosition } from '../scene/architecture';
+import { architectureGeometry, architectureObjectBounds, characterPathClear, furnitureSweepBlocked, nextTokenStep, openingIsOpen, setTokenPosition, tokenPosition } from '../scene/architecture';
 import { terrainBlocksPoint, terrainBlocksRect } from '../scene/terrain';
 import { slidingPuzzleForObject } from '../scene/sliding';
 import { sightCacheFor, viewerOf, visiblePoint } from '../scene/sight';
 import { describeSense, rollSense, senseHints, type SenseKind } from '../rules/sense';
+import { resolveCheck } from '../rules/interaction';
 import {
   describeInjury, describePitFall, describeStepDrop, gapAhead, INJURY_DICE, INJURY_LABEL, injuryTier,
   judgeValue, jumpSkillsOf, pitFall, planJump, rollInjury, rollPitFall, stepDrop,
@@ -756,6 +757,215 @@ export function trialAttack(targetTokenId: string, opts: { roll?: number; roller
   return settleAttack(targetTokenId, opts.roll ?? 1 + Math.floor(Math.random() * 100), { ...opts, rolledBy: 'host' });
 }
 
+// —— 门：开门 / 撬锁 ——
+//
+// 门锁是门上的正交状态：locked（锁着没有）+ keyable（还能不能配钥匙）。
+// 「卡死」不是第三种开合状态，而是「锁着 + 配不出钥匙」：门照旧关着挡路，只能强行打开。
+export const LOCKPICK_SKILL_ID = '001-9-204';
+/** 标准 DC：D20 区 20。门不单独带 DC。 */
+export const LOCK_DC = 20;
+const PICK_ATTRS = ['智慧', '敏捷'] as const;
+const FORCE_ATTRS = ['力量', '敏捷'] as const;
+
+export interface TrialDoor {
+  objectId: Id;
+  name: string;
+  open: boolean;
+  locked: boolean;
+  keyable: boolean;
+  /** 身上有【开锁副手】才能巧力撬锁；暴力开锁谁都能试。 */
+  canPick: boolean;
+}
+
+/** 当前试玩角色贴身 1 格以内、看得见的门。 */
+export function trialDoors(): TrialDoor[] {
+  const t = tr();
+  const pl = t?.players[t.current];
+  if (!t || !pl) return [];
+  const w = getWorld();
+  const m = findMap(w, t.mapId);
+  const tok = m?.tokens.find((x) => x.id === pl.tokenId);
+  const pc = w.party.find((p) => p.id === pl.pcId);
+  if (!m || !tok || !pc) return [];
+  const at = tokenPosition(tok);
+  const near = (b: { x: number; y: number; w: number; h: number }) =>
+    Math.max(b.x - at.x, 0, at.x - (b.x + b.w), b.y - at.y, 0, at.y - (b.y + b.h)) <= 1;
+  // 门就在手边：不按身体朝向卡（人回头就能看见），只按视线通不通。
+  const eye = { ...viewerOf(tok, { sex: pc.sex, heightCm: pc.heightCm }), facing: undefined };
+  const geom = architectureGeometry(m);
+  /** 看得见：视线能到门板中央，但不算这扇门自己挡自己。 */
+  const seen = (o: MapObject) => {
+    const b = architectureObjectBounds(m, o);
+    return visiblePoint(w, m, eye, { x: b.x + b.w / 2, y: b.y + b.h / 2 }, geom.filter((r) => r.objectId !== o.id));
+  };
+  return m.objects
+    .filter((o) => o.opening && objectEnabled(m, o) && !o.hidden)
+    .filter((o) => near(architectureObjectBounds(m, o)) && seen(o))
+    .map((o) => ({
+      objectId: o.id, name: o.name, open: openingIsOpen(o),
+      locked: !!o.lock?.locked, keyable: o.lock ? o.lock.keyable : true,
+      canPick: (pc.skills ?? []).includes(LOCKPICK_SKILL_ID),
+    }));
+}
+
+interface DoorCtx {
+  t: NonNullable<UIState['trial']>;
+  m: GameMap;
+  door: MapObject;
+  pl: NonNullable<UIState['trial']>['players'][number];
+  pc: PC;
+  tok: Token;
+}
+
+/** 门操作共同的前置：在试玩里、贴身 1 格、门在、角色卡在。 */
+function doorContext(objectId: string): DoorCtx | string {
+  const t = tr();
+  const pl = t?.players[t.current];
+  if (!t || !pl) return '没有正在试玩的角色';
+  const w = getWorld();
+  const m = findMap(w, t.mapId);
+  if (!m) return '找不到试玩地图';
+  const door = m.objects.find((o) => o.id === objectId && o.opening);
+  if (!door || !objectEnabled(m, door)) return '找不到这扇门';
+  const tok = m.tokens.find((x) => x.id === pl.tokenId);
+  const pc = w.party.find((p) => p.id === pl.pcId);
+  if (!tok || !pc) return '找不到当前角色';
+  const at = tokenPosition(tok), b = architectureObjectBounds(m, door);
+  const dist = Math.max(b.x - at.x, 0, at.x - (b.x + b.w), b.y - at.y, 0, at.y - (b.y + b.h));
+  if (dist > 1) return '要贴身才能操作这扇门';
+  const eye = { ...viewerOf(tok, { sex: pc.sex, heightCm: pc.heightCm }), facing: undefined };
+  const geom = architectureGeometry(m).filter((r) => r.objectId !== door.id);
+  if (!visiblePoint(w, m, eye, { x: b.x + b.w / 2, y: b.y + b.h / 2 }, geom)) return '看不见这扇门';
+  if (t.combat && actedOf(t, pl.tokenId)) return '这回合的行动点已经用掉了，按空格结束回合';
+  return { t, m, door, pl, pc, tok };
+}
+
+/** 开一扇没锁的门。不掷骰，记一条事件。 */
+export function trialOpenDoor(objectId: string): string | null {
+  const ctx = doorContext(objectId);
+  if (typeof ctx === 'string') return ctx;
+  const { t, door, pl } = ctx;
+  if (openingIsOpen(door)) return '门已经开着';
+  if (door.lock?.locked) return '门锁着，得先撬锁';
+  const openIdx = door.states.findIndex((_, i) => door.opening!.openStates.includes(i));
+  if (openIdx < 0) return '门缺少打开状态';
+  update((d) => {
+    const dm = findMap(d, t.mapId)!;
+    const o = dm.objects.find((x) => x.id === door.id)!;
+    const from = o.states[o.state];
+    o.state = openIdx;
+    appendEvent(d, newEvent(d, Date.now(),
+      { kind: 'pc', id: pl.pcId, name: pl.name },
+      { name: '开门', source: '临场' },
+      {
+        target: { kind: 'object', id: o.id, name: o.name },
+        deltas: [{ kind: 'object', id: o.id, name: o.name, path: '状态', from, to: o.states[openIdx] }],
+      },
+    ));
+  });
+  setTr({ ...(t.combat ? { acted: { ...(t.acted ?? {}), [pl.tokenId]: true } } : {}), msg: `${pl.name} 开了 ${door.name}` });
+  return null;
+}
+
+/**
+ * 撬锁 / 暴力开锁。
+ * 巧力：智慧＋敏捷都过（要【开锁副手】）；暴力：力量＋敏捷都过（谁都能试，会响）。
+ * 玩家窗口在 → 开一笔正式判定，骰子进他的窗口；不在 → 见证者现掷，同样落成正式判定。
+ */
+export function trialPickLock(objectId: string, method: 'pick' | 'force', opts: { rolls?: number[] } = {}): string | null {
+  const ctx = doorContext(objectId);
+  if (typeof ctx === 'string') return ctx;
+  const { t, door, pl, pc } = ctx;
+  const lock = door.lock;
+  if (!lock) return '这扇门没有锁';
+  if (lock.kind === 'electronic') return '电子锁还没接开锁动作';
+  if (!lock.locked) return '锁已经解开了，直接开门';
+  if (!lock.keyable && method === 'pick') return '锁芯卡死，巧力撬不开，只能强行打开';
+  if (method === 'pick' && !(pc.skills ?? []).includes(LOCKPICK_SKILL_ID)) return '没有解锁【开锁副手】，只能暴力开锁';
+  const attrs = method === 'pick' ? PICK_ATTRS : FORCE_ATTRS;
+  if (opts.rolls !== undefined && (opts.rolls.length !== attrs.length || opts.rolls.some((v) => !Number.isInteger(v) || v < 1 || v > 20))) return '骰点不对';
+  const title = `${method === 'pick' ? '撬锁' : '暴力开锁'}：${door.name}`;
+  const err = openJudgment({
+    title, ruling: '', sides: 20, subjectId: pl.pcId, place: null,
+    door: { mapId: t.mapId, objectId: door.id, method },
+    check: { attrs: attrs.map((attr) => ({ attr, dice: 'single' as const })), dc: LOCK_DC, merge: 'all' },
+  });
+  if (err) return err;
+  if (opts.rolls === undefined && pl.pcId && playerWindowFor(pl.pcId)) { pushJudgmentRequest(pl.pcId); return null; }
+  const rolls = opts.rolls ?? attrs.map(() => 1 + Math.floor(Math.random() * 20));
+  if (rolls.length !== attrs.length || rolls.some((v) => !Number.isInteger(v) || v < 1 || v > 20)) return '骰点不对';
+  return settlePendingJudgment({ rollId: `host-${uid()}`, sides: 20, value: rolls[0], values: rolls, tens: null, units: null, material: 'wood', seed: 0 }, true);
+}
+
+/** 门判定的落地：按两颗骰子分别过 DC，都过才算成功；大成功一颗顶俩。 */
+function settleDoorAttempt(
+  p: NonNullable<UIState['pendingJudgment']>,
+  input: JudgmentRollInput,
+  byStandIn: boolean,
+): string | null {
+  if (!p.door || !p.check) return '判定数据不全';
+  const w = getWorld();
+  const pc = w.party.find((x) => x.id === p.subjectId);
+  const m = findMap(w, p.door.mapId);
+  const door = m?.objects.find((o) => o.id === p.door!.objectId);
+  if (!pc || !door || !door.lock) return '这扇门已经变了，重开判定';
+  const values = input.values?.length ? input.values : [input.value];
+  if (values.length !== p.check.attrs.length) return '骰子数量不对';
+  const checks = p.check.attrs.map((a, i) => resolveCheck({
+    attributes: pc.attributes, attr: a.attr, rolls: [values[i]], scale: 'd20', dc: p.check!.dc,
+  }));
+  const crit = checks.find((c) => c.tier === 'crit');
+  const success = !!crit || checks.every((c) => c.success);
+  const fumble = !success && checks.some((c) => c.tier === 'fumble');
+  const note = success
+    ? (p.door.method === 'force' ? '暴力开锁，动静传出去了' : crit ? '锁没有留痕' : undefined)
+    : fumble ? '锁芯卡死，只能强行打开' : '锁没动';
+  let msg = '';
+  update((d) => {
+    const dm = findMap(d, p.door!.mapId)!;
+    const o = dm.objects.find((x) => x.id === p.door!.objectId)!;
+    const deltas: Delta[] = [];
+    if (success) {
+      if (o.lock!.locked) {
+        o.lock = { ...o.lock!, locked: false };
+        deltas.push({ kind: 'object', id: o.id, name: o.name, path: '锁具', from: '锁着', to: '已解开' });
+      }
+      const openIdx = o.states.findIndex((_, i) => o.opening!.openStates.includes(i));
+      if (openIdx >= 0 && o.state !== openIdx) {
+        deltas.push({ kind: 'object', id: o.id, name: o.name, path: '状态', from: o.states[o.state], to: o.states[openIdx] });
+        o.state = openIdx;
+      }
+      msg = `${pc.name} ${p.door!.method === 'pick' ? '撬开了' : '砸开了'} ${o.name}`;
+    } else if (fumble) {
+      o.lock = { ...o.lock!, keyable: false };
+      deltas.push({ kind: 'object', id: o.id, name: o.name, path: '锁具', from: '锁着', to: '卡死' });
+      msg = `${o.name} 的锁芯卡死了，只能强行打开`;
+    } else {
+      msg = `${o.name} 的锁没动`;
+    }
+    appendEvent(d, newEvent(d, Date.now(),
+      { kind: 'pc', id: p.subjectId, name: pc.name },
+      { name: p.door!.method === 'pick' ? '撬锁' : '暴力开锁', source: '临场' },
+      {
+        target: { kind: 'object', id: o.id, name: o.name },
+        check: {
+          kind: 'check', scale: 'd20', merge: 'all', dc: p.check!.dc, success,
+          attrs: checks.map((c, i) => ({ attr: c.attr, dice: 'single' as const, roll: c.used, used: c.used, value: c.value, total: c.total })),
+          tier: crit ? 'crit' : fumble ? 'fumble' : null,
+          level: crit?.level === '特大' ? '特大' : null,
+          rolledBy: byStandIn ? 'witness' : 'player',
+        },
+        deltas,
+        ...(note ? { note } : {}),
+      },
+    ));
+  });
+  const t = tr();
+  const who = t?.players.find((x) => x.pcId === p.subjectId);
+  setTr({ ...(t && t.combat && who ? { acted: { ...(t.acted ?? {}), [who.tokenId]: true } } : {}), msg });
+  return null;
+}
+
 /** 按掷出来的点数结算一次攻击。见证者点「按结果执行」，或 NPC 当场出手时走这里。 */
 export function settleAttack(
   targetTokenId: string, roll: number,
@@ -879,6 +1089,7 @@ export function settlePendingJudgment(input: JudgmentRollInput, byStandIn = fals
   // 判定是在哪个工程/哪次试玩里开的，就只能在那儿结算：否则会静默写进另一个世界。
   if (p.context !== worldContext()) return '工程或试玩已切换，请重新掷骰';
   const diceValues = input.values?.length ? input.values : [input.value];
+  if (p.door) { const e = settleDoorAttempt(p, input, byStandIn); if (e) return e; }
   if (p.jump) { const e = settleJump(p.jump, diceValues); if (e) return e; }
   if (p.attack) {
     const e = settleAttack(p.attack.targetTokenId, input.value, { sharp: p.attack.sharp, rolledBy: byStandIn ? 'witness' : 'player' });

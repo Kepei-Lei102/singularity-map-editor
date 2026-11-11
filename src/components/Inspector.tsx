@@ -454,6 +454,23 @@ function ObjectInspector({ world, mapId, o, ui }: { world: World; mapId: string;
             </>
           )}
           {edit && o.opening && <><div className="hint">勾选打开门洞的状态；其余状态关闭。所有切换共用人物与家具防夹规则。</div><div className="chips">{o.states.map((s, i) => <label key={i} className="check"><input type="checkbox" checked={o.opening!.openStates.includes(i)} onChange={e => up(x => { const set = new Set(x.opening!.openStates); if (e.target.checked) set.add(i); else set.delete(i); x.opening!.openStates = [...set]; x.blocksWhen = x.states.map((_, i) => i).filter(i => !set.has(i)); })} />{s}</label>)}</div></>}
+          {edit && o.opening && (
+            <>
+              <div className="hint">锁具：门锁和开合是两位。锁着就开不了；巧力撬锁只有解锁【开锁副手】的角色能做（智慧＋敏捷），暴力开锁谁都能试（力量＋敏捷）。卡死＝锁着但配不出钥匙，只能强行打开。</div>
+              <div className="chips">
+                {([['', '无锁'], ['physical', '物理锁'], ['electronic', '电子锁（暂未接开锁）']] as const).map(([k, label]) => (
+                  <button key={k} className={`chip ${(o.lock?.kind ?? '') === k ? 'on' : ''}`}
+                    onClick={() => up(x => { if (!k) delete x.lock; else x.lock = { kind: k, locked: true, keyable: true }; })}>{label}</button>
+                ))}
+              </div>
+              {o.lock && <div className="chips">
+                <Check label="锁着" value={o.lock.locked}
+                  onChange={(v) => up(x => { x.lock!.locked = v; if (!v) x.lock!.keyable = true; })} />
+                <Check label="还能配钥匙（巧力撬锁）" value={o.lock.keyable}
+                  onChange={(v) => up(x => { x.lock!.keyable = v; })} />
+              </div>}
+            </>
+          )}
           {edit && <Area rows={2} placeholder="一行一个状态" value={o.states.join('\n')}
             onChange={(v) => setObjectStates(mapId, o.id, v.split('\n'))} />}
           {run && <div className="hint">带团时切换状态会写进记录。</div>}

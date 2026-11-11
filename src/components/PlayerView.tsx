@@ -232,17 +232,21 @@ export function PlayerView() {
         </aside>
       )}
       {pending && (() => {
-        // 优劣势由发起者骰两次（作者 2026-11-10 定）：优势取高、劣势取低。见证者只管「这次算不算优劣势」。
-        const diceMode = pending.jump?.dice ?? 'single';
-        const needTwo = diceMode !== 'single';
-        const need = needTwo ? 2 : 1;
+        // 多属性判定（撬锁的 智慧＋敏捷 / 力量＋敏捷）：每个属性各掷一颗，一起送回主持人。
+        // 优劣势的骰由发起者骰两次（作者 2026-11-10 定）：优势取高、劣势取低。见证者只管「这次算不算优劣势」。
+        const checkAttrs = pending.check?.attrs ?? [];
+        const isCheck = checkAttrs.length > 0;
+        const diceMode = isCheck ? 'single' : pending.jump?.dice ?? 'single';
+        const needTwo = !isCheck && diceMode !== 'single';
+        const need = isCheck ? checkAttrs.length : needTwo ? 2 : 1;
         const throwDie = (r: DiceTrayRecord) => {
           const rolls = [...(rolled?.rolls ?? []), r];
           if (rolls.length < need) { setRolled({ sides: r.sides, rolls, taken: rolls[0].value }); return; }
-          const taken = needTwo
-            ? (diceMode === 'advantage' ? Math.max(...rolls.map((x) => x.value)) : Math.min(...rolls.map((x) => x.value)))
-            : rolls[0].value;
-          const chosen = rolls.find((x) => x.value === taken)!;
+          const taken = isCheck ? rolls[0].value
+            : needTwo
+              ? (diceMode === 'advantage' ? Math.max(...rolls.map((x) => x.value)) : Math.min(...rolls.map((x) => x.value)))
+              : rolls[0].value;
+          const chosen = isCheck ? rolls[0] : rolls.find((x) => x.value === taken)!;
           setRolled({ sides: r.sides, rolls, taken });
           reportJudgmentRoll({
             type: 'judge-roll', id: pending.id, title: pending.title, sides: chosen.sides,
@@ -256,19 +260,22 @@ export function PlayerView() {
           <h3>轮到你了 · {pending.title}</h3>
           <div className="muted">
             见证者宣告了这个判定，骰子由你掷。掷了不能取消。
+            {isCheck && `要过 ${checkAttrs.map((a) => a.attr).join('＋')}，都要过（DC ${pending.check!.dc}）。`}
             {needTwo && (diceMode === 'advantage' ? '这次是优势骰：掷两颗，取高的那颗。' : '这次是劣势骰：掷两颗，取低的那颗。')}
           </div>
           {waitingSecond
             ? <div>
-                <div className="player-roll-result">第一颗 D{rolled!.sides} = {fmt(rolled!.rolls[0].value)}</div>
-                <div className="muted">再掷一颗，取{diceMode === 'advantage' ? '高' : '低'}。</div>
+                <div className="player-roll-result">{rolled!.rolls.map((r, i) => `${checkAttrs[i]?.attr ?? ''} D${rolled!.sides} = ${fmt(r.value)}`).join(' / ')}</div>
+                <div className="muted">再掷一颗{isCheck ? `（${checkAttrs[rolled!.rolls.length].attr}）` : `，取${diceMode === 'advantage' ? '高' : '低'}`}。</div>
                 <DiceTray persona="player" sides={pending.sides} onResult={throwDie} onError={() => {}} />
               </div>
             : rolled
               ? <div className="player-roll-result">
-                  {needTwo
-                    ? `D${rolled.sides} = ${rolled.rolls.map((r) => fmt(r.value)).join(' / ')} → 采信 ${fmt(rolled.taken)}`
-                    : `D${rolled.sides} = ${fmt(rolled.taken)}`}
+                  {isCheck
+                    ? rolled.rolls.map((r, i) => `${checkAttrs[i].attr} D${rolled.sides} = ${fmt(r.value)}`).join(' / ')
+                    : needTwo
+                      ? `D${rolled.sides} = ${rolled.rolls.map((r) => fmt(r.value)).join(' / ')} → 采信 ${fmt(rolled.taken)}`
+                      : `D${rolled.sides} = ${fmt(rolled.taken)}`}
                 </div>
               : <DiceTray persona="player" sides={pending.sides} onResult={throwDie} onError={() => {}} />}
           {rolled && !waitingSecond && <div className="muted">已经送到见证者那边，等他确认后广播全队。</div>}

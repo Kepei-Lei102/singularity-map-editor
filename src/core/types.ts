@@ -88,6 +88,11 @@ export interface MapObject {
   geometry?: { kind: 'wall'; a: Point; b: Point; thickness: number; material: 'wall' | 'glass' };
   opening?: { wallId: Id; offset: number; width: number; openStates: number[] };
   physical?: { blocksMove?: boolean; blocksSight?: boolean };
+  /**
+   * 门上的锁。门本身的开合还是 states；锁是正交的第二位。
+   * keyable=false = 锁芯卡死：门仍锁着，但配不出钥匙了，只能强行打开。
+   */
+  lock?: { kind: 'physical' | 'electronic'; locked: boolean; keyable: boolean };
   /** 可推动：试玩时走过去会把整件东西向同方向推一格（推书架、推车）。 */
   pushable?: boolean;
   /** 沉重：要另一个棋子也贴着这件东西，才能推。做成需要两人合力。 */
@@ -515,6 +520,17 @@ export interface PendingJudgment {
   jump?: JumpRequest | null;
   /** 这一发判定是为一次攻击开的：掷完按攻击口径结算知会。 */
   attack?: { attackerTokenId: string; targetTokenId: string; sharp?: boolean } | null;
+  /** 这一发判定是为一次撬锁/暴力开锁开的：掷完按门锁规则结算。 */
+  door?: { mapId: Id; objectId: Id; method: 'pick' | 'force' } | null;
+  /**
+   * 多属性判定的口径。没写就是单骰的普通判定。
+   * 撬锁用：智慧＋敏捷（巧力）/ 力量＋敏捷（暴力），都要过。
+   */
+  check?: {
+    attrs: { attr: string; dice: 'single' | 'advantage' | 'disadvantage' }[];
+    dc: number;
+    merge: 'single' | 'any' | 'all';
+  } | null;
   /** 开出这笔判定时的上下文（`worldContext()`）。结算前要比对：换工程/进出试玩后旧判定不能再结。 */
   context?: string;
 }
@@ -592,11 +608,12 @@ export interface PhysicalEvent {
     /** 攻击档位（attack 才有） */
     band?: 'miss' | 'hit' | 'great' | 'super';
     scale: 'd20' | 'd100';
-    attrs: { attr: string; dice: 'single' | 'advantage' | 'disadvantage'; roll?: number; used?: number; value: number }[];
+    attrs: { attr: string; dice: 'single' | 'advantage' | 'disadvantage'; roll?: number; used?: number; value: number; total?: number }[];
     merge: 'single' | 'any' | 'all';
     /** 属性判定才有 DC；攻击没有门槛，别拿 0 当哨兵 */
     dc?: number;
-    total: number;
+    /** 单属性判定的总数；多属性（如智慧＋敏捷）时各项看 attrs[i].total，这里可以省。 */
+    total?: number;
     success: boolean;
     tier: 'crit' | 'fumble' | null;
     /** 特大成功 / 特大失败；普通极值是 null */
