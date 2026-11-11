@@ -697,8 +697,13 @@ export function settleJump(req: JumpRequest, values: number[], opts: JumpSettleO
         // 作者口径（2026-11-11）：单次摔伤超过 10 点才把「归零」办成濒死；没超过就是昏厥。
         downed = oldLabel === DYING_LABEL ? 'dying' : damageRoll > 10 ? 'dying' : 'down';
         if (downed === 'dying') {
-          // 已经濒死的人再摔一次，不该被重置成满回合；保留原来的倒计时。
-          if (oldLabel !== DYING_LABEL) dt.status = t.combat ? { label: DYING_LABEL, roundsLeft: DYING_ROUNDS } : robotIncoming();
+          // 已经濒死的人再摔一次，不该被重置成满回合；已经挂着急救机器人的人，
+          // 也不该把机器人的到达时间从“还剩 60 秒”重置成“再等 3 分钟”。
+          if (oldLabel === DYING_LABEL || (oldLabel === ROBOT_LABEL && !t.combat)) {
+            // 保留原倒计时 / 原 endsAt。
+          } else {
+            dt.status = t.combat ? { label: DYING_LABEL, roundsLeft: DYING_ROUNDS } : robotIncoming();
+          }
         } else {
           delete dt.status;
           dt.down = true;

@@ -148,15 +148,17 @@ test('已濒死再摔：不重置倒计时，note 不写成昏厥', () => {
 
 test('非战斗高摔：账本挂急救机器人，不写假的“→濒死”', () => {
   setup({ hp: 0, hpMax: 6, combat: false });
+  const endsAt = Date.now() + 60000;
   api.update((d) => {
     const t = d.maps[0].tokens[0];
     t.hp = 0;
-    t.status = { label: '急救机器人正在赶来', endsAt: Date.now() + 60000 };
+    t.status = { label: '急救机器人正在赶来', endsAt };
   });
   assert.equal(api.settleJump(jumpDown({ injury: 'heavy' }), [], { injuryRoll: 12, injuryBy: 'player' }), '');
   const ev = api.getWorld().events[0];
   const tok = api.getWorld().maps[0].tokens[0];
   assert.equal(tok.status.label, '急救机器人正在赶来');
+  assert.equal(tok.status.endsAt, endsAt, '不许把急救机器人的到达时间往后推');
   assert.ok(!ev.deltas.some((d) => d.kind === 'status'), '状态实际没变，不许写 delta');
   assert.match(ev.note, /状态已经是「急救机器人正在赶来」/);
   assert.doesNotMatch(ev.note, /→ 濒死/);

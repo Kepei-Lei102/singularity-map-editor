@@ -55,7 +55,7 @@ function PendingJudgmentPanel() {
   // 免得「结算了但忘了通知玩家窗口」这类漏路径再出现。
   const finish = (input: JudgmentRollInput, byStandIn: boolean) => {
     const err = settlePendingJudgment(input, byStandIn);
-    if (err) setMessage(err);
+    if (err) { setMessage(err); setStandInRolls([]); }
   };
   const broadcast = () => {
     const raw = getUI().judgmentResult;
