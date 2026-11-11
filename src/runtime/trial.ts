@@ -555,6 +555,7 @@ function openFallPending(req: JumpRequest, check: JumpCheckRecord | null, place:
   const tok = m?.tokens.find((x) => x.id === req.tokenId);
   const pc = tok?.pcId ? w.party.find((p) => p.id === tok.pcId) : null;
   if (!t || !m || !tok || !pc) return '找不到摔伤骰的对象';
+  if (!playerWindowFor(pc.id)) return '没有试玩玩家窗口';
   const injury = req.injury ?? injuryTier(req.fall);
   const sides = INJURY_DICE[injury];
   const pos = tokenPosition(tok);
@@ -585,6 +586,24 @@ function beginFall(req: JumpRequest, check: JumpCheckRecord | null, checkBy: Jum
   return settleJump(req, check?.rolls ?? [], { injuryRoll: dmg, injuryBy: 'host', checkBy });
 }
 
+/** 结算前确认地图/棋子还在；广播前先查，避免“骰子已经发出去、账却没落”。 */
+function jumpTarget(req: JumpRequest): { w: World; m: GameMap; tok: Token; pc: PC | null } | null {
+  const t = tr();
+  if (!t) return null;
+  const w = getWorld();
+  const m = findMap(w, t.mapId);
+  if (!m) return null;
+  const tok = m.tokens.find((x) => x.id === req.tokenId);
+  if (!tok) return null;
+  const pc = tok.pcId ? w.party.find((p) => p.id === tok.pcId) ?? null : null;
+  return { w, m, tok, pc };
+}
+
+/** 广播第一颗骰之前先做这个；失败就一个字都不广播。 */
+function jumpPrecheck(req: JumpRequest): string | null {
+  return jumpTarget(req) ? null : '找不到跳跃对象';
+}
+
 /**
  * 按掷出来的点数结算一次跳跃。
  * - 成功：挪棋子、扣移动点，记一条事件；
@@ -610,7 +629,7 @@ export function settleJump(req: JumpRequest, values: number[], opts: JumpSettleO
   const landed = req.forcedFall ? false : roll === null || roll.success;
   const dir = dirOf(req.dx, req.dy);
   const before = tokenPosition(tok);
-  const from = { x: before.x, y: before.y };
+  const gridFrom = { x: Math.floor(before.x), y: Math.floor(before.y) };
   const done = { across: '跳过去', up: '攀上去', down: '跳下去' }[req.kind];
   const fail = { across: '没跳过去', up: '没攀上去', down: '没跳下去' }[req.kind];
   const landingStep = req.landingStep ?? Math.abs(req.landing.x - Math.floor(tok.x)) + Math.abs(req.landing.y - Math.floor(tok.y));
@@ -662,6 +681,7 @@ export function settleJump(req: JumpRequest, values: number[], opts: JumpSettleO
     const pool = p ? hpOf(p) : tokenHP;
     let hpBefore: number | null = null;
     let hpAfter: number | null = null;
+    let oldLabel: string | null = null;
     let downed: Downed | null = null;
     const deltas: Delta[] = [];
 
@@ -672,12 +692,13 @@ export function settleJump(req: JumpRequest, values: number[], opts: JumpSettleO
       if (hpAfter !== hpBefore) {
         deltas.push({ kind: 'hp', id: dt.pcId ?? dt.id, name: dt.name, from: hpBefore, to: hpAfter });
       }
-      const oldLabel = dt.status?.label ?? (dt.down ? downedLabel('down') : null);
+      oldLabel = dt.status?.label ?? (dt.down ? downedLabel('down') : null);
       if (hpAfter === 0) {
         // 作者口径（2026-11-11）：单次摔伤超过 10 点才把「归零」办成濒死；没超过就是昏厥。
         downed = oldLabel === DYING_LABEL ? 'dying' : damageRoll > 10 ? 'dying' : 'down';
         if (downed === 'dying') {
-          dt.status = t.combat ? { label: DYING_LABEL, roundsLeft: DYING_ROUNDS } : robotIncoming();
+          // 已经濒死的人再摔一次，不该被重置成满回合；保留原来的倒计时。
+          if (oldLabel !== DYING_LABEL) dt.status = t.combat ? { label: DYING_LABEL, roundsLeft: DYING_ROUNDS } : robotIncoming();
         } else {
           delete dt.status;
           dt.down = true;
@@ -693,8 +714,9 @@ export function settleJump(req: JumpRequest, values: number[], opts: JumpSettleO
       setTokenPosition(dm, dt, to);
       dt.facing = dir;
       const at2 = tokenPosition(dt);
-      if (from.x !== at2.x || from.y !== at2.y) {
-        deltas.push({ kind: 'moved', id: dt.pcId ?? dt.id, name: dt.name, from, to: at2 });
+      const gridTo = { x: Math.floor(at2.x), y: Math.floor(at2.y) };
+      if (gridFrom.x !== gridTo.x || gridFrom.y !== gridTo.y) {
+        deltas.push({ kind: 'moved', id: dt.pcId ?? dt.id, name: dt.name, from: gridFrom, to: gridTo });
       }
     }
     if (pointsBefore !== null && pointsAfter !== null && pointsBefore !== pointsAfter) {
@@ -706,9 +728,15 @@ export function settleJump(req: JumpRequest, values: number[], opts: JumpSettleO
       note = fallInfo ? describePitFall(fallInfo, damageRoll) : describeInjury(req.fall, damageRoll);
       if (fallInfo?.nextFloor) note += '；掉到下一层，棋子要见证者手动挪';
       if (!pool) note += '；没有血条，摔伤没落地';
-      else if (hpAfter === 0) note += damageRoll > 10 ? '；单次摔伤超过 10 点，HP 归零 → 濒死' : '；HP 归零 → 昏厥';
-      else if (damageRoll > 10) note += `；摔伤超过 10 点，但 HP 还剩 ${hpAfter}，没进濒死`;
-      if (pool && hpBefore !== null && hpAfter !== null && hpBefore < damageRoll) note += `；实扣 ${hpBefore}（掷出 ${damageRoll}）`;
+      else if (hpAfter === 0) {
+        const newLabel = downedLabel(downed ?? 'down');
+        if (oldLabel === newLabel) {
+          note += oldLabel === DYING_LABEL ? '；本来就已经是濒死，倒计时没有重置' : '；本来就已经是昏厥，状态没有变';
+        } else {
+          note += damageRoll > 10 ? '；单次摔伤超过 10 点，HP 归零 → 濒死' : '；HP 归零 → 昏厥';
+        }
+      } else if (damageRoll > 10) note += `；摔伤超过 10 点，但 HP 还剩 ${hpAfter}，没进濒死`;
+      if (pool && hpBefore !== null && hpAfter !== null && hpBefore > 0 && hpBefore < damageRoll) note += `；实扣 ${hpBefore}（掷出 ${damageRoll}）`;
     }
 
     const actor = p
@@ -1226,11 +1254,17 @@ export interface JudgmentRollInput {
 /** 见证者确认这颗骰子：先落地（跳跃挪棋子 / 攻击扣血），再广播，最后把两边的等待状态一起收掉。 */
 /** 广播这一棒的骰子；标题/裁定沿用这笔判定。 */
 function publishPendingRoll(p: PendingJudgment, input: JudgmentRollInput, byStandIn: boolean): string | null {
+  // 跳跃的优/劣势是同一项属性掷两次：正式判定也要留两颗，不能只留采信的那颗。
+  const jumpDice = p.jump?.dice && p.jump.dice !== 'single' && (input.values?.length ?? 0) > 1 ? p.jump : null;
+  const values = p.check ? (input.values ?? [input.value]) : jumpDice && p.jump?.attr ? input.values : undefined;
+  const attrs = p.check
+    ? p.check.attrs.map((a) => a.attr)
+    : values && p.jump?.attr ? values.map(() => p.jump!.attr!) : undefined;
   return publishJudgment({
     title: p.title, ruling: p.ruling, recipients: getWorld().party.map((x) => x.id),
     roll: {
       id: input.rollId, sides: input.sides as never, value: input.value,
-      ...(p.check ? { values: input.values ?? [input.value], attrs: p.check.attrs.map((a) => a.attr) } : {}),
+      ...(values ? { values, attrs } : {}),
       tens: input.tens ?? null, units: input.units ?? null,
       material: input.material as never, persona: byStandIn ? 'witness' : 'player', seed: input.seed,
     },
@@ -1248,7 +1282,8 @@ export function settlePendingJudgment(input: JudgmentRollInput, byStandIn = fals
   // 第二棒：属性骰已经落过，这一颗是摔伤骰；结算时才挪棋子/扣血，最后一条总事件。
   if (p.fall) {
     const f = p.fall;
-    // 先把第二颗骰广播出去，再落总事件：玩家看到的是“两颗都掷完 → 账本一条”。
+    // 先确认棋子还在，再广播第二颗；否则会出现“第二颗已发、总事件落不下去”。
+    if (jumpPrecheck(f.req)) { closePendingJudgment(); return '找不到棋子'; }
     const err = publishPendingRoll(p, input, byStandIn);
     if (err) return err;
     const e = settleJump(f.req, f.check?.rolls ?? [], {
@@ -1256,16 +1291,16 @@ export function settlePendingJudgment(input: JudgmentRollInput, byStandIn = fals
       injuryBy: byStandIn ? 'witness' : 'player',
       checkBy: f.check?.rolledBy ?? 'host',
     });
-    if (e) return e;
+    if (e) { closePendingJudgment(); return e; }
     closePendingJudgment();
     return null;
   }
   if (p.jump) {
     const req = p.jump;
-    const w = getWorld();
-    const m = findMap(w, tr()?.mapId ?? '');
-    const tok = m?.tokens.find((x) => x.id === req.tokenId);
-    const pc = tok?.pcId ? w.party.find((x) => x.id === tok.pcId) : null;
+    // 第一颗骰也不许先发再失败：先查棋子/地图。
+    const target = jumpTarget(req);
+    if (!target) { closePendingJudgment(); return '找不到跳跃对象'; }
+    const pc = target.pc;
     const roll = req.attr ? judgeValue({ attr: req.attr, dice: req.dice ?? 'single', why: '' }, pc ?? ({ attributes: {} } as never), diceValues) : null;
     const landed = req.forcedFall ? false : roll === null || roll.success;
     const checkBy = byStandIn ? 'witness' as const : 'player' as const;
@@ -1273,14 +1308,20 @@ export function settlePendingJudgment(input: JudgmentRollInput, byStandIn = fals
     if (first) return first;
     closePendingJudgment();
     if (!landed) {
-      if (byStandIn) {
-        // 见证者代掷：没有玩家窗口可以接第二棒，直接按见证者的摔伤骰落账。
-        const e = settleJump(req, diceValues, { injuryRoll: rollInjury(req.injury ?? injuryTier(req.fall)), injuryBy: 'witness', checkBy });
+      const tier = req.injury ?? injuryTier(req.fall);
+      // 见证者代掷，或者玩家窗口已经关了：没有第二棒可等，见证者现掷并落账。
+      if (byStandIn || !pc || !playerWindowFor(pc.id)) {
+        const e = settleJump(req, diceValues, { injuryRoll: rollInjury(tier), injuryBy: 'witness', checkBy });
         return e || null;
       }
       const record = roll && req.attr ? jumpCheckRecord(req, roll, checkBy) : null;
       const e = openFallPending(req, record, p.place ?? null);
-      return e || null;
+      if (e) {
+        // 第二棒开不出来（窗口/对象刚好失效）：退回见证者现掷，至少保住一条总事件。
+        const fallback = settleJump(req, diceValues, { injuryRoll: rollInjury(tier), injuryBy: 'witness', checkBy });
+        return fallback || null;
+      }
+      return null;
     }
     const e = settleJump(req, diceValues, { checkBy });
     return e || null;
@@ -1495,6 +1536,7 @@ export function trialRescue(targetTokenId: string, opts: { roll?: number } = {})
     setTr({ acted: { ...(t.acted ?? {}), [pl.tokenId]: true }, msg: `救治失败（D100=${roll === 100 ? '000' : roll}）：${target.name} 还是没醒过来` });
     return null;
   }
+  let rescuedHp = RESCUED_HP;
   update((d) => {
     const dm = findMap(d, t.mapId)!;
     const dt = dm.tokens.find((x) => x.id === targetTokenId)!;
@@ -1516,6 +1558,7 @@ export function trialRescue(targetTokenId: string, opts: { roll?: number } = {})
     }
     delete dt.status;
     delete dt.down;
+    rescuedHp = hpAfter;
     if (hpBefore !== hpAfter) deltas.push({ kind: 'hp', id: dt.pcId ?? dt.id, name: dt.name, from: hpBefore, to: hpAfter });
     if (oldLabel !== null) deltas.push({ kind: 'status', id: dt.id, name: dt.name, from: oldLabel, to: null });
     appendEvent(d, newEvent(d, at, actor, { id: '119', name: '救治', source: '动作库' }, {
@@ -1523,10 +1566,10 @@ export function trialRescue(targetTokenId: string, opts: { roll?: number } = {})
       check: { kind: 'check', scale: 'd100', attrs: [], merge: 'single', total: roll, success: true, tier: r.crit ? 'crit' : null,
         outcome: r.crit ? '特大成功，救回来了' : '救回来了', rolledBy: 'host' },
       deltas,
-      note: `救治成功（D100=${roll === 100 ? '000' : roll}${r.crit ? '，特大成功' : ''}）：${target.name} 被拉起来了，1 HP`,
+      note: `救治成功（D100=${roll === 100 ? '000' : roll}${r.crit ? '，特大成功' : ''}）：${target.name} 被拉起来了，现在 ${hpAfter} HP`,
     }));
   });
-  setTr({ acted: { ...(t.acted ?? {}), [pl.tokenId]: true }, msg: `救治成功（D100=${roll === 100 ? '000' : roll}${r.crit ? '，特大成功' : ''}）：${target.name} 被拉起来了，1 HP` });
+  setTr({ acted: { ...(t.acted ?? {}), [pl.tokenId]: true }, msg: `救治成功（D100=${roll === 100 ? '000' : roll}${r.crit ? '，特大成功' : ''}）：${target.name} 被拉起来了，现在 ${rescuedHp} HP` });
   return null;
 }
 

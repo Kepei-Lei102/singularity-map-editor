@@ -85,14 +85,25 @@ function combatNoticeFor(pcId: string): CombatNotice | null {
   };
 }
 
+/** 玩家端要掷几颗：只看公开字段，不看被剥掉的 jump。 */
+export function playerDiceMode(p: PendingJudgment): PendingJudgment['dice'] {
+  // 多属性判定每个属性各一颗；优/劣势只会出现在单属性/跳跃上。
+  if (p.check?.attrs.length) return 'single';
+  return p.dice ?? p.jump?.dice ?? 'single';
+}
+
 /** 只把「落在你身上」的待掷判定发给这个玩家；别人的判定他一概不知道。 */
 /** 发给玩家的判定副本：去掉主持端内部字段（context 是内部上下文标记）。 */
 function forPlayer(p: PendingJudgment): PendingJudgment {
   const copy = { ...p };
   delete (copy as { context?: string }).context;
-  // 玩家 UI 只需要 check（画“要过什么、DC 多少”）；door / fall 是主持人侧的落点和结果，不给他。
+  // 玩家 UI 只需要 title/ruling/sides 和“掷几次”；jump / door / fall 都是主持人侧的落点和结算数据，不给他。
+  const dice = playerDiceMode(p);
+  delete copy.jump;
   delete copy.door;
   delete copy.fall;
+  delete copy.place;
+  copy.dice = dice;
   return copy;
 }
 
@@ -322,8 +333,12 @@ function sameContextWindow(entry: { trialContext?: string }): boolean {
 
 /** 开出判定后，直接把「轮到你了」推到对应玩家的窗口。 */
 /** 这个角色有没有开着的玩家窗口：有就让他自己掷，没有就见证者代掷。 */
-export function playerWindowFor(pcId: string): boolean {
-  for (const e of players.values()) if (e.pcId === pcId && e.win && !e.win.closed) return true;
+export function playerWindowFor(pcId: string, trialContext: string | null = getUI().trial ? worldContext() : null): boolean {
+  for (const e of players.values()) {
+    if (e.pcId !== pcId || !e.win || e.win.closed) continue;
+    // 试玩窗口和真实窗口不能互相冒充：只认当前上下文的那个。
+    if ((e.trialContext ?? null) === trialContext) return true;
+  }
   return false;
 }
 
@@ -334,7 +349,7 @@ export function pushJudgmentRequest(pcId: string): void {
     if (entry.pcId !== pcId || !entry.win || entry.win.closed || !sameContextWindow(entry)) continue;
     const p = pendingFor(pcId, entry.trialContext);
     if (!p) continue;
-    const judgment = forPlayer({ ...p, jump: null });
+    const judgment = forPlayer(p);
     const msg: SyncMsg = { type: 'judge-request', judgment, __ts: 'ts-map', seq: rand(), from: SESSION, inst: INST, born: BORN };
     try { entry.win.postMessage(msg, target()); } catch { /* closed */ }
     void binding;

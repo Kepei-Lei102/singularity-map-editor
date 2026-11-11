@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { listenAsPlayer, reportJudgmentRoll, send } from '../runtime/sync';
+import { listenAsPlayer, playerDiceMode, reportJudgmentRoll, send } from '../runtime/sync';
 import type { CombatNotice, Focus, PendingJudgment, PublicSkill, SkillCast, Utterance, World } from '../core/types';
 import { TIER_LABEL } from '../core/types';
 import { MapCanvas } from './MapCanvas';
@@ -236,7 +236,7 @@ export function PlayerView() {
         // 优劣势的骰由发起者骰两次（作者 2026-11-10 定）：优势取高、劣势取低。见证者只管「这次算不算优劣势」。
         const checkAttrs = pending.check?.attrs ?? [];
         const isCheck = checkAttrs.length > 0;
-        const diceMode = isCheck ? 'single' : pending.jump?.dice ?? 'single';
+        const diceMode = playerDiceMode(pending);
         const needTwo = !isCheck && diceMode !== 'single';
         const need = isCheck ? checkAttrs.length : needTwo ? 2 : 1;
         const throwDie = (r: DiceTrayRecord) => {

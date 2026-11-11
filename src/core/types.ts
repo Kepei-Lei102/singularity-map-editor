@@ -549,6 +549,8 @@ export interface PendingJudgment {
   jump?: JumpRequest | null;
   /** 第二棒：属性骰已经掷完，等玩家掷摔伤骰；结算时才挪棋子/扣血。 */
   fall?: FallRequest | null;
+  /** 只告诉玩家这颗骰要掷几次（优/劣势）；不含落点、摔伤档等结算数据。 */
+  dice?: 'single' | 'advantage' | 'disadvantage';
   /** 这一发判定是为一次攻击开的：掷完按攻击口径结算知会。 */
   attack?: { attackerTokenId: string; targetTokenId: string; sharp?: boolean } | null;
   /** 这一发判定是为一次撬锁/暴力开锁开的：掷完按门锁规则结算。 */

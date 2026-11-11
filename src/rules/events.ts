@@ -81,7 +81,9 @@ function deltaText(d: Delta): string | null {
 
 /** 结果那一句：「【动作】失败：B 的 HP 从 8 改为 3；A 得知 …」。 */
 export function resultText(ev: PhysicalEvent): string {
-  const head = `【${ev.action.name}】${ev.check ? tierText(ev.check) : '完成'}`;
+  // 没有属性骰但记了摔伤骰的事件（必摔的往下跳）不是“完成”，是失败。
+  const verdict = ev.check ? tierText(ev.check) : ev.damage?.kind === 'fall' ? '失败' : '完成';
+  const head = `【${ev.action.name}】${verdict}`;
   const parts = ev.deltas.map(deltaText).filter((x): x is string => !!x);
   const know = ev.knowledge?.length
     ? `${ev.actor.name} 得知 ${ev.knowledge.map((k) => k.label).join('、')}`

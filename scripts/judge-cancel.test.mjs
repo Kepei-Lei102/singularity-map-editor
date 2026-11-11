@@ -74,6 +74,42 @@ test('玩家自己掷的正式判定也能广播（persona 是「谁掷的」，
   assert.match(api.publishJudgment(base, ctx) ?? '', /已经发布过/);
 });
 
+test('world 广播不把 jump/fall 结算数据交给玩家', () => {
+  party();
+  api.openPlayerWindow('a');
+  const win = windows.at(-1);
+  clear();
+  api.openJudgment({
+    title: '跳跃：往下 6 格', ruling: '', sides: 20, subjectId: 'a',
+    jump: { tokenId: 'ta', dx: 0, dy: 1, kind: 'down', cells: 6, fall: 6, attr: '敏捷', dice: 'single', landing: { x: 2, y: 3 }, injury: 'heavy', moveMultiplier: 1 },
+    place: { mapId: 'm1', x: 1, y: 1 },
+  });
+  api.send({ type: 'world' });
+  const msg = win.got.find((m) => m.type === 'world');
+  assert.ok(msg, '应该收到 world');
+  const p = msg.world.pendingJudgment;
+  assert.ok(p, 'world 里应该带待掷判定');
+  assert.equal(p.jump, undefined, '落点/摔伤档不能给玩家');
+  assert.equal(p.fall, undefined);
+  assert.equal(p.place, undefined, '判定地点也不给');
+  assert.equal(p.dice, 'single', '只给“掷几次”');
+});
+
+test('playerWindowFor 只认当前上下文：真实窗口不能冒充试玩窗口', () => {
+  party();
+  api.openPlayerWindow('a');
+  assert.equal(api.playerWindowFor('a'), true, '真实上下文有窗口');
+  api.beginSandbox();
+  try {
+    assert.equal(api.playerWindowFor('a', api.worldContext()), false, '真实窗口不算试玩窗口');
+    api.openPlayerWindow('a', true);
+    assert.equal(api.playerWindowFor('a', api.worldContext()), true, '试玩上下文有窗口');
+  } finally {
+    api.endSandbox();
+  }
+  assert.equal(api.playerWindowFor('a'), true, '回到真实上下文还能找到真实窗口');
+});
+
 test('取消判定并通知：主持端清掉等骰子的状态，玩家窗口收到 judge-cancel', () => {
   party();
   api.openPlayerWindow('a');
