@@ -247,6 +247,8 @@ test('跨上下文结算不许先落地：跳跃判定不会在另一个世界�
   const before = api.getWorld().maps[0].tokens.find((t) => t.id === 'ta').x;
   api.beginSandbox();
   try {
+    // 让沙盒里真的能落地：删掉守卫的话，settleJump 会先把棋子挪过去，再被 publish 挡下
+    api.setUI({ trial: { mapId: api.getWorld().maps[0].id, players: [{ tokenId: 'ta', pcId: 'a', name: '甲' }], current: 0 } });
     const err = api.settlePendingJudgment({ rollId: 'r9', sides: 20, value: 11, tens: null, units: null, material: 'wood', seed: 9 }, false);
     assert.match(err ?? '', /切换/, '必须先挡住，而不是去另一个世界落地');
     assert.equal(api.getWorld().maps[0].tokens.find((t) => t.id === 'ta').x, before);
@@ -254,4 +256,41 @@ test('跨上下文结算不许先落地：跳跃判定不会在另一个世界�
   } finally {
     api.endSandbox();
   }
+});
+
+test('来源窗口也要对上下文：真实窗口不能替试玩判定掷，试玩标记窗口不能替真实判定掷', () => {
+  // A) 主持人试玩中：真实窗口拿试玩判定 id 掷 → 不许落
+  party();
+  api.setUI({ mapId: api.getWorld().maps[0].id });
+  api.openPlayerWindow('a');
+  const real = windows.at(-1);
+  api.beginSandbox();
+  try {
+    api.setUI({ trial: { mapId: api.getWorld().maps[0].id, players: [{ tokenId: 'ta', pcId: 'a', name: '甲' }], current: 0 } });
+    api.openPlayerWindow('a', true);
+    const trialWin = windows.at(-1);
+    api.openJudgment({ title: '试玩判定', ruling: '', sides: 20, subjectId: 'a' });
+    const id = api.getUI().pendingJudgment.id;
+    const msg = { id, title: '试玩判定', sides: 20, value: 12, tens: null, units: null, material: 'wood', seed: 1, rollId: 'r1', from: api.SESSION };
+    real.got.length = 0;
+    trialWin.got.length = 0;
+    api.onJudgeRoll(msg, real);
+    assert.equal(api.getUI().judgmentResult, null, '真实窗口不能替试玩判定掷');
+    api.onJudgeRoll(msg, trialWin);
+    assert.equal(api.getUI().judgmentResult?.value, 12, '试玩窗口自己掷要能落');
+  } finally {
+    api.endSandbox();
+    api.setUI({ trial: null });
+  }
+
+  // B) 真实上下文里用 trial=true 开的窗口（trialContext 非空）拿真实判定 id 掷 → 不许落
+  party();
+  api.setUI({ mapId: api.getWorld().maps[0].id });
+  api.setUI({ trial: null });
+  api.openPlayerWindow('a', true); // 没有试玩，却开了「试玩窗口」
+  const fakeTrial = windows.at(-1);
+  api.openJudgment({ title: '正式判定', ruling: '', sides: 20, subjectId: 'a' });
+  const id2 = api.getUI().pendingJudgment.id;
+  api.onJudgeRoll({ id: id2, title: '正式判定', sides: 20, value: 7, tens: null, units: null, material: 'wood', seed: 2, rollId: 'r2', from: api.SESSION }, fakeTrial);
+  assert.equal(api.getUI().judgmentResult, null, '试玩标记窗口不能替真实判定掷');
 });

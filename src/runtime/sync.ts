@@ -416,8 +416,10 @@ export function onJudgeRoll(m: Extract<SyncMsg, { type: 'judge-roll' }>, source:
   // 这颗骰子必须来自绑给「判定角色」的那个窗口：别的玩家窗口、甚至别的标签页塞来的都不算。
   const entry = [...players.values()].find((e) => e.win === source);
   if (!entry || entry.pcId !== p.subjectId) return;
-  // 也不能跨上下文：试玩窗口不能替真实判定掷，反之亦然。
+  // 也不能跨上下文：判定自己的上下文要对，来源窗口也得是同一类窗口——
+  // 试玩窗口不能替真实判定掷，真实窗口也不能替试玩判定掷。
   if (p.context !== worldContext()) return;
+  if (!sameContextWindow(entry)) return;
   // 这里以前只比一个 id：任何同源标签页（甚至 BroadcastChannel，source 是 null 会跳过来源检查）
   // 都能往待掷判定里塞一颗骰子，包括不可能的 D20=999。骰子是这个程序最核心的承诺，得验。
   if (m.from !== SESSION) return;
