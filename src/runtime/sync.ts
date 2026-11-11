@@ -90,8 +90,9 @@ function combatNoticeFor(pcId: string): CombatNotice | null {
 function forPlayer(p: PendingJudgment): PendingJudgment {
   const copy = { ...p };
   delete (copy as { context?: string }).context;
-  // 玩家 UI 只需要 check（画“要过什么、DC 多少”）；door 是主持人侧的落点，不给他。
+  // 玩家 UI 只需要 check（画“要过什么、DC 多少”）；door / fall 是主持人侧的落点和结果，不给他。
   delete copy.door;
+  delete copy.fall;
   return copy;
 }
 

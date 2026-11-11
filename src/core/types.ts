@@ -499,10 +499,39 @@ export interface JumpRequest {
   unitPrice?: number;
   /** 失败摔伤档；默认按 fall 算。 */
   injury: 'light' | 'medium' | 'heavy' | 'brutal' | null;
+  /** 不用检定也必定摔下去（往下 6 格以上）。没有它，无属性检定会被当成“成功落地”。 */
+  forcedFall?: boolean;
   /** 移动点单价倍数。 */
   moveMultiplier: number;
   /** 做完要不要占掉这回合的行动点（往上 2 格以上、没【攀爬】、以及 12 格以上都要占）。 */
   usesAction?: boolean;
+}
+
+/** 跳跃判定失败后，摔伤骰那一棒的记录。 */
+export type FallInjury = 'light' | 'medium' | 'heavy' | 'brutal';
+
+/** 已经掷完的属性检定，原样带进第二个判定和最终事件。 */
+export interface JumpCheckRecord {
+  attr: string;
+  dice: 'single' | 'advantage' | 'disadvantage';
+  rolls: number[];
+  used: number;
+  value: number;
+  total: number;
+  dc: number;
+  success: boolean;
+  tier: 'crit' | 'fumble' | null;
+  outcome: string;
+  rolledBy: 'player' | 'witness' | 'host';
+}
+
+/** 摔伤骰的待掷请求：第一颗属性骰已经掷完（或本来就不用掷），等第二颗。 */
+export interface FallRequest {
+  mapId: Id;
+  tokenId: Id;
+  req: JumpRequest;
+  check: JumpCheckRecord | null;
+  injury: FallInjury;
 }
 
 export interface PendingJudgment {
@@ -518,6 +547,8 @@ export interface PendingJudgment {
   standIn?: boolean;
   /** 这一发判定是为一次跳跃开的：掷完要按结果真的挪棋子/扣血。 */
   jump?: JumpRequest | null;
+  /** 第二棒：属性骰已经掷完，等玩家掷摔伤骰；结算时才挪棋子/扣血。 */
+  fall?: FallRequest | null;
   /** 这一发判定是为一次攻击开的：掷完按攻击口径结算知会。 */
   attack?: { attackerTokenId: string; targetTokenId: string; sharp?: boolean } | null;
   /** 这一发判定是为一次撬锁/暴力开锁开的：掷完按门锁规则结算。 */
@@ -633,6 +664,8 @@ export interface PhysicalEvent {
     extra?: { roll: number; by: 'witness' | 'auto' };
   };
   deltas: Delta[];
+  /** 摔伤骰：不是属性检定，单独记骰面和档位，账本和卡片都读它。 */
+  damage?: { kind: 'fall'; sides: 4 | 6 | 8 | 10 | 12 | 20; roll: number; by: 'player' | 'witness' | 'host'; tier: FallInjury };
   /** A 得到的信息：不改变世界，只改变认知 */
   knowledge?: { subject: Id; label: string; tier: string }[];
   /** 见证者当场写的裁定 */

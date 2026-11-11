@@ -282,6 +282,20 @@ test('救治：解锁急救技能才能做，D100 投 1 失败', () => {
   const tb = api.findMap(api.getWorld(), m.id).tokens.find((k) => k.id === 'tb');
   assert.equal(tb.status, undefined);
   assert.equal(api.getWorld().party.find((p) => p.id === 'b').hp, 1);
+  // 救治也进事件账本：失败一条、成功一条；成功那条记 HP 和状态变化。
+  const events = api.getWorld().events ?? [];
+  assert.equal(events.length, 2);
+  const fail = events.find((e) => e.check && e.check.success === false);
+  const ok = events.find((e) => e.check && e.check.success === true);
+  assert.equal(fail.action.name, '救治');
+  assert.equal(fail.check.scale, 'd100');
+  assert.deepEqual(fail.deltas, []);
+  assert.match(fail.note, /没醒过来/);
+  assert.equal(ok.target.name, '伤员');
+  assert.ok(ok.deltas.some((d) => d.kind === 'hp' && d.from === 0 && d.to === 1));
+  assert.ok(ok.deltas.some((d) => d.kind === 'status' && d.from === '濒死' && d.to === null));
+  assert.equal(ok.check.outcome, '救回来了');
+  assert.doesNotThrow(() => api.checkWorld(api.getWorld()), '救治事件要能过 schema');
 });
 
 test('没解锁急救技能的人不能救治', () => {

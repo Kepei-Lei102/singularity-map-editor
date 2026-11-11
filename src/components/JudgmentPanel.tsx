@@ -110,8 +110,8 @@ function PendingJudgmentPanel() {
             : diceValues.length > 1
               ? `D${result.sides} = ${diceValues.map(fmt).join(' / ')} → 采信 ${fmt(result.value)}`
               : `D${result.sides} = ${fmt(result.value)}`}
-          {p.jump && (
-            <button onClick={broadcast}>按结果执行（挪棋子 / 扣血）</button>
+          {(p.jump || p.fall) && (
+            <button onClick={broadcast}>按结果执行（{p.fall ? '摔伤 / 落点' : '挪棋子 / 扣血'}）</button>
           )}
           {p.attack && (
             <button onClick={broadcast}>按结果执行（扣血 / 倒地）</button>

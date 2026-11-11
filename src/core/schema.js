@@ -673,6 +673,14 @@ export function checkWorld(w, migrated = false) {
         optStr(e.check.outcome, `${ca}.outcome`);
         if (e.check.rolledBy !== undefined) oneOf(e.check.rolledBy, ['player', 'witness', 'host'], `${ca}.rolledBy`);
       }
+      if (e.damage !== undefined) {
+        const da = `${ea}.damage`;
+        obj(e.damage, da); oneOf(e.damage.kind, ['fall'], `${da}.kind`);
+        oneOf(e.damage.sides, [4, 6, 8, 10, 12, 20], `${da}.sides`);
+        int(e.damage.roll, `${da}.roll`, 1, e.damage.sides);
+        oneOf(e.damage.by, ['player', 'witness', 'host'], `${da}.by`);
+        oneOf(e.damage.tier, ['light', 'medium', 'heavy', 'brutal'], `${da}.tier`);
+      }
       optStr(e.ruling, `${ea}.ruling`); optStr(e.note, `${ea}.note`);
     });
     if (w.events.length > 200) fail('events', `事件账本最多留 200 条，现在 ${w.events.length} 条`);

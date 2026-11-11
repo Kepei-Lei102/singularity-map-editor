@@ -50,6 +50,7 @@ export function openJudgment(input: {
   title: string; ruling: string; sides: PendingJudgment['sides']; subjectId: string;
   place?: { mapId: string; x: number; y: number } | null;
   jump?: import('../core/types').JumpRequest | null;
+  fall?: import('../core/types').FallRequest | null;
   attack?: { attackerTokenId: string; targetTokenId: string; sharp?: boolean } | null;
   door?: { mapId: string; objectId: string; method: 'pick' | 'force' } | null;
   check?: { attrs: { attr: string; dice: 'single' | 'advantage' | 'disadvantage' }[]; dc: number; merge: 'single' | 'any' | 'all' } | null;
@@ -67,6 +68,7 @@ export function openJudgment(input: {
       id: uid(), title: input.title.trim(), ruling: input.ruling, sides: input.sides,
       subjectId: input.subjectId, place: input.place ?? null, at: Date.now(), session: getWorld().session,
       jump: input.jump ?? null,
+      fall: input.fall ?? null,
       attack: input.attack ?? null,
       door: input.door ?? null,
       check: input.check ?? null,
