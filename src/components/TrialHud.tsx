@@ -164,6 +164,8 @@ export function TrialHud() {
           if (!doors.length) return <span className="muted">身边 1 格内没有看得见的门</span>;
           return doors.map((d) => d.open
             ? <span key={d.objectId} className="muted">{d.name} 开着</span>
+            : d.locked && d.kind === 'electronic'
+              ? <span key={d.objectId} className="muted">{d.name} 电子锁（这轮还没接开锁）</span>
             : d.locked && !d.keyable
               ? <span key={d.objectId} className="inline">
                   <span className="muted">{d.name} 锁芯卡死（巧力撬不开）</span>

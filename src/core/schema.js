@@ -392,6 +392,7 @@ export function checkWorld(w, migrated = false) {
         obj(o.opening, `${oa}.opening`);
         arr(o.opening.openStates, `${oa}.opening.openStates`).forEach(i => int(i, `${oa}.opening.openStates`, 0, o.states.length - 1));
         if (new Set(o.opening.openStates).size !== o.opening.openStates.length) fail(oa, '打开状态重复');
+        if (o.opening.openStates.length === 0) fail(`${oa}.opening.openStates`, '门至少要有一个打开状态');
       }
       if (isArchitectureObject(o) && (o.kind !== 'object' || o.geometry && o.opening || o.pushable || o.heavy)) fail(oa, '建筑组件必须是静态物件，不能同时是墙和门洞');
       if (o.physical !== undefined) { obj(o.physical, `${oa}.physical`); optBool(o.physical.blocksMove, `${oa}.physical.blocksMove`); optBool(o.physical.blocksSight, `${oa}.physical.blocksSight`); }
@@ -556,6 +557,13 @@ export function checkWorld(w, migrated = false) {
       }
       const r = obj(j.roll, `${at}.roll`); id(r.id, at); oneOf(r.sides, [4,6,8,10,12,20,100], at); int(r.value, at, 1, r.sides); oneOf(r.material, ['wood','plastic','metal','stone','rubber'], at); oneOf(r.persona, ['witness','player'], at); int(r.seed, `${at}.roll.seed`, 0, Number.MAX_SAFE_INTEGER); optStr(r.algorithm, at);
       if (r.sides === 100) { int(r.tens, at, 0, 90); int(r.units, at, 0, 9); if (r.tens % 10 || (r.tens + r.units || 100) !== r.value) fail(at, '百分骰结果不一致'); }
+      if (r.values !== undefined) {
+        arr(r.values, `${at}.roll.values`).forEach((v, k) => int(v, `${at}.roll.values[${k}]`, 1, r.sides));
+        if (r.values.length < 2) fail(`${at}.roll.values`, '多属性判定至少两颗');
+        if (!r.values.includes(r.value)) fail(`${at}.roll.values`, '采信值必须在掷出的骰子里');
+        if (!Array.isArray(r.attrs) || r.attrs.length !== r.values.length) fail(`${at}.roll.attrs`, '属性名要和骰子一一对应');
+        r.attrs.forEach((a, k) => str(a, `${at}.roll.attrs[${k}]`));
+      } else if (r.attrs !== undefined) fail(`${at}.roll.attrs`, '没有多颗骰子就不该带属性名');
     });
     unique(w.judgments, 'judgments');
   }
@@ -615,6 +623,7 @@ export function checkWorld(w, migrated = false) {
         if (e.check.kind !== undefined) oneOf(e.check.kind, ['check', 'attack'], `${ca}.kind`);
         if (e.check.band !== undefined) oneOf(e.check.band, ['miss', 'hit', 'great', 'super'], `${ca}.band`);
         optNum(e.check.dc, `${ca}.dc`); optNum(e.check.total, `${ca}.total`); bool(e.check.success, `${ca}.success`);
+        e.check.attrs.forEach((a, j) => { if (a?.total !== undefined) optNum(a.total, `${ca}.attrs[${j}].total`); });
         if (e.check.tier !== null && e.check.tier !== undefined) oneOf(e.check.tier, ['crit', 'fumble'], `${ca}.tier`);
         optStr(e.check.outcome, `${ca}.outcome`);
         if (e.check.rolledBy !== undefined) oneOf(e.check.rolledBy, ['player', 'witness', 'host'], `${ca}.rolledBy`);

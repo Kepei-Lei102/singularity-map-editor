@@ -90,6 +90,8 @@ function combatNoticeFor(pcId: string): CombatNotice | null {
 function forPlayer(p: PendingJudgment): PendingJudgment {
   const copy = { ...p };
   delete (copy as { context?: string }).context;
+  // 玩家 UI 只需要 check（画“要过什么、DC 多少”）；door 是主持人侧的落点，不给他。
+  delete copy.door;
   return copy;
 }
 
@@ -425,11 +427,14 @@ export function onJudgeRoll(m: Extract<SyncMsg, { type: 'judge-roll' }>, source:
   if (m.from !== SESSION) return;
   if (!Number.isInteger(m.sides) || m.sides !== p.sides) return;
   if (!Number.isInteger(m.value) || m.value < 1 || m.value > m.sides) return;
+  const maxValues = p.check?.attrs.length ?? 2;
   if (m.values !== undefined) {
-    if (!Array.isArray(m.values) || m.values.length > 2) return;
+    if (!Array.isArray(m.values) || m.values.length > maxValues) return;
     if (m.values.some((v) => !Number.isInteger(v) || v < 1 || v > m.sides)) return;
     if (!m.values.includes(m.value)) return; // 采信值必须是掷出来的其中一颗
   }
+  // 多属性判定必须把每个属性那颗都送齐；缺一颗别让它进结果、到结算才报错。
+  if (p.check && (!m.values || m.values.length !== p.check.attrs.length)) return;
   if (m.tens !== null && !(Number.isInteger(m.tens) && m.tens >= 0 && m.tens <= 90 && m.tens % 10 === 0)) return;
   if (m.units !== null && !(Number.isInteger(m.units) && m.units >= 0 && m.units <= 9)) return;
   setUI({

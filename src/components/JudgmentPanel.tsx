@@ -173,6 +173,8 @@ function JudgmentForm({ context }: { context: string }) {
     {setup && <div className="muted">已开出去，等 {world.party.find(p => p.id === setup.subjectId)?.name ?? '玩家'} 掷骰。</div>}
     <div role="status">{message}</div>
     <p className="hint">流程：你宣告（名称 / 落在谁身上 / 骰子 / 预先写好的裁定）→ 玩家在他的窗口里自己掷 → 结果回到你这里 → 你确认后广播全队。裁定在宣告时就锁住，掷完不能改口。</p>
-    {[...(world.judgments ?? [])].reverse().slice(0,10).map(j => <article key={j.id}><b>{j.title} · D{j.roll.sides}={j.roll.value===100?'000':j.roll.value}</b><div>{j.ruling}</div></article>)}
+    {[...(world.judgments ?? [])].reverse().slice(0,10).map(j => <article key={j.id}><b>{j.title} · {j.roll.values && j.roll.attrs
+      ? j.roll.attrs.map((a, i) => `${a} D${j.roll.sides}=${j.roll.values![i] === 100 ? '000' : j.roll.values![i]}`).join(' / ')
+      : `D${j.roll.sides}=${j.roll.value === 100 ? '000' : j.roll.value}`}</b><div>{j.ruling}</div></article>)}
   </section>;
 }

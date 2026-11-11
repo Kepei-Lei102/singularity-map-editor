@@ -91,6 +91,31 @@ test('schema 认门锁：合法的过，坏字段报错', () => {
   assert.throws(() => api.checkWorld(w), /lock\.kind/);
 });
 
+test('正式判定记录两颗骰：judgment 和日志都留属性名', () => {
+  const w = api.emptyWorld();
+  w.party = [{ id: 'a', name: '甲', color: '#fff', tags: [], sex: '男' }];
+  api.replaceWorld(w);
+  const roll = { id: 'multi-1', sides: 20, value: 14, values: [14, 16], attrs: ['智慧', '敏捷'], material: 'wood', persona: 'player', seed: 1 };
+  assert.equal(api.publishJudgment({ title: '撬锁', ruling: '', recipients: [], roll, subjectId: 'a', place: null }, api.worldContext()), null);
+  assert.deepEqual(api.getWorld().judgments.at(-1).roll.values, [14, 16]);
+  assert.match(api.getWorld().log.at(-1).text, /智慧 D20=14 \/ 敏捷 D20=16/);
+  assert.doesNotThrow(() => api.checkWorld(api.getWorld()));
+  assert.equal(api.publishJudgment({ title: '坏', ruling: '', recipients: [], roll: { ...roll, id: 'multi-2', values: [14, 21] }, subjectId: 'a', place: null }, api.worldContext()), '骰子结果无效');
+  assert.equal(api.publishJudgment({ title: '坏', ruling: '', recipients: [], roll: { ...roll, id: 'multi-3', attrs: ['智慧'] }, subjectId: 'a', place: null }, api.worldContext()), '骰子记录无效');
+});
+
+test('schema 不接受没有「打开」状态的门', () => {
+  const w = api.emptyWorld();
+  w.party = [];
+  const m = w.maps[0];
+  m.subdivisions = [2 * m.width + 1, 2 * m.width + 2];
+  m.objects = [
+    WALL('wall1'),
+    { ...DOOR({ kind: 'physical', locked: true, keyable: true }), opening: { wallId: 'wall1', offset: 0, width: 3, openStates: [] } },
+  ];
+  assert.throws(() => api.checkWorld(w), /至少要有一个打开状态/);
+});
+
 test('开门：没锁直接开，记一条带 delta 的事件（不掷骰）', () => {
   stage();
   try {
@@ -145,7 +170,14 @@ test('巧力撬锁：玩家窗口掷智慧＋敏捷两颗，都过才开', () =>
     assert.deepEqual(ev.check.attrs.map((a) => a.attr), ['智慧', '敏捷']);
     assert.equal(ev.check.rolledBy, 'player');
     assert.equal(ev.deltas.length, 2, '门状态 + 锁具各一条');
-    assert.equal(api.getWorld().judgments.at(-1).roll.persona, 'player');
+    const judgment = api.getWorld().judgments.at(-1);
+    assert.equal(judgment.roll.persona, 'player');
+    assert.deepEqual(judgment.roll.values, [14, 16], '正式判定要留两颗');
+    assert.deepEqual(judgment.roll.attrs, ['智慧', '敏捷']);
+    assert.match(api.getWorld().log.at(-1).text, /智慧 D20=14 \/ 敏捷 D20=16/);
+    const request = win.got.find((m) => m.type === 'judge-request');
+    assert.equal(request.judgment.door, undefined, 'door 是主持人侧的落点，不推给玩家');
+    assert.deepEqual(request.judgment.check.attrs.map((a) => a.attr), ['智慧', '敏捷']);
     assert.ok(win.got.some((m) => m.type === 'judge-cancel'));
   } finally { stop(); }
 });
@@ -212,7 +244,22 @@ test('骰子数量对不上：拒绝结算，门和锁都不动', () => {
     assert.match(settle([14]) ?? '', /骰子数量/);
     assert.equal(door().state, 0);
     assert.equal(door().lock.locked, true);
-    assert.equal(api.getUI().pendingJudgment.id, api.getUI().judgmentResult.judgmentId, '判定还挂着，没被半截结掉');
+    assert.ok(api.getUI().pendingJudgment, '判定还挂着，没被半截结掉');
+    assert.equal(api.getUI().judgmentResult, null);
+  } finally { stop(); }
+});
+
+test('判定开着期间门被改成没有打开状态：结算也拒，不能先解锁', () => {
+  stage({ lock: { kind: 'physical', locked: true, keyable: true } });
+  try {
+    api.openPlayerWindow('a', true);
+    const win = windows.at(-1);
+    assert.equal(api.trialPickLock('door1', 'pick'), null);
+    api.update((d) => { d.maps[0].objects.find((o) => o.id === 'door1').opening.openStates = []; });
+    api.onJudgeRoll(rollMsg(15, [15, 15]), win);
+    assert.match(api.settlePendingJudgment({ rollId: 'r', sides: 20, value: 15, values: [15, 15], tens: null, units: null, material: 'wood', seed: 0 }) ?? '', /缺少打开状态|已经变了/);
+    assert.equal(door().lock.locked, true);
+    assert.equal(door().state, 0);
   } finally { stop(); }
 });
 
@@ -236,6 +283,49 @@ test('掷出 1：锁芯卡死——门仍锁着，但配不出钥匙了', () => 
     assert.equal(api.trialPickLock('door1', 'force', { rolls: [15, 15] }), null);
     assert.equal(door().state, 1, '强行打开仍然有效');
     assert.equal(lastEvent().action.name, '暴力开锁');
+  } finally { stop(); }
+});
+
+test('已经卡死的锁再暴力大失败一次：不写第二条假 delta', () => {
+  stage({ lock: { kind: 'physical', locked: true, keyable: false } });
+  try {
+    assert.equal(api.trialPickLock('door1', 'force', { rolls: [1, 8] }), null);
+    const ev = lastEvent();
+    assert.equal(ev.check.tier, 'fumble');
+    assert.deepEqual(ev.deltas, [], 'keyable 已经是 false，不能再写「锁着→卡死」');
+    assert.match(ev.note, /早就卡死/);
+    assert.match(ev.note, /动静/);
+    assert.equal(door().lock.keyable, false);
+    assert.equal(door().state, 0);
+  } finally { stop(); }
+});
+
+test('门没有「打开」状态：开不了，也不许先解锁再报撬开了', () => {
+  stage({ lock: { kind: 'physical', locked: true, keyable: true } });
+  try {
+    api.update((d) => {
+      const door = d.maps[0].objects.find((o) => o.id === 'door1');
+      door.opening.openStates = [];
+      door.lock.locked = false;
+    });
+    assert.match(api.trialOpenDoor('door1') ?? '', /缺少打开状态/);
+    api.update((d) => { d.maps[0].objects.find((o) => o.id === 'door1').lock.locked = true; });
+    assert.match(api.trialPickLock('door1', 'force', { rolls: [15, 15] }) ?? '', /缺少打开状态/);
+    assert.equal(door().lock.locked, true, '拒绝时锁不能先解开');
+    assert.equal(door().state, 0);
+  } finally { stop(); }
+});
+
+test('暴力大失败：卡死之外还要记「动静」', () => {
+  stage({ lock: { kind: 'physical', locked: true, keyable: true } });
+  try {
+    assert.equal(api.trialPickLock('door1', 'force', { rolls: [1, 8] }), null);
+    const ev = lastEvent();
+    assert.equal(ev.action.name, '暴力开锁');
+    assert.equal(ev.check.tier, 'fumble');
+    assert.equal(door().lock.keyable, false);
+    assert.match(ev.note, /卡死/);
+    assert.match(ev.note, /动静/);
   } finally { stop(); }
 });
 
@@ -297,6 +387,7 @@ test('身体朝着别处也照样能开门：门不在背后就不给开，那�
 test('电子锁这轮不给撬，明确说还没接', () => {
   stage({ lock: { kind: 'electronic', locked: true, keyable: true } });
   try {
+    assert.equal(api.trialDoors()[0].kind, 'electronic');
     assert.match(api.trialPickLock('door1', 'force') ?? '', /电子锁/);
   } finally { stop(); }
 });

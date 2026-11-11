@@ -19,12 +19,23 @@ export function publishJudgment(input: Omit<DiceJudgment, 'id' | 'at' | 'session
   if (!r.id?.trim() || !['wood','plastic','metal','stone','rubber'].includes(r.material) || (r.persona !== 'witness' && r.persona !== 'player') || !Number.isSafeInteger(r.seed) || r.seed! < 0) return '骰子记录无效';
   if (![4,6,8,10,12,20,100].includes(r.sides) || !Number.isInteger(r.value) || r.value < 1 || r.value > r.sides) return '骰子结果无效';
   if (r.sides === 100 && (!Number.isInteger(r.tens) || !Number.isInteger(r.units) || r.tens! < 0 || r.tens! > 90 || r.tens! % 10 || r.units! < 0 || r.units! > 9 || (r.tens! + r.units! || 100) !== r.value)) return '百分骰结果不一致';
+  // 多属性判定：values 和 attrs 必须一一对应，且采信值要在自己的骰子里。
+  if (r.values !== undefined) {
+    if (!Array.isArray(r.values) || r.values.length < 2 || r.values.length > 8 || r.values.some((v) => !Number.isInteger(v) || v < 1 || v > r.sides)) return '骰子结果无效';
+    if (!r.values.includes(r.value)) return '骰子结果无效';
+    if (!Array.isArray(r.attrs) || r.attrs.length !== r.values.length || r.attrs.some((a) => typeof a !== 'string' || !a.trim())) return '骰子记录无效';
+  } else if (r.attrs !== undefined) return '骰子记录无效';
   if ((w.judgments ?? []).some(j => j.roll.id === r.id)) return '这次掷骰已经发布过';
   update(d => {
     // 没有私骰：正式判定一律广播给当前全队，忽略调用方传来的 recipients。
     const j: DiceJudgment = { ...input, title: input.title.trim(), recipients: d.party.map(p => p.id), id: uid(), at: Date.now(), session: d.session };
     (d.judgments ??= []).push(j);
-    d.log.push({ id: uid(), at: j.at, session: d.session, kind: 'note', text: `正式判定「${j.title}」：D${r.sides}=${r.value === 100 ? '000' : r.value}；${j.ruling || '结果已送达，等待见证者裁定'}` });
+    const fmt = (v: number) => (v === 100 ? '000' : String(v));
+    // 多属性判定：每颗都进这次正式判定的记录和日志，不能只留第一颗。
+    const dice = r.values && r.attrs && r.values.length === r.attrs.length
+      ? r.attrs.map((a, i) => `${a} D${r.sides}=${fmt(r.values![i])}`).join(' / ')
+      : `D${r.sides}=${fmt(r.value)}`;
+    d.log.push({ id: uid(), at: j.at, session: d.session, kind: 'note', text: `正式判定「${j.title}」：${dice}；${j.ruling || '结果已送达，等待见证者裁定'}` });
   });
   return null;
 }

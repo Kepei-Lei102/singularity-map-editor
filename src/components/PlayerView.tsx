@@ -285,7 +285,9 @@ export function PlayerView() {
       {judgment && <button className="player-judgment-toggle" onClick={() => setDismissed(dismissed === judgment.id ? null : judgment.id)}>正式判定 · {judgment.title}</button>}
       {judgment && dismissed !== judgment.id && <aside className="player-judgment">
         <button onClick={() => setDismissed(judgment.id)}>收起</button><h3>{judgment.title}</h3>
-        <strong>D{judgment.roll.sides} = {judgment.roll.value === 100 ? '000' : judgment.roll.value}</strong><p>{judgment.ruling || '等待见证者解释判定'}</p>
+        <strong>{judgment.roll.values && judgment.roll.attrs
+          ? judgment.roll.attrs.map((a, i) => `${a} D${judgment.roll.sides} = ${judgment.roll.values![i] === 100 ? '000' : judgment.roll.values![i]}`).join(' / ')
+          : `D${judgment.roll.sides} = ${judgment.roll.value === 100 ? '000' : judgment.roll.value}`}</strong><p>{judgment.ruling || '等待见证者解释判定'}</p>
         <DiceTray persona="player" sides={judgment.roll.sides} disabled displayResult={judgment.roll} onResult={() => {}} />
       </aside>}
       {media && armed && (

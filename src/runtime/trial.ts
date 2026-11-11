@@ -773,6 +773,7 @@ export interface TrialDoor {
   open: boolean;
   locked: boolean;
   keyable: boolean;
+  kind?: 'physical' | 'electronic';
   /** 身上有【开锁副手】才能巧力撬锁；暴力开锁谁都能试。 */
   canPick: boolean;
 }
@@ -803,7 +804,7 @@ export function trialDoors(): TrialDoor[] {
     .filter((o) => near(architectureObjectBounds(m, o)) && seen(o))
     .map((o) => ({
       objectId: o.id, name: o.name, open: openingIsOpen(o),
-      locked: !!o.lock?.locked, keyable: o.lock ? o.lock.keyable : true,
+      locked: !!o.lock?.locked, keyable: o.lock ? o.lock.keyable : true, kind: o.lock?.kind,
       canPick: (pc.skills ?? []).includes(LOCKPICK_SKILL_ID),
     }));
 }
@@ -827,6 +828,7 @@ function doorContext(objectId: string): DoorCtx | string {
   if (!m) return '找不到试玩地图';
   const door = m.objects.find((o) => o.id === objectId && o.opening);
   if (!door || !objectEnabled(m, door)) return '找不到这扇门';
+  if (door.hidden) return '看不见这扇门';
   const tok = m.tokens.find((x) => x.id === pl.tokenId);
   const pc = w.party.find((p) => p.id === pl.pcId);
   if (!tok || !pc) return '找不到当前角色';
@@ -882,6 +884,7 @@ export function trialPickLock(objectId: string, method: 'pick' | 'force', opts: 
   if (!lock.locked) return '锁已经解开了，直接开门';
   if (!lock.keyable && method === 'pick') return '锁芯卡死，巧力撬不开，只能强行打开';
   if (method === 'pick' && !(pc.skills ?? []).includes(LOCKPICK_SKILL_ID)) return '没有解锁【开锁副手】，只能暴力开锁';
+  if (!door.opening!.openStates.length) return '门缺少打开状态，开不了（先检查门的设置）';
   const attrs = method === 'pick' ? PICK_ATTRS : FORCE_ATTRS;
   if (opts.rolls !== undefined && (opts.rolls.length !== attrs.length || opts.rolls.some((v) => !Number.isInteger(v) || v < 1 || v > 20))) return '骰点不对';
   const title = `${method === 'pick' ? '撬锁' : '暴力开锁'}：${door.name}`;
@@ -908,7 +911,7 @@ function settleDoorAttempt(
   const pc = w.party.find((x) => x.id === p.subjectId);
   const m = findMap(w, p.door.mapId);
   const door = m?.objects.find((o) => o.id === p.door!.objectId);
-  if (!pc || !door || !door.lock) return '这扇门已经变了，重开判定';
+  if (!pc || !door || !door.lock || !door.opening || !door.opening.openStates.length) return '这扇门已经变了，重开判定';
   const values = input.values?.length ? input.values : [input.value];
   if (values.length !== p.check.attrs.length) return '骰子数量不对';
   const checks = p.check.attrs.map((a, i) => resolveCheck({
@@ -917,14 +920,13 @@ function settleDoorAttempt(
   const crit = checks.find((c) => c.tier === 'crit');
   const success = !!crit || checks.every((c) => c.success);
   const fumble = !success && checks.some((c) => c.tier === 'fumble');
-  const note = success
-    ? (p.door.method === 'force' ? '暴力开锁，动静传出去了' : crit ? '锁没有留痕' : undefined)
-    : fumble ? '锁芯卡死，只能强行打开' : '锁没动';
   let msg = '';
+  let note: string | undefined;
   update((d) => {
     const dm = findMap(d, p.door!.mapId)!;
     const o = dm.objects.find((x) => x.id === p.door!.objectId)!;
     const deltas: Delta[] = [];
+    const noise = p.door!.method === 'force' ? '，动静传出去了' : '';
     if (success) {
       if (o.lock!.locked) {
         o.lock = { ...o.lock!, locked: false };
@@ -935,13 +937,23 @@ function settleDoorAttempt(
         deltas.push({ kind: 'object', id: o.id, name: o.name, path: '状态', from: o.states[o.state], to: o.states[openIdx] });
         o.state = openIdx;
       }
+      if (deltas.length === 0) note = '门和锁在判定期间被处理过，没有新的变化';
+      else if (p.door!.method === 'force') note = '暴力开锁，动静传出去了';
+      else if (crit) note = '锁没有留痕';
       msg = `${pc.name} ${p.door!.method === 'pick' ? '撬开了' : '砸开了'} ${o.name}`;
     } else if (fumble) {
-      o.lock = { ...o.lock!, keyable: false };
-      deltas.push({ kind: 'object', id: o.id, name: o.name, path: '锁具', from: '锁着', to: '卡死' });
-      msg = `${o.name} 的锁芯卡死了，只能强行打开`;
+      if (o.lock!.keyable) {
+        o.lock = { ...o.lock!, keyable: false };
+        deltas.push({ kind: 'object', id: o.id, name: o.name, path: '锁具', from: '锁着', to: '卡死' });
+        msg = `${o.name} 的锁芯卡死了，只能强行打开`;
+        note = `锁芯卡死，只能强行打开${noise}`;
+      } else {
+        msg = `${o.name} 的锁芯早就卡死了，只能强行打开`;
+        note = `锁芯早就卡死了${noise}`;
+      }
     } else {
       msg = `${o.name} 的锁没动`;
+      note = `锁没动${noise}`;
     }
     appendEvent(d, newEvent(d, Date.now(),
       { kind: 'pc', id: p.subjectId, name: pc.name },
@@ -1099,6 +1111,7 @@ export function settlePendingJudgment(input: JudgmentRollInput, byStandIn = fals
     title: p.title, ruling: p.ruling, recipients: getWorld().party.map((x) => x.id),
     roll: {
       id: input.rollId, sides: input.sides as never, value: input.value,
+      ...(p.check ? { values: input.values ?? [input.value], attrs: p.check.attrs.map((a) => a.attr) } : {}),
       tens: input.tens ?? null, units: input.units ?? null,
       material: input.material as never, persona: byStandIn ? 'witness' : 'player', seed: input.seed,
     },

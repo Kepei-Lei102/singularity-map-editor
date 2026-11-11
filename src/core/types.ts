@@ -572,7 +572,14 @@ export interface DiceJudgment {
   subjectId?: Id | null;
   /** 判定发生点（棋子坐标，实际值）；没有就不做遮蔽，全队看细节。 */
   place?: { mapId: Id; x: number; y: number } | null;
-  roll: { id: string; sides: 4 | 6 | 8 | 10 | 12 | 20 | 100; value: number; tens?: number | null; units?: number | null; material: 'wood' | 'plastic' | 'metal' | 'stone' | 'rubber'; persona: 'witness' | 'player'; algorithm?: string; seed: number; launch?: unknown };
+  roll: {
+    id: string; sides: 4 | 6 | 8 | 10 | 12 | 20 | 100; value: number;
+    /** 多属性判定（如智慧＋敏捷）：各属性各一颗，按 attrs 顺序；单属性不填。 */
+    values?: number[]; attrs?: string[];
+    tens?: number | null; units?: number | null;
+    material: 'wood' | 'plastic' | 'metal' | 'stone' | 'rubber'; persona: 'witness' | 'player';
+    algorithm?: string; seed: number; launch?: unknown;
+  };
 }
 
 export interface JudgmentNotice { id: Id; at: number }

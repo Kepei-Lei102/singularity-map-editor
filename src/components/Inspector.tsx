@@ -453,7 +453,7 @@ function ObjectInspector({ world, mapId, o, ui }: { world: World; mapId: string;
               {o.blocksWhen && <div className="hint">勾上的状态挡路、挡视线；没勾的状态可以从这里穿过。隔断、门这类可开合的物件用这个。</div>}
             </>
           )}
-          {edit && o.opening && <><div className="hint">勾选打开门洞的状态；其余状态关闭。所有切换共用人物与家具防夹规则。</div><div className="chips">{o.states.map((s, i) => <label key={i} className="check"><input type="checkbox" checked={o.opening!.openStates.includes(i)} onChange={e => up(x => { const set = new Set(x.opening!.openStates); if (e.target.checked) set.add(i); else set.delete(i); x.opening!.openStates = [...set]; x.blocksWhen = x.states.map((_, i) => i).filter(i => !set.has(i)); })} />{s}</label>)}</div></>}
+          {edit && o.opening && <><div className="hint">勾选打开门洞的状态；其余状态关闭。所有切换共用人物与家具防夹规则。</div><div className="chips">{o.states.map((s, i) => <label key={i} className="check"><input type="checkbox" checked={o.opening!.openStates.includes(i)} onChange={e => up(x => { const set = new Set(x.opening!.openStates); if (e.target.checked) set.add(i); else if (set.size > 1) set.delete(i); else { toast('门至少要留一个「打开」状态'); return; } x.opening!.openStates = [...set]; x.blocksWhen = x.states.map((_, i) => i).filter(i => !set.has(i)); })} />{s}</label>)}</div></>}
           {edit && o.opening && (
             <>
               <div className="hint">锁具：门锁和开合是两位。锁着就开不了；巧力撬锁只有解锁【开锁副手】的角色能做（智慧＋敏捷），暴力开锁谁都能试（力量＋敏捷）。卡死＝锁着但配不出钥匙，只能强行打开。</div>
