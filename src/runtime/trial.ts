@@ -145,6 +145,8 @@ export function startTrial() {
   if (io) return toast(`正在${io}，完成后再开始试玩`); // 导入途中进试玩，导入的结果会被试玩结束时的还原冲掉
   const mapId = getUI().mapId;
   if (!findMap(getWorld(), mapId)) return;
+  // 试玩是另一个世界：外面还等着的判定不能带进去（结算会写进沙盒，结束试玩就丢了）。
+  if (getUI().pendingJudgment) { closePendingJudgment(); toast('开始试玩，之前等着的判定已取消'); }
   beginSandbox();
   cancelPendingPlay();
   playingBefore = getUI().nowPlaying;
@@ -874,6 +876,8 @@ export interface JudgmentRollInput {
 export function settlePendingJudgment(input: JudgmentRollInput, byStandIn = false): string | null {
   const p = getUI().pendingJudgment;
   if (!p) return '没有待掷的判定';
+  // 判定是在哪个工程/哪次试玩里开的，就只能在那儿结算：否则会静默写进另一个世界。
+  if (p.context !== worldContext()) return '工程或试玩已切换，请重新掷骰';
   const diceValues = input.values?.length ? input.values : [input.value];
   if (p.jump) { const e = settleJump(p.jump, diceValues); if (e) return e; }
   if (p.attack) {
@@ -888,7 +892,7 @@ export function settlePendingJudgment(input: JudgmentRollInput, byStandIn = fals
       material: input.material as never, persona: byStandIn ? 'witness' : 'player', seed: input.seed,
     },
     subjectId: p.subjectId, place: p.place ?? null,
-  }, worldContext());
+  }, p.context ?? worldContext());
   if (err) return err;
   closePendingJudgment();
   return null;

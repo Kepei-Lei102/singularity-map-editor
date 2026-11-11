@@ -176,3 +176,82 @@ test('换工程：主持端的待掷判定清掉，玩家窗口收到 clear', ()
   assert.equal(api.getUI().judgmentResult, null);
   assert.ok(win.got.some((m) => m.type === 'clear'), '玩家窗口收到 clear');
 });
+
+test('换上下文后结算被拒：不静默写进另一个世界，也不清 pending', () => {
+  party();
+  api.openPlayerWindow('a');
+  const win = windows.at(-1);
+  win.got.length = 0;
+  api.openJudgment({ title: '正式判定', ruling: '', sides: 20, subjectId: 'a' });
+  api.beginSandbox(); // 上下文变成 :trial
+  try {
+    const id = api.getUI().pendingJudgment.id;
+    api.onJudgeRoll({ id, title: '正式判定', sides: 20, value: 9, tens: null, units: null, material: 'wood', seed: 1, rollId: 'r1', from: api.SESSION }, win);
+    assert.equal(api.getUI().judgmentResult, null, '跨上下文的骰子不许落成结果');
+    const err = api.settlePendingJudgment({ rollId: 'r1', sides: 20, value: 9, tens: null, units: null, material: 'wood', seed: 1 }, false);
+    assert.match(err ?? '', /切换/);
+    assert.ok(api.getUI().pendingJudgment, 'pending 不能被清掉');
+    assert.equal((api.getWorld().judgments ?? []).length, 0, '不许写进沙盒');
+    assert.equal(win.got.filter((m) => m.type === 'judge-cancel').length, 0);
+  } finally {
+    api.endSandbox();
+  }
+});
+
+test('开始试玩：之前在真实世界里等着的判定被取消并通知玩家窗口', () => {
+  party();
+  api.setUI({ mapId: api.getWorld().maps[0].id });
+  api.openPlayerWindow('a');
+  const win = windows.at(-1);
+  win.got.length = 0;
+  api.openJudgment({ title: '正式判定', ruling: '', sides: 20, subjectId: 'a' });
+  api.startTrial();
+  try {
+    assert.equal(api.getUI().pendingJudgment, null);
+    assert.ok(win.got.some((m) => m.type === 'judge-cancel'), '真实窗口收到取消');
+  } finally {
+    api.endTrial();
+  }
+});
+
+test('world 推送也按上下文分账：试玩中真实窗口的 pendingJudgment 是空的', () => {
+  party();
+  api.openPlayerWindow('a');
+  const real = windows.at(-1);
+  api.beginSandbox();
+  try {
+    api.setUI({ trial: { mapId: api.getWorld().maps[0].id, players: [{ tokenId: 'ta', pcId: 'a', name: '甲' }], current: 0 } });
+    api.openPlayerWindow('a', true);
+    const trialWin = windows.at(-1);
+    api.openJudgment({ title: '试玩判定', ruling: '', sides: 20, subjectId: 'a' });
+    real.got.length = 0;
+    trialWin.got.length = 0;
+    api.send({ type: 'world', world: api.getWorld() });
+    const realWorld = real.got.find((m) => m.type === 'world');
+    const trialWorld = trialWin.got.find((m) => m.type === 'world');
+    assert.ok(realWorld && trialWorld);
+    assert.equal(realWorld.world.pendingJudgment ?? null, null, '真实窗口不该看到试玩判定');
+    assert.equal(trialWorld.world.pendingJudgment?.id, api.getUI().pendingJudgment.id);
+    assert.equal(trialWorld.world.pendingJudgment?.context, undefined, '不给玩家看内部上下文');
+  } finally {
+    api.endSandbox();
+    api.setUI({ trial: null });
+  }
+});
+
+test('跨上下文结算不许先落地：跳跃判定不会在另一个世界里挪棋子', () => {
+  party();
+  api.setUI({ mapId: api.getWorld().maps[0].id });
+  api.update((d) => { d.maps[0].tokens.push({ id: 'ta', pcId: 'a', name: '甲', color: '#fff', x: 1, y: 1 }); });
+  api.openJudgment({ title: '跳跃', ruling: '', sides: 20, subjectId: 'a', jump: { tokenId: 'ta', landing: { x: 2, y: 2 }, dice: 'single' } });
+  const before = api.getWorld().maps[0].tokens.find((t) => t.id === 'ta').x;
+  api.beginSandbox();
+  try {
+    const err = api.settlePendingJudgment({ rollId: 'r9', sides: 20, value: 11, tens: null, units: null, material: 'wood', seed: 9 }, false);
+    assert.match(err ?? '', /切换/, '必须先挡住，而不是去另一个世界落地');
+    assert.equal(api.getWorld().maps[0].tokens.find((t) => t.id === 'ta').x, before);
+    assert.ok(api.getUI().pendingJudgment);
+  } finally {
+    api.endSandbox();
+  }
+});

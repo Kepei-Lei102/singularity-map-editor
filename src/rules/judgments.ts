@@ -55,6 +55,7 @@ export function openJudgment(input: {
       subjectId: input.subjectId, place: input.place ?? null, at: Date.now(), session: getWorld().session,
       jump: input.jump ?? null,
       attack: input.attack ?? null,
+      context: worldContext(),
     },
     judgmentResult: null, // 新判定不能带着上一笔的骰子
   });

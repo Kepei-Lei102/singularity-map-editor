@@ -86,9 +86,26 @@ function combatNoticeFor(pcId: string): CombatNotice | null {
 }
 
 /** 只把「落在你身上」的待掷判定发给这个玩家；别人的判定他一概不知道。 */
-function pendingFor(pcId: string): PendingJudgment | null {
+/** 发给玩家的判定副本：去掉主持端内部字段（context 是内部上下文标记）。 */
+function forPlayer(p: PendingJudgment): PendingJudgment {
+  const copy = { ...p };
+  delete (copy as { context?: string }).context;
+  return copy;
+}
+
+function pendingForPlayer(pcId: string, trialContext?: string): PendingJudgment | null {
+  const p = pendingFor(pcId, trialContext);
+  return p ? forPlayer(p) : null;
+}
+
+function pendingFor(pcId: string, trialContext?: string): PendingJudgment | null {
   const p = getUI().pendingJudgment;
-  return p && p.subjectId === pcId ? p : null;
+  if (!p || p.subjectId !== pcId) return null;
+  // 试玩判定只给试玩窗口，真实判定只给真实窗口：同一个角色两边都开着也不串。
+  const pendingTrial = !!p.context && p.context.endsWith(':trial');
+  if (!!trialContext !== pendingTrial) return null;
+  if (trialContext && p.context !== trialContext) return null;
+  return p;
 }
 
 export function openPlayerWindow(pcId?: string, trial = false) {
@@ -270,7 +287,7 @@ export function send(body: SyncBody, to?: string) {
       const out: SyncBody = !valid
         ? { type: 'clear' }
         : body.type === 'world'
-          ? { type: 'world', world: { ...playerWorld(w, mapId, p.pcId), pendingJudgment: pendingFor(p.pcId), combatNotice: combatNoticeFor(p.pcId), utterances: utterancesFor(p.pcId), trialFlags: trialFlagsFor(p.pcId) } as World, focus: getUI().focus ?? null, cast: getUI().cast ?? null, you: p.pcId, skills: publicSkillsOf(w.party.find((pc) => pc.id === p.pcId)?.skills ?? []),
+          ? { type: 'world', world: { ...playerWorld(w, mapId, p.pcId), pendingJudgment: pendingForPlayer(p.pcId, p.trialContext), combatNotice: combatNoticeFor(p.pcId), utterances: utterancesFor(p.pcId), trialFlags: trialFlagsFor(p.pcId) } as World, focus: getUI().focus ?? null, cast: getUI().cast ?? null, you: p.pcId, skills: publicSkillsOf(w.party.find((pc) => pc.id === p.pcId)?.skills ?? []),
             pathway: currentPathwayOf(w.party.find((pc) => pc.id === p.pcId) ?? { skills: [] }),
             avatar: w.party.find((pc) => pc.id === p.pcId)?.avatar ?? null }
           : body;
@@ -308,13 +325,13 @@ export function playerWindowFor(pcId: string): boolean {
 }
 
 export function pushJudgmentRequest(pcId: string): void {
-  const p = pendingFor(pcId);
-  if (!p) return;
   // 只发「要掷什么」，不发主持端内部的结算数据：
-  // jump 里带着落点、摔伤档，推给玩家等于把结果提前告诉他。
-  const judgment: PendingJudgment = { ...p, jump: null };
+  // jump 里带着落点、摔伤档，推给玩家等于把结果提前告诉他；context 也不给玩家。
   for (const [binding, entry] of players) {
     if (entry.pcId !== pcId || !entry.win || entry.win.closed || !sameContextWindow(entry)) continue;
+    const p = pendingFor(pcId, entry.trialContext);
+    if (!p) continue;
+    const judgment = forPlayer({ ...p, jump: null });
     const msg: SyncMsg = { type: 'judge-request', judgment, __ts: 'ts-map', seq: rand(), from: SESSION, inst: INST, born: BORN };
     try { entry.win.postMessage(msg, target()); } catch { /* closed */ }
     void binding;
@@ -399,6 +416,8 @@ export function onJudgeRoll(m: Extract<SyncMsg, { type: 'judge-roll' }>, source:
   // 这颗骰子必须来自绑给「判定角色」的那个窗口：别的玩家窗口、甚至别的标签页塞来的都不算。
   const entry = [...players.values()].find((e) => e.win === source);
   if (!entry || entry.pcId !== p.subjectId) return;
+  // 也不能跨上下文：试玩窗口不能替真实判定掷，反之亦然。
+  if (p.context !== worldContext()) return;
   // 这里以前只比一个 id：任何同源标签页（甚至 BroadcastChannel，source 是 null 会跳过来源检查）
   // 都能往待掷判定里塞一颗骰子，包括不可能的 D20=999。骰子是这个程序最核心的承诺，得验。
   if (m.from !== SESSION) return;
