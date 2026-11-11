@@ -104,6 +104,34 @@ test('正式判定记录两颗骰：judgment 和日志都留属性名', () => {
   assert.equal(api.publishJudgment({ title: '坏', ruling: '', recipients: [], roll: { ...roll, id: 'multi-3', attrs: ['智慧'] }, subjectId: 'a', place: null }, api.worldContext()), '骰子记录无效');
 });
 
+test('旧工程的门没有打开状态：按状态名补，猜不到就明说', () => {
+  const w = api.emptyWorld();
+  const m = w.maps[0];
+  m.subdivisions = [2 * m.width + 1, 2 * m.width + 2];
+  m.objects = [
+    WALL('wall1'),
+    { ...DOOR(null), states: ['关闭', '打开'], state: 0, blocksWhen: [0, 1], opening: { wallId: 'wall1', offset: 0, width: 3, openStates: [] } },
+  ];
+  const fixed = api.repairDoorOpenStates(w);
+  assert.deepEqual(m.objects[1].opening.openStates, [1], '按「打开」补到第 2 个状态');
+  assert.deepEqual(m.objects[1].blocksWhen, [0], '打开的状态不该再挡路');
+  // 猜不到的另放一张没有墙的图，只验迁移函数不动它
+  const wGuess = api.emptyWorld();
+  wGuess.maps[0].objects = [
+    { ...DOOR(null), name: '猜不到的门', states: ['关着', '锁着'], state: 0, blocksWhen: [0, 1], opening: { wallId: 'wall1', offset: 0, width: 3, openStates: [] } },
+  ];
+  const fixedGuess = api.repairDoorOpenStates(wGuess);
+  assert.deepEqual(wGuess.maps[0].objects[0].opening.openStates, [], '猜不到就别乱动');
+  assert.match(fixedGuess.join('\n'), /猜不到的门.*请手工/);
+  assert.doesNotThrow(() => api.checkWorld(w));
+  // repairWorld 也要带着这条迁移跑
+  const w2 = api.emptyWorld();
+  w2.maps[0].subdivisions = [2 * w2.maps[0].width + 1, 2 * w2.maps[0].width + 2];
+  w2.maps[0].objects = [WALL('wall1'), { ...DOOR(null), opening: { wallId: 'wall1', offset: 0, width: 3, openStates: [] } }];
+  assert.match(api.repairWorld(w2).join('\n'), /按状态名补成/);
+  assert.doesNotThrow(() => api.checkWorld(w2));
+});
+
 test('schema 不接受没有「打开」状态的门', () => {
   const w = api.emptyWorld();
   w.party = [];

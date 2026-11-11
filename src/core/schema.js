@@ -143,6 +143,30 @@ export function repairWorld(w) {
       if (w.events.length > 200) { fixed.push(`事件账本裁到最近 200 条（原 ${w.events.length} 条）`); w.events = w.events.slice(-200); }
     }
   }
+  fixed.push(...repairDoorOpenStates(w));
+  return fixed;
+}
+
+/**
+ * 旧工程的门可能没有「打开」状态。按状态名补一个；猜不到就别动，让严格校验给出可操作提示。
+ * 导出/保存前也要调用：内存里的旧工程不一定跑过加载迁移。
+ */
+export function repairDoorOpenStates(w) {
+  const fixed = [];
+  const OPEN = /^(打开|开门|开着|开启|open|opened)$/i;
+  for (const m of Array.isArray(w?.maps) ? w.maps : []) {
+    for (const o of Array.isArray(m?.objects) ? m.objects : []) {
+      const op = o?.opening;
+      if (!op || !Array.isArray(op.openStates) || op.openStates.length) continue;
+      const states = Array.isArray(o.states) ? o.states : [];
+      const label = typeof o.name === 'string' && o.name ? o.name : (typeof o.id === 'string' ? o.id : '门');
+      const i = states.findIndex((s) => typeof s === 'string' && OPEN.test(s.trim()));
+      if (i < 0) { fixed.push(`门「${label}」没有打开状态，状态名里也没有「打开/开门/open」，请手工设一个`); continue; }
+      op.openStates = [i];
+      if (Array.isArray(o.blocksWhen)) o.blocksWhen = o.blocksWhen.filter((v) => v !== i);
+      fixed.push(`门「${label}」没有打开状态，按状态名补成「${states[i]}」`);
+    }
+  }
   return fixed;
 }
 

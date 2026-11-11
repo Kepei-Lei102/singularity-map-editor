@@ -19,7 +19,7 @@ import { CONN_LABEL } from '../core/types';
 import { TIER_LABEL } from '../core/types';
 import { download, uid } from '../core/util';
 import { contentKey, getRaw, listStored, mediaChanged, putBlobs, storageKey } from './media';
-import { checkRoomObjects, checkWorld, repairOrphanSubcells, repairWorld } from '../core/schema.js';
+import { checkRoomObjects, checkWorld, repairDoorOpenStates, repairOrphanSubcells, repairWorld } from '../core/schema.js';
 import { allSlots, dropSlot, loadSlot, saveSlot } from '../core/persist';
 import { send } from './sync';
 import { migrateWorld } from '../scene/memory';
@@ -475,7 +475,16 @@ export function setObjectStates(mapId: string, objId: string, states: string[]) 
     const rev0 = o.stateRev ?? 0, cur = to(o.state);
     const renumbered = cur >= 0 && cur !== o.state;
     o.state = Math.max(0, cur);
-    if (o.opening) o.opening.openStates = [...new Set(o.opening.openStates.map(to).filter(i => i >= 0))];
+    if (o.opening) {
+      const mapped = [...new Set(o.opening.openStates.map(to).filter(i => i >= 0))];
+      // 给门改名/删状态时别把「打开」弄丢：先按名字找，找不到就保留原来的位置。
+      if (!mapped.length) {
+        const named = o.states.findIndex((s) => /^(打开|开门|开着|开启|open|opened)$/i.test(s.trim()));
+        if (named >= 0) mapped.push(named);
+        else if (o.opening.openStates.length) mapped.push(Math.min(o.opening.openStates[0], o.states.length - 1));
+      }
+      o.opening.openStates = mapped;
+    }
     if (o.blocksWhen) o.blocksWhen = [...new Set(o.blocksWhen.map(to).filter((i) => i >= 0))];
     for (const r of findMap(d, mapId)!.rooms) for (const s of [...r.reset?.objects ?? [], ...r.layouts?.flatMap((l) => l.objects) ?? []])
       if (s.id === objId) s.state = Math.max(0, to(s.state));
@@ -816,6 +825,7 @@ async function buildProjectZip(allowMissing = false) {
   const w = structuredClone(getWorld());
   const dropped = repairOrphanSubcells(w);
   if (dropped) toast(`导出前清理了 ${dropped} 个失效子格`);
+  repairDoorOpenStates(w);
   checkWorld(w);
   const zip = new JSZip();
   zip.file('world.json', JSON.stringify(w, null, 2));
@@ -850,6 +860,7 @@ export function exportWorldJson() {
   const w = structuredClone(getWorld());
   const dropped = repairOrphanSubcells(w);
   if (dropped) toast(`导出前清理了 ${dropped} 个失效子格`);
+  repairDoorOpenStates(w);
   try { checkWorld(w); } catch (e) { return toast('导出失败：' + (e as Error).message); }
   download(`${w.name || '世界'}.json`, JSON.stringify(w, null, 2), 'application/json');
   toast(w.media.length ? `已导出 JSON（不含 ${w.media.length} 个媒体文件；换电脑请用「导出成 zip」）` : '已导出 JSON');
