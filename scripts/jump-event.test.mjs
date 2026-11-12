@@ -11,7 +11,7 @@ const root = fileURLToPath(new URL('..', import.meta.url));
 const temp = await mkdtemp(join(root, '.jump-event-test-'));
 const bundle = join(temp, 'editor.cjs');
 await build({
-  stdin: { contents: `export * from './src/rules/jump'; export * from './src/rules/interaction'; export * from './src/rules/judgments'; export * from './src/core/defaults'; export * from './src/core/schema.js'; export * from './src/runtime/sync'; export * from './src/runtime/trial'; export * from './src/core/store'; export * from './src/runtime/actions'; export * from './src/scene/architecture'; export * from './src/scene/sight';`, resolveDir: root },
+  stdin: { contents: `export * from './src/rules/jump'; export * from './src/rules/interaction'; export * from './src/rules/judgments'; export * from './src/core/defaults'; export * from './src/core/schema.js'; export * from './src/runtime/sync'; export * from './src/runtime/trial'; export * from './src/core/store'; export * from './src/runtime/actions'; export * from './src/scene/architecture'; export * from './src/scene/sight'; export * from './src/components/judgmentStandIn';`, resolveDir: root },
   outfile: bundle, bundle: true, platform: 'node', format: 'cjs', logLevel: 'silent',
 });
 const storage = () => { const data = new Map(); return { getItem: (k) => data.get(k) ?? null, setItem: (k, v) => data.set(k, v), removeItem: (k) => data.delete(k) }; };
@@ -174,6 +174,55 @@ test('非战斗高摔且原无状态：账本挂急救机器人，不是“濒�
   assert.equal(status.from, null);
   assert.equal(status.to, '急救机器人正在赶来');
   assert.match(ev.note, /→ 急救机器人正在赶来/);
+});
+
+test('战斗里旧机器人 + 高摔：转濒死，不保留 ETA', () => {
+  setup({ hp: 0, hpMax: 6 });
+  const endsAt = Date.now() + 60000;
+  api.update((d) => {
+    const t = d.maps[0].tokens[0];
+    t.hp = 0;
+    t.status = { label: '急救机器人正在赶来', endsAt };
+  });
+  assert.equal(api.settleJump(jumpDown({ injury: 'heavy' }), [], { injuryRoll: 12, injuryBy: 'player' }), '');
+  const ev = api.getWorld().events[0];
+  const tok = api.getWorld().maps[0].tokens[0];
+  assert.deepEqual(tok.status, { label: '濒死', roundsLeft: 3 });
+  assert.equal(tok.status.endsAt, undefined, '战斗里不再留机器人的 ETA');
+  const status = ev.deltas.find((d) => d.kind === 'status');
+  assert.equal(status.from, '急救机器人正在赶来');
+  assert.equal(status.to, '濒死');
+  assert.match(ev.note, /→ 濒死/);
+});
+
+test('代掷劣势：两颗取低，结算失败后清空重来', () => {
+  const die = (id, value) => ({ id, sides: 20, value, tens: null, units: null, material: 'wood', seed: 1 });
+  let step = api.applyStandInRoll([], die('a', 20), { kind: 'two', advantage: false });
+  assert.equal(step.done, false);
+  assert.equal(step.rolls.length, 1);
+  assert.match(step.message, /取低/);
+  step = api.applyStandInRoll(step.rolls, die('b', 5), { kind: 'two', advantage: false });
+  assert.equal(step.done, true);
+  assert.equal(step.value, 5, '劣势取低');
+  assert.equal(step.chosen.id, 'b');
+  assert.deepEqual(step.values, [20, 5]);
+  const failed = api.afterStandInSettle('找不到棋子', step.rolls);
+  assert.deepEqual(failed.rolls, [], '结算失败后这组骰要清掉');
+  assert.equal(failed.message, '找不到棋子');
+  const again = api.applyStandInRoll(failed.rolls, die('c', 8), { kind: 'two', advantage: false });
+  assert.equal(again.rolls.length, 1, '下次从第一颗重来，不会变三颗');
+});
+
+test('代掷多属性：一颗一颗，齐了再交全部', () => {
+  const die = (id, value) => ({ id, sides: 20, value, tens: null, units: null, material: 'wood', seed: 1 });
+  let step = api.applyStandInRoll([], die('a', 10), { kind: 'attrs', attrs: ['智慧', '敏捷'] });
+  assert.equal(step.done, false);
+  assert.match(step.message, /再掷 敏捷/);
+  step = api.applyStandInRoll(step.rolls, die('b', 15), { kind: 'attrs', attrs: ['智慧', '敏捷'] });
+  assert.equal(step.done, true);
+  assert.equal(step.chosen.id, 'a');
+  assert.equal(step.value, 10);
+  assert.deepEqual(step.values, [10, 15]);
 });
 
 test('已昏厥再摔：状态不变，note 不写“实扣 0”', () => {

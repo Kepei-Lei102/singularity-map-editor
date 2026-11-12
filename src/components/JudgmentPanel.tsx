@@ -6,6 +6,7 @@ import { cancelPendingJudgment, settlePendingJudgment, type JudgmentRollInput } 
 import { tokenPosition } from '../scene/architecture';
 import type { Id } from '../core/types';
 import { DiceTray, type DiceSides, type DiceTrayRecord } from './DiceTray';
+import { afterStandInSettle, applyStandInRoll } from './judgmentStandIn';
 
 interface Setup {
   title: string;
@@ -55,7 +56,9 @@ function PendingJudgmentPanel() {
   // 免得「结算了但忘了通知玩家窗口」这类漏路径再出现。
   const finish = (input: JudgmentRollInput, byStandIn: boolean) => {
     const err = settlePendingJudgment(input, byStandIn);
-    if (err) { setMessage(err); setStandInRolls([]); }
+    const after = afterStandInSettle(err, standInRolls);
+    setStandInRolls(after.rolls);
+    if (after.message) setMessage(after.message);
   };
   const broadcast = () => {
     const raw = getUI().judgmentResult;
@@ -74,32 +77,21 @@ function PendingJudgmentPanel() {
   /** 结算要两颗一起交给引擎；只给一颗，引擎会把它当单掷，优劣势就丢了。 */
   const diceValues = result ? (result.values?.length ? result.values : [result.value]) : [];
   const onStandInRoll = (roll: DiceTrayRecord) => {
-    // 多属性判定要替玩家掷 N 颗（撬锁是两颗）；一颗一颗来，掷齐再一起结算。
-    if (isCheck && checkAttrs.length > 1) {
-      const rolls = [...standInRolls, roll];
-      if (rolls.length < checkAttrs.length) {
-        setStandInRolls(rolls);
-        setMessage(`已掷 ${checkAttrs[rolls.length - 1].attr}：D${roll.sides}=${fmt(roll.value)}；再掷 ${checkAttrs[rolls.length].attr}`);
-        return;
-      }
+    // 多属性判定要替玩家掷 N 颗（撬锁是两颗）；跳跃优/劣势要替玩家掷两颗。
+    // 状态转换交给纯函数，测试能直接把“两颗掷完后结算失败”的序列跑一遍。
+    const mode = isCheck && checkAttrs.length > 1
+      ? { kind: 'attrs' as const, attrs: checkAttrs.map((a) => a.attr) }
+      : needTwo
+        ? { kind: 'two' as const, advantage: dice === 'advantage' }
+        : null;
+    if (mode) {
+      const step = applyStandInRoll(standInRolls, roll, mode);
+      setStandInRolls(step.rolls);
+      if (step.message) setMessage(step.message);
+      if (!step.done) return;
+      const chosen = step.chosen!;
       finish({
-        rollId: rolls[0].id, sides: rolls[0].sides, value: rolls[0].value, values: rolls.map((x) => x.value),
-        tens: rolls[0].tens, units: rolls[0].units, material: rolls[0].material, seed: rolls[0].seed,
-      }, true);
-      return;
-    }
-    // 跳跃的优/劣势也要替玩家掷两颗，取高/低后把两颗一起交给引擎；只给一颗等于把优劣势降成单骰。
-    if (needTwo) {
-      const rolls = [...standInRolls, roll];
-      if (rolls.length < 2) {
-        setStandInRolls(rolls);
-        setMessage(`已掷 D${roll.sides}=${fmt(roll.value)}；再掷一颗，取${dice === 'advantage' ? '高' : '低'}`);
-        return;
-      }
-      const taken = dice === 'advantage' ? Math.max(...rolls.map((x) => x.value)) : Math.min(...rolls.map((x) => x.value));
-      const chosen = rolls.find((x) => x.value === taken)!;
-      finish({
-        rollId: chosen.id, sides: chosen.sides, value: taken, values: rolls.map((x) => x.value),
+        rollId: chosen.id, sides: chosen.sides, value: step.value!, values: step.values,
         tens: chosen.tens, units: chosen.units, material: chosen.material, seed: chosen.seed,
       }, true);
       return;
