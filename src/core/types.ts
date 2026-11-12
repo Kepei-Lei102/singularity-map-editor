@@ -534,6 +534,16 @@ export interface FallRequest {
   injury: FallInjury;
 }
 
+/** 撞门大失败的反伤：第一颗力量骰已掷完，等 1D4。 */
+export interface RamImpact {
+  mapId: Id;
+  objectId: Id;
+  tokenId: Id;
+  /** 第一颗的原始点数；第二颗落总事件时用它重建 check。 */
+  checkValues: number[];
+  checkBy: 'player' | 'witness' | 'host';
+}
+
 export interface PendingJudgment {
   id: Id;
   title: string;
@@ -554,7 +564,9 @@ export interface PendingJudgment {
   /** 这一发判定是为一次攻击开的：掷完按攻击口径结算知会。 */
   attack?: { attackerTokenId: string; targetTokenId: string; sharp?: boolean } | null;
   /** 这一发判定是为一次撬锁/暴力开锁开的：掷完按门锁规则结算。 */
-  door?: { mapId: Id; objectId: Id; method: 'pick' | 'force' } | null;
+  door?: { mapId: Id; objectId: Id; method: 'pick' | 'force' | 'ram' } | null;
+  /** 第二棒：撞门大失败后，等这颗 1D4 反伤。 */
+  ramImpact?: RamImpact | null;
   /**
    * 多属性判定的口径。没写就是单骰的普通判定。
    * 撬锁用：智慧＋敏捷（巧力）/ 力量＋敏捷（暴力），都要过。
@@ -667,7 +679,10 @@ export interface PhysicalEvent {
   };
   deltas: Delta[];
   /** 摔伤骰：不是属性检定，单独记骰面和档位，账本和卡片都读它。 */
-  damage?: { kind: 'fall'; sides: 4 | 6 | 8 | 10 | 12 | 20; roll: number; by: 'player' | 'witness' | 'host'; tier: FallInjury };
+  damage?:
+    | { kind: 'fall'; sides: 4 | 6 | 8 | 10 | 12 | 20; roll: number; by: 'player' | 'witness' | 'host'; tier: FallInjury }
+    /** 撞门这类反伤：只记骰面和点数，不记伤档。 */
+    | { kind: 'impact'; sides: 4; roll: number; by: 'player' | 'witness' | 'host' };
   /** A 得到的信息：不改变世界，只改变认知 */
   knowledge?: { subject: Id; label: string; tier: string }[];
   /** 见证者当场写的裁定 */

@@ -52,9 +52,9 @@ const DOOR = (lock) => ({
 });
 
 /** 一间房、一扇门、一个贴身的角色。默认角色有【开锁副手】，智慧 60 → 12，敏捷 40 → 8。 */
-function stage({ lock = null, skills = ['001-9-204'], token = { x: 1, y: 1 }, open = false, extraWall = false } = {}) {
+function stage({ lock = null, skills = ['001-9-204'], token = { x: 1, y: 1 }, open = false, extraWall = false, hp } = {}) {
   const w = api.emptyWorld();
-  w.party = [{ id: 'a', name: '甲', color: '#fff', tags: [], sex: '男', skills, attributes: { 力量: 60, 敏捷: 40, 意志: 50, 观察: 50, 智慧: 60, 魅力: 50 } }];
+  w.party = [{ id: 'a', name: '甲', color: '#fff', tags: [], sex: '男', skills, attributes: { 力量: 60, 敏捷: 40, 意志: 50, 观察: 50, 智慧: 60, 魅力: 50 }, ...(hp === undefined ? {} : { hp, hpMax: hp }) }];
   const m = w.maps[0];
   m.fog = m.fog.map(() => 1);
   m.objects = [WALL('wall1'), DOOR(lock)];
@@ -78,8 +78,11 @@ function lastEvent() { return (api.getWorld().events ?? []).at(-1); }
 function rollMsg(value, values) {
   return { type: 'judge-roll', id: api.getUI().pendingJudgment.id, title: api.getUI().pendingJudgment.title, sides: 20, value, values, tens: null, units: null, material: 'wood', seed: 1, rollId: 'r1', from: api.SESSION };
 }
-function settle(values) {
-  return api.settlePendingJudgment({ rollId: 'r1', sides: 20, value: values[0], values, tens: null, units: null, material: 'wood', seed: 1 }, false);
+function settle(values, sides = 20, rollId = 'r1', byStandIn = false) {
+  return api.settlePendingJudgment({ rollId, sides, value: values[0], values, tens: null, units: null, material: 'wood', seed: 1 }, byStandIn);
+}
+function rollMsgSides(value, sides) {
+  return { type: 'judge-roll', id: api.getUI().pendingJudgment.id, title: api.getUI().pendingJudgment.title, sides, value, values: undefined, tens: null, units: null, material: 'wood', seed: 1, rollId: 'r2', from: api.SESSION };
 }
 
 test('schema 认门锁：合法的过，坏字段报错', () => {
@@ -482,5 +485,404 @@ test('电子锁这轮不给撬，明确说还没接', () => {
   try {
     assert.equal(api.trialDoors()[0].kind, 'electronic');
     assert.match(api.trialPickLock('door1', 'force') ?? '', /电子锁/);
+  } finally { stop(); }
+});
+
+
+test('撞门成功：力量 D20 过了门就开，锁状态原样不动', () => {
+  stage({ hp: 8 });
+  try {
+    api.openPlayerWindow('a', true);
+    const win = windows.at(-1);
+    win.got.length = 0;
+    assert.equal(api.trialRamDoor('door1'), null);
+    const p = api.getUI().pendingJudgment;
+    assert.equal(p.sides, 20);
+    assert.equal(p.title, '撞门：门');
+    assert.equal(p.door.method, 'ram');
+    assert.deepEqual(p.check.attrs.map((a) => a.attr), ['力量']);
+    assert.equal(p.check.merge, 'single');
+    assert.equal(p.check.dc, 20);
+    const request = win.got.find((m) => m.type === 'judge-request');
+    assert.ok(request, '骰盘进了玩家窗口');
+    assert.equal(request.judgment.door, undefined, 'door 不推给玩家');
+    assert.deepEqual(request.judgment.check.attrs.map((a) => a.attr), ['力量']);
+
+    api.onJudgeRoll(rollMsg(15), win);
+    assert.equal(settle([15]), null);
+    assert.equal(door().state, 1, '门真的开了');
+    assert.equal(door().lock, undefined, '本来没锁，也不凭空加锁');
+    const ev = lastEvent();
+    assert.equal(ev.action.name, '撞门');
+    assert.equal(ev.check.success, true);
+    assert.deepEqual(ev.check.attrs.map((a) => a.attr), ['力量']);
+    assert.equal(ev.check.rolledBy, 'player');
+    assert.deepEqual(ev.deltas, [{ kind: 'object', id: 'door1', name: '门', path: '状态', from: '关闭', to: '打开' }]);
+    assert.equal(ev.damage, undefined);
+    const j = api.getWorld().judgments.at(-1);
+    assert.equal(j.roll.sides, 20);
+    assert.equal(j.roll.value, 15);
+    assert.equal(j.roll.values, undefined, '单属性判定不塞 values');
+  } finally { stop(); }
+});
+
+test('撞门失败：门不动，只写一声响，不写假 delta', () => {
+  stage({ hp: 8 });
+  try {
+    assert.equal(api.trialRamDoor('door1', { rolls: [2] }), null);
+    assert.equal(door().state, 0);
+    assert.equal(door().lock, undefined);
+    const ev = lastEvent();
+    assert.equal(ev.action.name, '撞门');
+    assert.equal(ev.check.success, false);
+    assert.equal(ev.check.tier, null);
+    assert.deepEqual(ev.deltas, []);
+    assert.match(ev.note, /门没动/);
+    assert.match(ev.note, /动静/);
+    assert.equal(ev.damage, undefined);
+  } finally { stop(); }
+});
+
+test('撞门大失败：第一颗只开第二笔 1D4，第二颗才落唯一一条总事件', () => {
+  stage({ hp: 8 });
+  try {
+    api.openPlayerWindow('a', true);
+    const win = windows.at(-1);
+    assert.equal(api.trialRamDoor('door1'), null);
+    api.onJudgeRoll(rollMsg(1), win);
+    assert.equal(settle([1]), null, '第一颗大失败也要先收下');
+    assert.equal(lastEvent(), undefined, '第一颗不落事件');
+    const p = api.getUI().pendingJudgment;
+    assert.equal(p.sides, 4);
+    assert.equal(p.title, '撞门反伤：门');
+    assert.deepEqual(p.ramImpact.checkValues, [1]);
+    assert.equal(p.ramImpact.checkBy, 'player');
+    assert.equal(p.check, null, '第二笔只掷 D4，不再让玩家看属性');
+    const requests = win.got.filter((m) => m.type === 'judge-request');
+    assert.equal(requests.length, 2, '第一颗和第二颗各推一次骰盘');
+    assert.equal(requests[1].judgment.door, undefined);
+    assert.equal(requests[1].judgment.ramImpact, undefined);
+
+    api.onJudgeRoll(rollMsgSides(3, 4), win);
+    assert.equal(settle([3], 4, 'r2'), null);
+    assert.equal(api.getUI().pendingJudgment, null);
+    assert.equal(door().state, 0, '卡死不等于打开');
+    assert.deepEqual(door().lock, { kind: 'physical', locked: true, keyable: false });
+    const ev = lastEvent();
+    assert.equal(ev.action.name, '撞门');
+    assert.equal(ev.check.tier, 'fumble');
+    assert.equal(ev.check.rolledBy, 'player');
+    assert.deepEqual(ev.damage, { kind: 'impact', sides: 4, roll: 3, by: 'player' });
+    assert.deepEqual(ev.deltas, [
+      { kind: 'object', id: 'door1', name: '门', path: '锁具', from: '没锁', to: '卡死' },
+      { kind: 'hp', id: 'a', name: '甲', from: 8, to: 5 },
+    ]);
+    assert.match(ev.note, /1D4=3/);
+    const judgments = api.getWorld().judgments;
+    assert.equal(judgments.length, 2);
+    assert.equal(judgments[0].roll.sides, 20);
+    assert.equal(judgments[1].roll.sides, 4);
+    assert.equal(judgments[1].roll.value, 3);
+  } finally { stop(); }
+});
+
+test('撞门大失败把人打到 0 血：昏厥，不是濒死；NPC 走同一套', () => {
+  stage({ hp: 2 });
+  try {
+    assert.equal(api.trialRamDoor('door1', { rolls: [1, 4] }), null);
+    assert.equal(door().lock.keyable, false);
+    assert.equal(api.getWorld().party[0].hp, 0);
+    assert.equal(api.getUI().trial.players[0].tokenId, 'ta');
+    const tok = api.getWorld().maps[0].tokens.find((k) => k.id === 'ta');
+    assert.equal(tok.down, true);
+    assert.equal(tok.status, undefined, '昏厥用 down 表示，不写假 status');
+    const ev = lastEvent();
+    assert.deepEqual(ev.deltas, [
+      { kind: 'object', id: 'door1', name: '门', path: '锁具', from: '没锁', to: '卡死' },
+      { kind: 'hp', id: 'a', name: '甲', from: 2, to: 0 },
+      { kind: 'status', id: 'ta', name: '甲', from: null, to: '昏厥' },
+    ]);
+    assert.match(ev.note, /昏厥/);
+    assert.doesNotMatch(ev.note, /濒死/);
+    assert.equal(ev.check.tier, 'fumble');
+  } finally { stop(); }
+});
+
+test('没锁的门大失败：给它挂一个物理卡死锁来记「门卡死」', () => {
+  stage({ hp: 8 });
+  try {
+    assert.equal(api.trialRamDoor('door1', { rolls: [1, 2] }), null);
+    assert.deepEqual(door().lock, { kind: 'physical', locked: true, keyable: false });
+    assert.equal(door().state, 0);
+    const ev = lastEvent();
+    assert.deepEqual(ev.deltas[0], { kind: 'object', id: 'door1', name: '门', path: '锁具', from: '没锁', to: '卡死' });
+    assert.equal(api.getWorld().party[0].hp, 6);
+  } finally { stop(); }
+});
+
+test('已经卡死的门再撞大失败：不写第二条假 delta，1D4 照吃', () => {
+  stage({ lock: { kind: 'physical', locked: true, keyable: false }, hp: 8 });
+  try {
+    assert.equal(api.trialRamDoor('door1', { rolls: [1, 2] }), null);
+    const ev = lastEvent();
+    assert.equal(ev.check.tier, 'fumble');
+    assert.deepEqual(ev.deltas, [{ kind: 'hp', id: 'a', name: '甲', from: 8, to: 6 }]);
+    assert.match(ev.note, /早就卡死/);
+    assert.equal(door().lock.keyable, false);
+  } finally { stop(); }
+});
+
+test('撞门不看锁：锁着的门也能撞开，锁状态保留不动', () => {
+  stage({ lock: { kind: 'physical', locked: true, keyable: true }, hp: 8 });
+  try {
+    assert.equal(api.trialRamDoor('door1', { rolls: [15] }), null);
+    assert.equal(door().state, 1);
+    assert.deepEqual(door().lock, { kind: 'physical', locked: true, keyable: true });
+    const ev = lastEvent();
+    assert.deepEqual(ev.deltas, [{ kind: 'object', id: 'door1', name: '门', path: '状态', from: '关闭', to: '打开' }]);
+  } finally { stop(); }
+});
+
+test('电子锁的门这轮不给撞', () => {
+  stage({ lock: { kind: 'electronic', locked: true, keyable: true } });
+  try {
+    assert.match(api.trialRamDoor('door1') ?? '', /电子锁/);
+    assert.equal(api.getUI().pendingJudgment, null);
+    assert.equal(lastEvent(), undefined);
+    assert.equal(api.trialDoors()[0].rammable, false);
+  } finally { stop(); }
+});
+
+test('撞门拒绝：开着的门、缺打开状态的门', () => {
+  stage({ open: true });
+  try {
+    assert.match(api.trialRamDoor('door1') ?? '', /开着/);
+    assert.equal(lastEvent(), undefined);
+  } finally { stop(); }
+  stage();
+  try {
+    api.update((d) => { d.maps[0].objects.find((o) => o.id === 'door1').opening.openStates = []; });
+    assert.match(api.trialRamDoor('door1') ?? '', /缺少打开状态/);
+    assert.equal(api.getUI().pendingJudgment, null);
+    assert.equal(lastEvent(), undefined);
+  } finally { stop(); }
+});
+
+test('第二颗之前棋子被删：不广播第二颗、不落事件、不扣血', () => {
+  stage({ hp: 8 });
+  try {
+    api.openPlayerWindow('a', true);
+    const win = windows.at(-1);
+    assert.equal(api.trialRamDoor('door1'), null);
+    api.onJudgeRoll(rollMsg(1), win);
+    assert.equal(settle([1]), null);
+    const before = api.getWorld().judgments.length;
+    api.update((d) => { d.maps[0].tokens = []; });
+    assert.match(settle([3], 4) ?? '', /找不到角色|状态/);
+    assert.equal(api.getUI().pendingJudgment, null);
+    assert.equal(api.getWorld().judgments.length, before, '第二颗没有广播');
+    assert.equal(lastEvent(), undefined);
+    assert.equal(api.getWorld().party[0].hp, 8);
+  } finally { stop(); }
+});
+
+test('单属性撞门正式判定只留一颗，不走 values（否则会判成骰子无效）', () => {
+  stage({ hp: 8 });
+  try {
+    api.openPlayerWindow('a', true);
+    const win = windows.at(-1);
+    assert.equal(api.trialRamDoor('door1'), null);
+    api.onJudgeRoll(rollMsg(15), win);
+    assert.equal(settle([15]), null);
+    const j = api.getWorld().judgments.at(-1);
+    assert.equal(j.roll.sides, 20);
+    assert.equal(j.roll.values, undefined);
+    assert.equal(j.roll.attrs, undefined);
+    assert.ok(api.getWorld().log.some((l) => /正式判定「撞门：门」：D20=15/.test(l.text)), '第一颗单独进正式判定日志');
+  } finally { stop(); }
+});
+
+test('schema 认 impact 1D4，但拒绝 5 点骰和伤档', () => {
+  const make = () => {
+    const w = api.emptyWorld();
+    const ev = api.newEvent(w, Date.now(), { kind: 'pc', id: 'a', name: '甲' }, { name: '撞门', source: '临场' }, {
+      damage: { kind: 'impact', sides: 4, roll: 2, by: 'host' },
+    });
+    w.events = [ev];
+    w.log = [];
+    return w;
+  };
+  const ok = make();
+  assert.doesNotThrow(() => api.checkWorld(ok));
+  const five = make();
+  five.events[0].damage.sides = 5;
+  assert.throws(() => api.checkWorld(five), /damage\.sides/);
+  const tier = make();
+  tier.events[0].damage.tier = 'light';
+  assert.throws(() => api.checkWorld(tier), /impact 伤害没有伤档/);
+});
+
+
+test('玩家不在电脑前：见证者掷 D20+D4，一条事件，反伤记 witness', () => {
+  stage({ hp: 8 });
+  try {
+    assert.equal(api.trialRamDoor('door1', { rolls: [1, 3] }), null);
+    assert.equal(api.getUI().pendingJudgment, null, '没有窗口就不留第二笔');
+    const ev = lastEvent();
+    assert.equal(ev.action.name, '撞门');
+    assert.equal(ev.check.tier, 'fumble');
+    assert.equal(ev.check.rolledBy, 'witness');
+    assert.deepEqual(ev.damage, { kind: 'impact', sides: 4, roll: 3, by: 'witness' });
+    assert.equal(door().lock.keyable, false);
+    assert.equal(api.getWorld().party[0].hp, 5);
+    assert.equal(api.getWorld().judgments.length, 2, '两颗骰都广播了');
+  } finally { stop(); }
+});
+
+test('战斗中撞门占行动点；自由行动不占', () => {
+  stage({ hp: 8 });
+  try {
+    assert.equal(api.trialRamDoor('door1', { rolls: [15] }), null);
+    assert.equal(api.getUI().trial.acted?.ta, undefined, '自由行动不占行动点');
+  } finally { stop(); }
+  stage({ hp: 8 });
+  try {
+    api.setUI({ trial: { ...api.getUI().trial, combat: true } });
+    assert.equal(api.trialRamDoor('door1', { rolls: [15] }), null);
+    assert.equal(api.getUI().trial.acted?.ta, true, '战斗中撞门用掉行动点');
+  } finally { stop(); }
+});
+
+test('第二颗之前门被打开：拒绝结算，不广播、不扣血', () => {
+  stage({ hp: 8 });
+  try {
+    api.openPlayerWindow('a', true);
+    const win = windows.at(-1);
+    assert.equal(api.trialRamDoor('door1'), null);
+    api.onJudgeRoll(rollMsg(1), win);
+    assert.equal(settle([1]), null);
+    api.update((d) => { d.maps[0].objects.find((o) => o.id === 'door1').state = 1; });
+    assert.match(settle([3], 4, 'r2') ?? '', /已经变了/);
+    assert.equal(api.getUI().pendingJudgment, null);
+    assert.equal(api.getWorld().party[0].hp, 8);
+    assert.equal(lastEvent(), undefined);
+  } finally { stop(); }
+});
+
+test('玩家窗口拿到的撞门判定：第一笔有属性，第二笔只有 D4，都不带落点', () => {
+  stage({ hp: 8 });
+  try {
+    api.openPlayerWindow('a', true);
+    const win = windows.at(-1);
+    assert.equal(api.trialRamDoor('door1'), null);
+    const first = win.got.find((m) => m.type === 'judge-request');
+    assert.deepEqual(first.judgment.check.attrs.map((a) => a.attr), ['力量']);
+    assert.equal(first.judgment.ramImpact, undefined);
+    assert.equal(first.judgment.dice, 'single');
+    api.onJudgeRoll(rollMsg(1), win);
+    assert.equal(settle([1]), null);
+    const second = win.got.filter((m) => m.type === 'judge-request').at(-1);
+    assert.equal(second.judgment.check, null);
+    assert.equal(second.judgment.door, undefined);
+    assert.equal(second.judgment.ramImpact, undefined);
+    assert.equal(second.judgment.sides, 4);
+    assert.equal(second.judgment.dice, 'single');
+  } finally { stop(); }
+});
+
+test('见证者现掷的 1D4 真的按骰面走，不是固定 1', () => {
+  stage({ hp: 8 });
+  try {
+    const old = Math.random;
+    Math.random = () => 0.75; // 1 + floor(0.75*4) = 4；uid 也吃这个值，但这一发只落一条事件
+    try { assert.equal(api.trialRamDoor('door1', { rolls: [1] }), null); }
+    finally { Math.random = old; }
+    const ev = lastEvent();
+    assert.deepEqual(ev.damage, { kind: 'impact', sides: 4, roll: 4, by: 'witness' });
+    assert.equal(api.getWorld().party[0].hp, 4);
+  } finally { stop(); }
+});
+
+
+test('第二颗之前门被禁用：拒绝结算，不广播、不落账', () => {
+  stage({ hp: 8 });
+  try {
+    api.openPlayerWindow('a', true);
+    const win = windows.at(-1);
+    assert.equal(api.trialRamDoor('door1'), null);
+    api.onJudgeRoll(rollMsg(1), win);
+    assert.equal(settle([1]), null);
+    const before = api.getWorld().judgments.length;
+    api.update((d) => { d.maps[0].objects.find((o) => o.id === 'door1').enabled = false; });
+    assert.match(settle([3], 4, 'r2') ?? '', /变了|看不见/);
+    assert.equal(api.getUI().pendingJudgment, null);
+    assert.equal(api.getWorld().judgments.length, before);
+    assert.equal(api.getWorld().party[0].hp, 8);
+    assert.equal(lastEvent(), undefined);
+  } finally { stop(); }
+});
+
+test('第二颗之前人被挪走：拒绝结算，不广播、不落账', () => {
+  stage({ hp: 8 });
+  try {
+    api.openPlayerWindow('a', true);
+    const win = windows.at(-1);
+    assert.equal(api.trialRamDoor('door1'), null);
+    api.onJudgeRoll(rollMsg(1), win);
+    assert.equal(settle([1]), null);
+    api.update((d) => { d.maps[0].tokens[0].x = 9; d.maps[0].tokens[0].y = 9; d.maps[0].tokens[0].subcell = undefined; });
+    assert.match(settle([3], 4, 'r2') ?? '', /贴身/);
+    assert.equal(api.getUI().pendingJudgment, null);
+    assert.equal(api.getWorld().party[0].hp, 8);
+    assert.equal(lastEvent(), undefined);
+  } finally { stop(); }
+});
+
+test('第二颗之前行动点已被别的动作吃掉：拒绝结算，不广播、不落账', () => {
+  stage({ hp: 8 });
+  try {
+    api.openPlayerWindow('a', true);
+    const win = windows.at(-1);
+    assert.equal(api.trialRamDoor('door1'), null);
+    api.onJudgeRoll(rollMsg(1), win);
+    assert.equal(settle([1]), null);
+    api.setUI({ trial: { ...api.getUI().trial, combat: true, acted: { ta: true } } });
+    assert.match(settle([3], 4, 'r2') ?? '', /行动点/);
+    assert.equal(api.getUI().pendingJudgment, null);
+    assert.equal(api.getWorld().party[0].hp, 8);
+    assert.equal(lastEvent(), undefined);
+  } finally { stop(); }
+});
+
+test('撞门第一颗的骰面必须对：D4 不能冒充 D20', () => {
+  stage({ hp: 8 });
+  try {
+    api.openPlayerWindow('a', true);
+    const win = windows.at(-1);
+    assert.equal(api.trialRamDoor('door1'), null);
+    api.onJudgeRoll(rollMsg(1), win);
+    assert.match(settle([1], 4) ?? '', /骰面或骰子数量/);
+    assert.ok(api.getUI().pendingJudgment, '判定还挂着，不能半截结掉');
+    assert.equal(lastEvent(), undefined);
+  } finally { stop(); }
+});
+
+test('见证者代掷大失败：settle 的随机 D4 也按骰面走', () => {
+  stage({ hp: 8 });
+  try {
+    api.openPlayerWindow('a', true);
+    const win = windows.at(-1);
+    assert.equal(api.trialRamDoor('door1'), null);
+    api.onJudgeRoll(rollMsg(1), win);
+    const old = Math.random;
+    Math.random = () => 0.75;
+    try { assert.equal(settle([1], 20, 'r2', true), null); }
+    finally { Math.random = old; }
+    assert.equal(api.getUI().pendingJudgment, null);
+    const ev = lastEvent();
+    assert.deepEqual(ev.damage, { kind: 'impact', sides: 4, roll: 4, by: 'witness' });
+    assert.equal(ev.check.rolledBy, 'witness');
+    assert.equal(api.getWorld().party[0].hp, 4);
+    assert.equal(api.getWorld().judgments.length, 2);
   } finally { stop(); }
 });

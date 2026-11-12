@@ -52,7 +52,8 @@ export function openJudgment(input: {
   jump?: import('../core/types').JumpRequest | null;
   fall?: import('../core/types').FallRequest | null;
   attack?: { attackerTokenId: string; targetTokenId: string; sharp?: boolean } | null;
-  door?: { mapId: string; objectId: string; method: 'pick' | 'force' } | null;
+  door?: { mapId: string; objectId: string; method: 'pick' | 'force' | 'ram' } | null;
+  ramImpact?: import('../core/types').RamImpact | null;
   check?: { attrs: { attr: string; dice: 'single' | 'advantage' | 'disadvantage' }[]; dc: number; merge: 'single' | 'any' | 'all' } | null;
 }): string | null {
   const w = getWorld();
@@ -71,6 +72,7 @@ export function openJudgment(input: {
       fall: input.fall ?? null,
       attack: input.attack ?? null,
       door: input.door ?? null,
+      ramImpact: input.ramImpact ?? null,
       check: input.check ?? null,
       context: worldContext(),
     },

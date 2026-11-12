@@ -23,7 +23,7 @@ import { MARK_LIFE, findMap, giveMapKnowledge, setVisionMode } from '../runtime/
 import { HEAR_RANGE } from '../scene/perception';
 import {
   MOVE_PER_TURN, actionsLeft, addTrialPlayer, clearTrialStatus, endTrial, setTrialStatus, statusLeft, switchTrialPlayer, toggleTrialPause,
-  tickRobots, trialDoors, trialOpenDoor, trialPickLock, trialRun, trialSense, trialStance,
+  tickRobots, trialDoors, trialOpenDoor, trialPickLock, trialRamDoor, trialRun, trialSense, trialStance,
   toggleCombat, toggleMarkMode, trialAttack, trialAttackTargets, trialRescue, trialOpportunityAttack, trialSkipOpportunity,
   runModeOf, sharpOf,
 } from '../runtime/trial';
@@ -162,25 +162,33 @@ export function TrialHud() {
         {(() => {
           const doors = trialDoors();
           if (!doors.length) return <span className="muted">身边 1 格内没有看得见的门</span>;
-          return doors.map((d) => d.open
-            ? <span key={d.objectId} className="muted">{d.name} 开着</span>
-            : d.locked && d.kind === 'electronic'
-              ? <span key={d.objectId} className="muted">{d.name} 电子锁（这轮还没接开锁）</span>
-            : d.locked && !d.keyable
-              ? <span key={d.objectId} className="inline">
-                  <span className="muted">{d.name} 锁芯卡死（巧力撬不开）</span>
-                  <button className="small" disabled={!actionsLeft(t)} title="锁芯卡死也能砸：力量＋敏捷都要过，DC 20"
-                    onClick={() => { const e = trialPickLock(d.objectId, 'force'); if (e) set({ msg: e }); }}>强行打开 {d.name}</button>
-                </span>
-              : d.locked
-                ? <span key={d.objectId} className="inline">
-                    {d.canPick && <button className="small" disabled={!actionsLeft(t)} title="智慧＋敏捷都要过，DC 20；要解锁【开锁副手】才能巧力撬锁"
-                      onClick={() => { const e = trialPickLock(d.objectId, 'pick'); if (e) set({ msg: e }); }}>撬锁 {d.name}</button>}
-                    <button className="small" disabled={!actionsLeft(t)} title="力量＋敏捷都要过，DC 20；谁都能试，会发出动静"
-                      onClick={() => { const e = trialPickLock(d.objectId, 'force'); if (e) set({ msg: e }); }}>暴力开锁 {d.name}</button>
-                  </span>
-                : <button key={d.objectId} className="small" disabled={!actionsLeft(t)}
-                    onClick={() => { const e = trialOpenDoor(d.objectId); if (e) set({ msg: e }); }}>开门 {d.name}</button>);
+          return doors.map((d) => {
+            if (d.open) return <span key={d.objectId} className="muted">{d.name} 开着</span>;
+            if (d.locked && d.kind === 'electronic') return <span key={d.objectId} className="muted">{d.name} 电子锁（这轮还没接开锁）</span>;
+            const ram = d.rammable
+              ? <button key={`${d.objectId}-ram`} className="small" disabled={!actionsLeft(t)}
+                  title="力量单骰，DC 20；撞门不看锁，大失败会卡死并吃 1D4"
+                  onClick={() => { const e = trialRamDoor(d.objectId); if (e) set({ msg: e }); }}>撞门 {d.name}</button>
+              : null;
+            if (d.locked && !d.keyable) return <span key={d.objectId} className="inline">
+              <span className="muted">{d.name} 锁芯卡死（巧力撬不开）</span>
+              <button className="small" disabled={!actionsLeft(t)} title="锁芯卡死也能砸：力量＋敏捷都要过，DC 20"
+                onClick={() => { const e = trialPickLock(d.objectId, 'force'); if (e) set({ msg: e }); }}>强行打开 {d.name}</button>
+              {ram}
+            </span>;
+            if (d.locked) return <span key={d.objectId} className="inline">
+              {d.canPick && <button className="small" disabled={!actionsLeft(t)} title="智慧＋敏捷都要过，DC 20；要解锁【开锁副手】才能巧力撬锁"
+                onClick={() => { const e = trialPickLock(d.objectId, 'pick'); if (e) set({ msg: e }); }}>撬锁 {d.name}</button>}
+              <button className="small" disabled={!actionsLeft(t)} title="力量＋敏捷都要过，DC 20；谁都能试，会发出动静"
+                onClick={() => { const e = trialPickLock(d.objectId, 'force'); if (e) set({ msg: e }); }}>暴力开锁 {d.name}</button>
+              {ram}
+            </span>;
+            return <span key={d.objectId} className="inline">
+              <button className="small" disabled={!actionsLeft(t)}
+                onClick={() => { const e = trialOpenDoor(d.objectId); if (e) set({ msg: e }); }}>开门 {d.name}</button>
+              {ram}
+            </span>;
+          });
         })()}
       </div>
       {/* 姿态：只改视野高度。站着看得远，坐和蹲矮一截，躺下最低。 */}

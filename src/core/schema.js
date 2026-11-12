@@ -675,11 +675,17 @@ export function checkWorld(w, migrated = false) {
       }
       if (e.damage !== undefined) {
         const da = `${ea}.damage`;
-        obj(e.damage, da); oneOf(e.damage.kind, ['fall'], `${da}.kind`);
-        oneOf(e.damage.sides, [4, 6, 8, 10, 12, 20], `${da}.sides`);
+        obj(e.damage, da); oneOf(e.damage.kind, ['fall', 'impact'], `${da}.kind`);
+        if (e.damage.kind === 'fall') {
+          oneOf(e.damage.sides, [4, 6, 8, 10, 12, 20], `${da}.sides`);
+          oneOf(e.damage.tier, ['light', 'medium', 'heavy', 'brutal'], `${da}.tier`);
+        } else {
+          // 撞门反伤只有 1D4，没有伤档。
+          oneOf(e.damage.sides, [4], `${da}.sides`);
+          if (e.damage.tier !== undefined) fail(`${da}.tier`, 'impact 伤害没有伤档');
+        }
         int(e.damage.roll, `${da}.roll`, 1, e.damage.sides);
         oneOf(e.damage.by, ['player', 'witness', 'host'], `${da}.by`);
-        oneOf(e.damage.tier, ['light', 'medium', 'heavy', 'brutal'], `${da}.tier`);
       }
       optStr(e.ruling, `${ea}.ruling`); optStr(e.note, `${ea}.note`);
     });

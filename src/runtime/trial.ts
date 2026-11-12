@@ -942,6 +942,8 @@ export interface TrialDoor {
   kind?: 'physical' | 'electronic';
   /** 身上有【开锁副手】才能巧力撬锁；暴力开锁谁都能试。 */
   canPick: boolean;
+  /** 这门现在能不能撞：关着、不是电子锁。 */
+  rammable: boolean;
 }
 
 /** 当前试玩角色贴身 1 格以内、看得见的门。 */
@@ -972,6 +974,7 @@ export function trialDoors(): TrialDoor[] {
       objectId: o.id, name: o.name, open: openingIsOpen(o),
       locked: !!o.lock?.locked, keyable: o.lock ? o.lock.keyable : true, kind: o.lock?.kind,
       canPick: (pc.skills ?? []).includes(LOCKPICK_SKILL_ID),
+      rammable: !openingIsOpen(o) && o.lock?.kind !== 'electronic' && !tok.down && !tok.corpse,
     }));
 }
 
@@ -1066,6 +1069,216 @@ export function trialPickLock(objectId: string, method: 'pick' | 'force', opts: 
   return settlePendingJudgment({ rollId: `host-${uid()}`, sides: 20, value: rolls[0], values: rolls, tens: null, units: null, material: 'wood', seed: 0 }, true);
 }
 
+const RAM_ATTR = '力量';
+const RAM_DC = 20;
+const RAM_DAMAGE_SIDES = 4;
+/** 撞门反伤唯一的一颗 D4；三处随机都走它，测试才变异得动。 */
+const rollD4 = () => 1 + Math.floor(Math.random() * RAM_DAMAGE_SIDES);
+
+/** 撞门前置：贴身、看得见、门还关着；撞门不看锁，但电子锁这轮不接。 */
+function ramContext(objectId: string): DoorCtx | string {
+  const ctx = doorContext(objectId);
+  if (typeof ctx === 'string') return ctx;
+  const { door, tok } = ctx;
+  if (tok.down || tok.corpse) return '现在的状态撞不了门';
+  if (openingIsOpen(door)) return '门已经开着';
+  if (!door.opening?.openStates.length) return '门缺少打开状态，开不了';
+  if (door.lock?.kind === 'electronic') return '电子锁的门这轮还没接撞门';
+  return ctx;
+}
+
+/** 第二棒/直接结算前复核：门和人都还在，门还关着。 */
+function ramPrecheck(mapId: Id, objectId: Id, tokenId: Id, subjectId: Id): { m: GameMap; door: MapObject; tok: Token; pc: PC } | string {
+  const w = getWorld();
+  const m = findMap(w, mapId);
+  if (!m) return '找不到地图';
+  const door = m.objects.find((o) => o.id === objectId && o.opening);
+  if (!door) return '找不到这扇门';
+  if (door.hidden) return '看不见这扇门';
+  if (door.lock?.kind === 'electronic') return '这扇门已经变了，重开判定';
+  if (openingIsOpen(door) || !door.opening?.openStates?.length) return '这扇门已经变了，重开判定';
+  const tok = m.tokens.find((x) => x.id === tokenId);
+  if (!tok) return '找不到角色';
+  if (tok.down || tok.corpse) return '现在的状态撞不了门';
+  const pc = w.party.find((x) => x.id === subjectId);
+  if (!pc) return '找不到角色卡';
+  // 第二颗之前人可能被挪走、门可能被关掉/藏起来、行动点可能被别的动作用掉；这些都要和第一颗一样拦。
+  if (!objectEnabled(m, door)) return '这扇门已经变了，重开判定';
+  const at = tokenPosition(tok), b = architectureObjectBounds(m, door);
+  const dist = Math.max(b.x - at.x, 0, at.x - (b.x + b.w), b.y - at.y, 0, at.y - (b.y + b.h));
+  if (dist > 1) return '要贴身才能撞门';
+  const eye = { ...viewerOf(tok, { sex: pc.sex, heightCm: pc.heightCm }), facing: undefined };
+  const geom = architectureGeometry(m).filter((r) => r.objectId !== door.id);
+  if (!visiblePoint(w, m, eye, { x: b.x + b.w / 2, y: b.y + b.h / 2 }, geom)) return '看不见这扇门';
+  const t = tr();
+  if (t?.combat && actedOf(t, tokenId)) return '这回合的行动点已经用掉了，按空格结束回合';
+  return { m, door, tok, pc };
+}
+
+function ramCheckOf(pc: PC, roll: number) {
+  return resolveCheck({ attributes: pc.attributes, attr: RAM_ATTR, rolls: [roll], scale: 'd20', dc: RAM_DC });
+}
+
+function ramTokenFor(p: PendingJudgment): Id | null {
+  if (p.ramImpact) return p.ramImpact.tokenId;
+  const t = tr();
+  return t?.players.find((x) => x.pcId === p.subjectId)?.tokenId ?? null;
+}
+
+/** 撞门反伤的 D4 也单独广播一颗正式判定，不能只埋在事件里。 */
+function publishRamImpactRoll(p: PendingJudgment, title: string, value: number, byStandIn: boolean): string | null {
+  return publishJudgment({
+    title, ruling: p.ruling, recipients: getWorld().party.map((x) => x.id),
+    roll: {
+      id: `ram-impact-${uid()}`, sides: 4, value, tens: null, units: null,
+      material: 'wood', persona: byStandIn ? 'witness' : 'player', seed: 0,
+    },
+    subjectId: p.subjectId, place: p.place ?? null,
+  }, p.context ?? worldContext());
+}
+
+/**
+ * 撞门的唯一落地：成功开门（锁原样保留）；大失败把门卡死并吃 1D4。
+ * 属性骰两颗/三颗的过程不在这里，这里只负责最后一条事件。
+ */
+function settleRamEvent(s: {
+  mapId: Id; objectId: Id; tokenId: Id; subjectId: Id;
+  checkValues: number[];
+  damageRoll: number | null;
+  checkBy: 'player' | 'witness' | 'host';
+  damageBy: 'player' | 'witness' | 'host';
+}): string | null {
+  if (s.checkValues.length !== 1 || !Number.isInteger(s.checkValues[0]) || s.checkValues[0] < 1 || s.checkValues[0] > 20) return '骰点不对';
+  if (s.damageRoll !== null && (!Number.isInteger(s.damageRoll) || s.damageRoll < 1 || s.damageRoll > RAM_DAMAGE_SIDES)) return '骰点不对';
+  const pre = ramPrecheck(s.mapId, s.objectId, s.tokenId, s.subjectId);
+  if (typeof pre === 'string') return pre;
+  const { pc } = pre;
+  const damageRoll = s.damageRoll;
+  const check = ramCheckOf(pc, s.checkValues[0]);
+  const fumble = check.tier === 'fumble';
+  if (damageRoll !== null && !fumble) return '判定不对：没大失败却带反伤';
+  let msg = '';
+  update((d) => {
+    const dm = findMap(d, s.mapId)!;
+    const o = dm.objects.find((x) => x.id === s.objectId)!;
+    const dt = dm.tokens.find((x) => x.id === s.tokenId)!;
+    const dpc = d.party.find((x) => x.id === s.subjectId)!;
+    const deltas: Delta[] = [];
+    let note = '';
+    if (check.success) {
+      const openIdx = o.states.findIndex((_, i) => o.opening?.openStates?.includes(i) ?? false);
+      if (openIdx >= 0 && o.state !== openIdx) {
+        deltas.push({ kind: 'object', id: o.id, name: o.name, path: '状态', from: o.states[o.state], to: o.states[openIdx] });
+        o.state = openIdx;
+      }
+      msg = `${pc.name} 撞开了 ${o.name}`;
+    } else if (fumble) {
+      const beforeLock = o.lock ? (o.lock.locked ? '锁着' : '已解开') : '没锁';
+      const alreadyJammed = o.lock?.kind === 'physical' && o.lock.locked && !o.lock.keyable;
+      if (!alreadyJammed) {
+        o.lock = { kind: 'physical', locked: true, keyable: false };
+        deltas.push({ kind: 'object', id: o.id, name: o.name, path: '锁具', from: beforeLock, to: '卡死' });
+      }
+      msg = `${pc.name} 撞门大失败，${o.name} 卡死了`;
+      const notes: string[] = [];
+      if (alreadyJammed) notes.push('锁具早就卡死了');
+      if (damageRoll !== null) {
+        const pool = hpOf(dpc);
+        const hpBefore = pool.hp;
+        const hpAfter = Math.max(0, hpBefore - damageRoll);
+        if (hpAfter !== hpBefore) {
+          dpc.hp = hpAfter;
+          dpc.hpMax ??= pool.max;
+          deltas.push({ kind: 'hp', id: dt.pcId ?? dt.id, name: dt.name, from: hpBefore, to: hpAfter });
+        }
+        if (hpAfter === 0 && hpBefore > 0) {
+          const oldLabel = dt.status?.label ?? (dt.down ? downedLabel('down') : null);
+          if (oldLabel !== DYING_LABEL) {
+            dt.down = true;
+            delete dt.status;
+            const actualLabel = dt.down ? downedLabel('down') : null;
+            if (actualLabel !== oldLabel) deltas.push({ kind: 'status', id: dt.id, name: dt.name, from: oldLabel, to: actualLabel });
+          }
+        }
+        if (hpBefore <= 0) notes.push(`1D4=${damageRoll}，本来就 0 血，伤害没落地`);
+        else if (hpAfter === 0) notes.push(`1D4=${damageRoll}，HP 归零 → 昏厥`);
+        else notes.push(`1D4=${damageRoll}，HP ${hpBefore} → ${hpAfter}`);
+      }
+      note = notes.join('；');
+    } else {
+      msg = `${pc.name} 没撞动 ${o.name}`;
+      note = '门没动，动静传出去了';
+    }
+    appendEvent(d, newEvent(d, Date.now(),
+      { kind: 'pc', id: pc.id, name: pc.name },
+      { name: '撞门', source: '临场' },
+      {
+        target: { kind: 'object', id: o.id, name: o.name },
+        check: {
+          kind: 'check', scale: 'd20', merge: 'single', dc: RAM_DC, success: check.success,
+          attrs: [{ attr: RAM_ATTR, dice: 'single' as const, roll: check.used, used: check.used, value: check.value, total: check.total }],
+          tier: check.tier === 'crit' ? 'crit' : check.tier === 'fumble' ? 'fumble' : null,
+          level: check.level === '特大' ? '特大' : null,
+          rolledBy: s.checkBy,
+        },
+        deltas,
+        ...(damageRoll !== null ? { damage: { kind: 'impact' as const, sides: 4 as const, roll: damageRoll, by: s.damageBy } } : {}),
+        ...(note ? { note } : {}),
+      },
+    ));
+  });
+  const t = tr();
+  const who = t?.players.find((x) => x.pcId === s.subjectId);
+  setTr({ ...(t && t.combat && who ? { acted: { ...(t.acted ?? {}), [who.tokenId]: true } } : {}), msg });
+  return null;
+}
+
+/**
+ * 撞门。玩家窗口在 → 第一颗力量骰先给玩家；大失败再开第二笔 1D4 反伤。
+ * 玩家不在 → 见证者当场掷两颗（或一颗）并落一条总事件。
+ */
+export function trialRamDoor(objectId: string, opts: { rolls?: number[] } = {}): string | null {
+  const ctx = ramContext(objectId);
+  if (typeof ctx === 'string') return ctx;
+  if (opts.rolls !== undefined) {
+    if (!opts.rolls.length || opts.rolls.length > 2
+      || !Number.isInteger(opts.rolls[0]) || opts.rolls[0] < 1 || opts.rolls[0] > 20
+      || (opts.rolls.length === 2 && (!Number.isInteger(opts.rolls[1]) || opts.rolls[1] < 1 || opts.rolls[1] > 4))) return '骰点不对';
+  }
+  const { t, door, pl, pc } = ctx;
+  const title = `撞门：${door.name}`;
+  const err = openJudgment({
+    title, ruling: '', sides: 20, subjectId: pl.pcId, place: null,
+    door: { mapId: t.mapId, objectId: door.id, method: 'ram' },
+    check: { attrs: [{ attr: RAM_ATTR, dice: 'single' as const }], dc: RAM_DC, merge: 'single' },
+  });
+  if (err) return err;
+  if (opts.rolls === undefined && pl.pcId && playerWindowFor(pl.pcId)) { pushJudgmentRequest(pl.pcId); return null; }
+  const p = getUI().pendingJudgment;
+  if (!p) return '判定已失效';
+  const first = opts.rolls?.[0] ?? 1 + Math.floor(Math.random() * 20);
+  const check = ramCheckOf(pc, first);
+  const pub = publishPendingRoll(p, { rollId: `ram-${uid()}`, sides: 20, value: first, tens: null, units: null, material: 'wood', seed: 0 }, true);
+  if (pub) { closePendingJudgment(); return pub; }
+  if (check.tier === 'fumble') {
+    const d4 = opts.rolls?.[1] ?? rollD4();
+    const pub2 = publishRamImpactRoll(p, `撞门反伤：${door.name}`, d4, true);
+    if (pub2) { closePendingJudgment(); return pub2; }
+    const e = settleRamEvent({
+      mapId: t.mapId, objectId: door.id, tokenId: pl.tokenId, subjectId: pl.pcId,
+      checkValues: [first], damageRoll: d4, checkBy: 'witness', damageBy: 'witness',
+    });
+    closePendingJudgment();
+    return e;
+  }
+  const e = settleRamEvent({
+    mapId: t.mapId, objectId: door.id, tokenId: pl.tokenId, subjectId: pl.pcId,
+    checkValues: [first], damageRoll: null, checkBy: 'witness', damageBy: 'witness',
+  });
+  closePendingJudgment();
+  return e;
+}
+
 /** 门判定的落地：按两颗骰子分别过 DC，都过才算成功；大成功一颗顶俩。 */
 function settleDoorAttempt(
   p: NonNullable<UIState['pendingJudgment']>,
@@ -1098,7 +1311,7 @@ function settleDoorAttempt(
         o.lock = { ...o.lock!, locked: false };
         deltas.push({ kind: 'object', id: o.id, name: o.name, path: '锁具', from: '锁着', to: '已解开' });
       }
-      const openIdx = o.states.findIndex((_, i) => o.opening!.openStates.includes(i));
+      const openIdx = o.states.findIndex((_, i) => o.opening?.openStates?.includes(i) ?? false);
       if (openIdx >= 0 && o.state !== openIdx) {
         deltas.push({ kind: 'object', id: o.id, name: o.name, path: '状态', from: o.states[o.state], to: o.states[openIdx] });
         o.state = openIdx;
@@ -1265,9 +1478,11 @@ export interface JudgmentRollInput {
 function publishPendingRoll(p: PendingJudgment, input: JudgmentRollInput, byStandIn: boolean): string | null {
   // 跳跃的优/劣势是同一项属性掷两次：正式判定也要留两颗，不能只留采信的那颗。
   const jumpDice = p.jump?.dice && p.jump.dice !== 'single' && (input.values?.length ?? 0) > 1 ? p.jump : null;
-  const values = p.check ? (input.values ?? [input.value]) : jumpDice && p.jump?.attr ? input.values : undefined;
-  const attrs = p.check
-    ? p.check.attrs.map((a) => a.attr)
+  // publishJudgment 只接受 ≥2 颗的 values；单属性判定（撞门）不能传 [一颗]，否则会被判成“骰子结果无效”。
+  const multiCheck = p.check && p.check.attrs.length > 1 ? p.check : null;
+  const values = multiCheck ? (input.values ?? [input.value]) : jumpDice && p.jump?.attr ? input.values : undefined;
+  const attrs = multiCheck
+    ? multiCheck.attrs.map((a) => a.attr)
     : values && p.jump?.attr ? values.map(() => p.jump!.attr!) : undefined;
   return publishJudgment({
     title: p.title, ruling: p.ruling, recipients: getWorld().party.map((x) => x.id),
@@ -1287,6 +1502,80 @@ export function settlePendingJudgment(input: JudgmentRollInput, byStandIn = fals
   // 判定是在哪个工程/哪次试玩里开的，就只能在那儿结算：否则会静默写进另一个世界。
   if (p.context !== worldContext()) return '工程或试玩已切换，请重新掷骰';
   const diceValues = input.values?.length ? input.values : [input.value];
+  // 撞门第二棒：第一颗已经落过，这一颗 1D4 反伤；结算时才落唯一一条总事件。
+  if (p.ramImpact) {
+    const imp = p.ramImpact;
+    const tokenId = imp.tokenId;
+    const pre = ramPrecheck(imp.mapId, imp.objectId, tokenId, p.subjectId);
+    if (typeof pre === 'string') { closePendingJudgment(); return pre; }
+    if (input.sides !== 4 || diceValues.length !== 1 || !Number.isInteger(diceValues[0]) || diceValues[0] < 1 || diceValues[0] > 4) return '骰面或骰子数量不对';
+    const err = publishPendingRoll(p, input, byStandIn);
+    if (err) { closePendingJudgment(); return err; }
+    const e = settleRamEvent({
+      mapId: imp.mapId, objectId: imp.objectId, tokenId, subjectId: p.subjectId,
+      checkValues: imp.checkValues, damageRoll: diceValues[0], checkBy: imp.checkBy,
+      damageBy: byStandIn ? 'witness' : 'player',
+    });
+    if (e) { closePendingJudgment(); return e; }
+    closePendingJudgment();
+    return null;
+  }
+  // 撞门第一棒：力量 D20。不是大失败就当场落事件；大失败则开第二笔等 1D4。
+  if (p.door?.method === 'ram') {
+    const tokenId = ramTokenFor(p);
+    if (!tokenId) { closePendingJudgment(); return '找不到角色'; }
+    const pre = ramPrecheck(p.door.mapId, p.door.objectId, tokenId, p.subjectId);
+    if (typeof pre === 'string') { closePendingJudgment(); return pre; }
+    if (input.sides !== 20 || diceValues.length !== 1 || !Number.isInteger(diceValues[0]) || diceValues[0] < 1 || diceValues[0] > 20) return '骰面或骰子数量不对';
+    const check = ramCheckOf(pre.pc, diceValues[0]);
+    const checkBy = byStandIn ? 'witness' as const : 'player' as const;
+    const pub = publishPendingRoll(p, input, byStandIn);
+    if (pub) return pub;
+    if (check.tier !== 'fumble') {
+      const e = settleRamEvent({
+        mapId: p.door.mapId, objectId: p.door.objectId, tokenId, subjectId: p.subjectId,
+        checkValues: [diceValues[0]], damageRoll: null, checkBy, damageBy: checkBy,
+      });
+      if (e) { closePendingJudgment(); return e; }
+      closePendingJudgment();
+      return null;
+    }
+    const impact = {
+      mapId: p.door.mapId, objectId: p.door.objectId, tokenId,
+      checkValues: [diceValues[0]], checkBy,
+    } satisfies import('../core/types').RamImpact;
+    // 见证者代掷 / 玩家窗口刚好关了：没有第二棒可等，见证者现掷 D4 并落一条总事件。
+    if (byStandIn || !playerWindowFor(p.subjectId)) {
+      const d4 = rollD4();
+      const pub2 = publishRamImpactRoll(p, `撞门反伤：${pre.door.name}`, d4, true);
+      if (pub2) { closePendingJudgment(); return pub2; }
+      const e = settleRamEvent({
+        mapId: p.door.mapId, objectId: p.door.objectId, tokenId, subjectId: p.subjectId,
+        checkValues: [diceValues[0]], damageRoll: d4, checkBy, damageBy: 'witness',
+      });
+      closePendingJudgment();
+      return e;
+    }
+    closePendingJudgment();
+    const errOpen = openJudgment({
+      title: `撞门反伤：${pre.door.name}`, ruling: '', sides: 4, subjectId: p.subjectId, place: p.place ?? null,
+      door: { mapId: p.door.mapId, objectId: p.door.objectId, method: 'ram' },
+      ramImpact: impact,
+    });
+    if (errOpen) {
+      // 第二棒开不出来：退回见证者现掷 D4，至少保住一条总事件。
+      const d4 = rollD4();
+      const pub2 = publishRamImpactRoll(p, `撞门反伤：${pre.door.name}`, d4, true);
+      if (pub2) return pub2;
+      const e = settleRamEvent({
+        mapId: p.door.mapId, objectId: p.door.objectId, tokenId, subjectId: p.subjectId,
+        checkValues: [diceValues[0]], damageRoll: d4, checkBy, damageBy: 'witness',
+      });
+      return e;
+    }
+    pushJudgmentRequest(p.subjectId);
+    return null;
+  }
   if (p.door) { const e = settleDoorAttempt(p, input, byStandIn); if (e) return e; }
   // 第二棒：属性骰已经落过，这一颗是摔伤骰；结算时才挪棋子/扣血，最后一条总事件。
   if (p.fall) {

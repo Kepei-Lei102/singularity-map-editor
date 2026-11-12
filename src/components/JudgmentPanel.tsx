@@ -124,8 +124,14 @@ function PendingJudgmentPanel() {
           {p.attack && (
             <button onClick={broadcast}>按结果执行（扣血 / 倒地）</button>
           )}
-          {p.door && (
+          {p.door && p.door.method !== 'ram' && (
             <button onClick={broadcast}>按结果执行（开锁 / 卡死）</button>
+          )}
+          {p.door?.method === 'ram' && !p.ramImpact && (
+            <button onClick={broadcast}>按结果执行（撞门 / 门状态）</button>
+          )}
+          {p.ramImpact && (
+            <button onClick={broadcast}>按结果执行（反伤 / 门卡死）</button>
           )}
           <button onClick={broadcast}>确认并广播给全队</button>
         </div>

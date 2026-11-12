@@ -105,6 +105,7 @@ function forPlayer(p: PendingJudgment): PendingJudgment {
   delete copy.place;
   delete copy.attack;
   delete copy.standIn;
+  delete copy.ramImpact;
   copy.dice = dice;
   return copy;
 }
