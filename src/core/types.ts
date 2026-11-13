@@ -698,7 +698,14 @@ export interface PhysicalEvent {
     /** 攻击档位（attack 才有） */
     band?: 'miss' | 'hit' | 'great' | 'super';
     scale: 'd20' | 'd100';
-    attrs: { attr: string; dice: 'single' | 'advantage' | 'disadvantage'; roll?: number; used?: number; value: number; total?: number }[];
+    attrs: {
+      attr: string; dice: 'single' | 'advantage' | 'disadvantage';
+      roll?: number; used?: number; value: number; total?: number;
+      /** 逐属性成败；只有感知这类“多项各掷各的”实现才填，渲染日志时用。 */
+      success?: boolean;
+      /** 逐属性极值；没有极值就是 null。 */
+      tier?: 'crit' | 'fumble' | null;
+    }[];
     merge: 'single' | 'any' | 'all';
     /** 属性判定才有 DC；攻击没有门槛，别拿 0 当哨兵 */
     dc?: number;

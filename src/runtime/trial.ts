@@ -343,7 +343,11 @@ function trialMoveStep(dx: number, dy: number) {
   const standingInPit = hasPitBottom(now, m2, from.x, from.y) && heightAt(m2, from.x, from.y) === here;
   const intoPitBottom = cellFloor(now, m2, destX, destY) === 'gap'
     && hasPitBottom(now, m2, destX, destY) && heightAt(m2, destX, destY) >= here;
-  const pathMap = shelf ? projected : m2;
+  // 第二处路径检查用“当前地图 m2 + 把书架挪过去”，不要复用早先的 projected；
+  // 以后如果两处检查之间插入 update，旧克隆就会过期。
+  const pathMap = shelf
+    ? { ...m2, objects: m2.objects.map((o) => o.id === shelf.id ? { ...o, x: o.x + dx, y: o.y + dy } : o) }
+    : m2;
   if (!characterPathClear(now, pathMap, step.a, step.b, tok.id, { skipTerrain: standingInPit || intoPitBottom })) {
     return setTr({ msg: '人物或墙体挡住了路径' });
   }
@@ -533,6 +537,7 @@ function beginDownJump(
   if (!plan.check) {
     // 摔伤骰也是 openJudgment：先确认没有旧判定在等，再落推，最后才开摔伤骰。
     if (getUI().pendingJudgment) return setTr({ msg: '已经有一个判定在等玩家掷骰，先结算或取消它' });
+    if (!jumpTarget(req)) return setTr({ msg: '找不到跳跃对象' });
     onCommit?.();
     beginFall(req, null);
     return;
@@ -2162,6 +2167,7 @@ export function trialSense(kind: SenseKind, opts: { targetObjectId?: string | nu
   const target = opts.targetObjectId ? m.objects.find((o) => o.id === opts.targetObjectId) : undefined;
   const attrs = roll.rolls.map((r) => ({
     attr: r.attr, dice: 'single' as const, roll: r.value, used: r.value, value: r.zone, total: r.value + r.zone,
+    success: r.success, tier: r.crit ? 'crit' as const : r.fumble ? 'fumble' as const : null,
   }));
   update((d) => {
     // 感知不改世界：只记一次判定和候选数量；候选不是“已经得知”，等见证者挑。

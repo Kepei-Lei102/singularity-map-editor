@@ -547,3 +547,83 @@ test('推箱下跳无检定：先落推，再开摔伤骰', () => {
   assert.ok(pushIdx >= 0 && judgeIdx >= 0);
   assert.ok(pushIdx < judgeIdx, '推的日志要在开摔伤骰之前');
 });
+
+test('感知：搜索失败时日志逐项标出是哪一项挂的', () => {
+  const { m } = fight();
+  api.toggleCombat();
+  api.update((d) => {
+    d.maps[0].objects = [{
+      ...api.newObject('object', 2, 3, 1, 1), id: 'clock', name: '钟',
+      states: ['正常'], state: 0, height: 0.2, secrets: [{
+        id: 's1', label: '刻痕', check: '观察', kind: 'roll', range: 2,
+        tiers: { crit: '钟面有刻痕', success: '钟面有刻痕', fail: '', fumble: '' },
+      }],
+    }];
+  });
+  const seq = [15, 1]; // 敏捷 15+区值6=21 过；观察掷 1 大失败
+  assert.equal(api.trialSense('search', { targetObjectId: 'clock', roll: () => seq.shift() }), null);
+  const ev = api.getWorld().events.at(-1);
+  assert.equal(ev.check.merge, 'all');
+  assert.equal(ev.check.success, false);
+  assert.equal(ev.check.tier, 'fumble');
+  assert.equal(ev.check.attrs[0].success, true);
+  assert.equal(ev.check.attrs[1].success, false);
+  assert.equal(ev.check.attrs[1].tier, 'fumble');
+  const text = api.getWorld().log.at(-1).text;
+  assert.match(text, /敏捷 15\+区值6✓/);
+  assert.match(text, /观察 1\+区值6✗（大失败）/);
+});
+
+test('玩家载荷：移动/感知之后仍然不带 events 和 log', () => {
+  const { m } = fight();
+  api.toggleCombat();
+  api.update((d) => {
+    d.maps[0].objects = [{
+      ...api.newObject('object', 2, 3, 1, 1), id: 'clock', name: '钟',
+      states: ['正常'], state: 0, height: 0.2, secrets: [],
+    }];
+  });
+  api.trialMove(0, -1);
+  api.trialMove(0, -1);
+  api.trialSense('observe', { targetObjectId: 'clock', roll: () => 20 });
+  const payload = api.playerWorld(api.getWorld(), m.id, 'a');
+  assert.deepEqual(payload.events, []);
+  assert.deepEqual(payload.log, []);
+  assert.doesNotMatch(JSON.stringify(payload), /刻痕|【观察】|【移动】/);
+});
+
+test('推箱下跳无检定：无玩家窗口时 host 结算的事件顺序是推→跳', () => {
+  const { m } = fight();
+  api.toggleCombat();
+  api.update((d) => {
+    const map = d.maps[0];
+    map.heights = new Array(map.width * map.height).fill(0);
+    map.heights[1 * map.width + 2] = -6;
+    map.objects = [{
+      ...api.newObject('object', 2, 1, 1, 1), id: 'shelf', name: '书架',
+      states: ['放着'], state: 0, height: 2, pushable: true, heavy: false, secrets: [],
+    }];
+  });
+  api.trialMove(0, -1);
+  api.trialMove(0, -1);
+  api.trialMove(0, -1);
+  const events = api.getWorld().events;
+  assert.ok(events.length >= 2);
+  assert.equal(events.at(-2).action.name, '推');
+  assert.match(events.at(-1).action.name, /往下跳/);
+});
+
+test('坑前确认：确认那一下不落移动账，跳过去仍走跳跃事件', () => {
+  const { m } = fight();
+  api.toggleCombat(); // 自由行动
+  api.update((d) => { d.maps[0].cells[1 * 10 + 2] = 'hole'; });
+  const before = api.getWorld().events?.length ?? 0;
+  api.trialMove(0, -1); // 转身
+  api.trialMove(0, -1); // 坑前提示
+  assert.equal(api.getWorld().events?.length ?? 0, before, '坑前确认不落移动账');
+  assert.ok(api.getUI().pendingGap);
+  api.trialMove(0, -1); // 确认跳过去
+  const ev = api.getWorld().events.at(-1);
+  assert.match(ev.action.name, /跨过|跳过去/);
+  assert.ok(!api.getWorld().events.some((e) => e.action.name === '移动'), '跳过去不能再记一条普通移动');
+});

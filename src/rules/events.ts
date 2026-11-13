@@ -89,6 +89,16 @@ export function resultText(ev: PhysicalEvent): string {
     ? `${ev.actor.name} 得知 ${ev.knowledge.map((k) => k.label).join('、')}`
     : '';
   if (know) parts.push(know);
+  // 逐属性有成败的（目前是感知）：补上每一项的骰点/区值/✓✗，不然多属性失败看不出是哪项挂的。
+  const attrDetails = ev.check?.attrs
+    .filter((a) => typeof a.success === 'boolean')
+    .map((a) => {
+      const roll = a.used ?? a.roll;
+      const rollText = roll === undefined ? '' : ` ${roll}+区值${a.value}`;
+      const tier = a.tier === 'crit' ? '（大成功）' : a.tier === 'fumble' ? '（大失败）' : '';
+      return `${a.attr}${rollText}${a.success ? '✓' : '✗'}${tier}`;
+    });
+  if (attrDetails?.length) parts.push(attrDetails.join('，'));
   if (ev.note) parts.push(ev.note);
   return parts.length ? `${head}：${parts.join('；')}` : head;
 }
