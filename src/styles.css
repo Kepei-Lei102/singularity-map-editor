@@ -374,6 +374,13 @@ label.check.off { opacity: 0.45; }
 }
 .player-roll h3 { margin: 0; font-size: 22px; color: var(--accent); }
 .player-roll-result { font-size: 44px; font-weight: 800; color: var(--text); letter-spacing: 2px; }
+.player-code { position: fixed; left: 50%; top: 50%; transform: translate(-50%, -50%); width: min(420px, calc(100vw - 40px)); z-index: 96; background: #1b1c22; color: #e8e4da; border: 1px solid #555166; border-radius: 12px; padding: 18px; box-shadow: 0 12px 50px #0008; display: flex; flex-direction: column; gap: 10px; }
+.player-code h3 { margin: 0; font-size: 20px; color: var(--accent); }
+.player-code-input { width: 100%; box-sizing: border-box; font-size: 20px; letter-spacing: 2px; padding: 8px 10px; border-radius: 8px; border: 1px solid #555166; background: #111218; color: #e8e4da; }
+.code-note { position: fixed; left: 50%; bottom: 82px; transform: translateX(-50%); z-index: 97; max-width: min(520px, calc(100vw - 40px)); background: #1b1c22; color: #e8e4da; border: 1px solid var(--accent); border-radius: 10px; padding: 10px 14px; box-shadow: 0 8px 30px #0008; }
+.trial-code { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; border-top: 1px solid #444; padding: 8px 0; }
+.trial-code code { background: #111218; border: 1px solid #444; border-radius: 4px; padding: 0 4px; }
+.trial-code textarea { min-width: 220px; min-height: 52px; }
 
 /* ---------- 玩家端：状态条 / 抽屉 / 图标 ---------- */
 /* 玩家端第一需求是看清地图：所有侧栏都不常驻，只留一条底栏和三个小图标。 */

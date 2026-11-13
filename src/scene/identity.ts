@@ -24,7 +24,9 @@ export function identityKnown(o: MapObject | SeenObject, pcId?: string): boolean
   return !!(k?.party || pcId && k?.recipients?.includes(pcId));
 }
 export function playerObject(o: MapObject, pcId?: string): MapObject {
-  return identityKnown(o, pcId) ? o : { ...o, name: UNKNOWN_OBJECT, icon: '', states: [''], state: 0 };
+  // 电子锁密码是主持人侧的秘密：就算这个物件已经辨识过，也不把 code 带进玩家渲染数据。
+  const safe = o.lock?.code !== undefined ? { ...o, lock: { ...o.lock, code: undefined } } : o;
+  return identityKnown(safe, pcId) ? safe : { ...safe, name: UNKNOWN_OBJECT, icon: '', states: [''], state: 0 };
 }
 export function playerSeen(r: SeenObject, pcId?: string, live?: MapObject): SeenObject {
   const { identity: _identity, ...out } = r;

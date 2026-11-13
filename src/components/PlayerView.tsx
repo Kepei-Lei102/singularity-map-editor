@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { listenAsPlayer, playerDiceMode, reportJudgmentRoll, send } from '../runtime/sync';
-import type { CombatNotice, Focus, PendingJudgment, PublicSkill, SkillCast, Utterance, World } from '../core/types';
+import type { CodeRequest, CombatNotice, Focus, PendingJudgment, PublicSkill, SkillCast, Utterance, World } from '../core/types';
 import { TIER_LABEL } from '../core/types';
 import { MapCanvas } from './MapCanvas';
 import { UTTERANCE_MAX } from '../rules/dialogue';
@@ -26,6 +26,12 @@ export function PlayerView() {
   const [moveNote, setMoveNote] = useState<{ ok: boolean; msg: string } | null>(null);
   /** 轮到自己掷的判定。玩家不能拒掷，所以只给「掷」。 */
   const [pending, setPending] = useState<PendingJudgment | null>(null);
+  /** 主持人叫到电子锁前输密码。只带门名，不带作者密码。 */
+  const [codeRequest, setCodeRequest] = useState<CodeRequest | null>(null);
+  const [codeText, setCodeText] = useState('');
+  const [codeSent, setCodeSent] = useState(false);
+  /** 主持人推到屏幕上的反馈；口头反馈不经过这里。 */
+  const [codeFeedback, setCodeFeedback] = useState<string | null>(null);
   /** 掷过的骰子。优势/劣势要两颗，所以这里是个数组。 */
   const [rolled, setRolled] = useState<{ sides: number; rolls: DiceTrayRecord[]; taken: number } | null>(null);
   /** 底部抽屉：一次只开一个。 */
@@ -40,6 +46,13 @@ export function PlayerView() {
   const [notice, setNotice] = useState<CombatNotice | null>(null);
   /** 换了一个新的判定：上一笔掷过的骰子必须清掉，否则会把旧骰子当新结果。 */
   useEffect(() => { setRolled(null); }, [pending?.id]);
+  useEffect(() => { setCodeText(''); setCodeSent(!!codeRequest?.submitted); }, [codeRequest?.id]);
+  useEffect(() => { if (codeRequest?.submitted) setCodeSent(true); }, [codeRequest?.submitted]);
+  useEffect(() => {
+    if (!codeFeedback) return;
+    const t = window.setTimeout(() => setCodeFeedback(null), 12000);
+    return () => window.clearTimeout(t);
+  }, [codeFeedback]);
   useEffect(() => {
     if (!notice) return;
     const t = window.setTimeout(() => setNotice(null), 6000);
@@ -68,10 +81,16 @@ export function PlayerView() {
         const pending = m.world.pendingJudgment;
         if (pending) setPending((cur) => (cur?.id === pending.id ? cur : pending));
         else { setPending(null); setRolled(null); }
+        setCodeRequest(m.world.pendingCode ?? null);
       } else if (m.type === 'judge-request') { setPending(m.judgment); setRolled(null); }
       else if (m.type === 'judge-cancel') { setPending(null); setRolled(null); }
-      else if (m.type === 'clear') { setWorld(null); setMedia(null); setFocus(null); setCast(null); setPending(null); setRolled(null); }
-      else if (m.type === 'move-result') setMoveNote(m.ok ? null : { ok: false, msg: m.msg });
+      else if (m.type === 'code-request') { setCodeRequest(m.request); }
+      else if (m.type === 'code-result') {
+        setCodeRequest((cur) => cur?.id === m.id ? null : cur);
+        if (m.text) setCodeFeedback(m.text);
+      }
+      else if (m.type === 'clear') { setWorld(null); setMedia(null); setFocus(null); setCast(null); setPending(null); setRolled(null); setCodeRequest(null); setCodeSent(false); setCodeText(''); setCodeFeedback(null); }
+      else if (m.type === 'move-result') setMoveNote(m.ok ? (m.kind === 'prompt' ? { ok: true, msg: m.msg } : null) : { ok: false, msg: m.msg });
       else if (m.type === 'play') setMedia({ mediaId: m.mediaId, label: m.label, mime: m.mime, blob: m.blob });
       else if (m.type === 'stop') setMedia(null);
     });
@@ -135,7 +154,7 @@ export function PlayerView() {
 
       {/* 走不过去的提示。几秒后自己收。 */}
       {map && moveNote && (
-        <div className="player-notice miss" onClick={() => setMoveNote(null)}>{moveNote.msg}</div>
+        <div className={moveNote.ok ? 'player-notice' : 'player-notice miss'} onClick={() => setMoveNote(null)}>{moveNote.msg}</div>
       )}
 
       {/* 跟我有关的攻击：状态条上方弹一条，几秒后自己收。 */}
@@ -281,6 +300,19 @@ export function PlayerView() {
           {rolled && !waitingSecond && <div className="muted">已经送到见证者那边，等他确认后广播全队。</div>}
         </div>;
       })()}
+      {codeRequest && <div className="player-code">
+        <h3>输入密码 · {codeRequest.name}</h3>
+        <div className="muted">把密码交给主持人。反馈由他给：可能口头说，也可能推到这里。</div>
+        {codeSent
+          ? <div className="muted">已经提交，等主持人反馈。</div>
+          : <>
+              <input className="player-code-input" value={codeText} autoComplete="off" autoFocus maxLength={256}
+                placeholder="在这里输入密码" onChange={(e) => setCodeText(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Enter' && codeText) { send({ type: 'code-submit', id: codeRequest.id, code: codeText }); setCodeSent(true); } }} />
+              <button className="primary" disabled={!codeText} onClick={() => { send({ type: 'code-submit', id: codeRequest.id, code: codeText }); setCodeSent(true); }}>提交给主持人</button>
+            </>}
+      </div>}
+      {codeFeedback && <div className="code-note">主持人反馈：{codeFeedback}</div>}
       {judgmentNotice && !judgment && <div className="player-judgment-notice">发生了一次判定</div>}
       {judgment && <button className="player-judgment-toggle" onClick={() => setDismissed(dismissed === judgment.id ? null : judgment.id)}>正式判定 · {judgment.title}</button>}
       {judgment && dismissed !== judgment.id && <aside className="player-judgment">

@@ -92,7 +92,7 @@ export interface MapObject {
    * 门上的锁。门本身的开合还是 states；锁是正交的第二位。
    * keyable=false = 锁芯卡死：门仍锁着，但配不出钥匙了，只能强行打开。
    */
-  lock?: { kind: 'physical' | 'electronic'; locked: boolean; keyable: boolean };
+  lock?: { kind: 'physical' | 'electronic'; locked: boolean; keyable: boolean; /** 电子锁的密码：作者在检查器里设；只给主持人，不进玩家载荷。 */ code?: string };
   /** 可推动：试玩时走过去会把整件东西向同方向推一格（推书架、推车）。 */
   pushable?: boolean;
   /** 沉重：要另一个棋子也贴着这件东西，才能推。做成需要两人合力。 */
@@ -534,6 +534,44 @@ export interface FallRequest {
   injury: FallInjury;
 }
 
+/** 玩家窗口里正在等玩家输入密码的那扇门。只给名字，不带作者密码。 */
+export interface CodeRequest {
+  id: Id;
+  mapId: Id;
+  objectId: Id;
+  name: string;
+  pcId: Id;
+  at: number;
+  /** 已经提交过密码：玩家刷新窗口后知道自己在等主持人反馈。 */
+  submitted?: boolean;
+}
+
+/** 密码裁定：现在主持人填 text；verdict/hits/positions 留给以后的 AI，不逼主持人填。 */
+export interface CodeFeedback {
+  text: string;
+  verdict?: 'correct' | 'partial' | 'wrong' | 'alarm' | 'custom';
+  hits?: number;
+  positions?: boolean[];
+  pushToPlayer: boolean;
+}
+
+/** 主持人侧的一次密码尝试。code 是玩家输入原文，只存在 UI 里，落事件时不写。 */
+export interface PendingCodeAttempt {
+  id: Id;
+  mapId: Id;
+  objectId: Id;
+  tokenId: Id;
+  pcId: Id;
+  name: string;
+  expectedCode: string | null;
+  code: string | null;
+  at: number;
+  /** 有玩家窗口就等窗口输入；没有就主持人在卡片上代输。 */
+  fromWindow: boolean;
+  /** 开这笔等待时的上下文；切换工程/试玩后不能结算到另一个世界。 */
+  context: string;
+}
+
 /** 撞门大失败的反伤：第一颗力量骰已掷完，等 1D4。 */
 export interface RamImpact {
   mapId: Id;
@@ -697,6 +735,8 @@ export interface World {
   judgmentNotice?: JudgmentNotice | null;
   /** 只在玩家载荷里：落在自己身上、等自己掷的判定。别人的判定不会发过来。 */
   pendingJudgment?: PendingJudgment | null;
+  /** 只在玩家载荷里：正在等自己输入密码的门。 */
+  pendingCode?: CodeRequest | null;
   /** 只在玩家载荷里：最近一次跟他有关的攻击。 */
   combatNotice?: CombatNotice | null;
   /** 这一场这个角色说过的所有话，按时间正序。 */

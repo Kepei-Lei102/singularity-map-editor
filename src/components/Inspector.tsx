@@ -458,7 +458,7 @@ function ObjectInspector({ world, mapId, o, ui }: { world: World; mapId: string;
             <>
               <div className="hint">锁具：门锁和开合是两位。锁着就开不了；巧力撬锁只有解锁【开锁副手】的角色能做（智慧＋敏捷），暴力开锁谁都能试（力量＋敏捷）。卡死＝锁着但配不出钥匙，只能强行打开。</div>
               <div className="chips">
-                {([['', '无锁'], ['physical', '物理锁'], ['electronic', '电子锁（暂未接开锁）']] as const).map(([k, label]) => (
+                {([['', '无锁'], ['physical', '物理锁'], ['electronic', '电子锁（玩家输密码）']] as const).map(([k, label]) => (
                   <button key={k} className={`chip ${(o.lock?.kind ?? '') === k ? 'on' : ''}`}
                     onClick={() => up(x => { if (!k) delete x.lock; else x.lock = { kind: k, locked: true, keyable: true }; })}>{label}</button>
                 ))}
@@ -469,6 +469,10 @@ function ObjectInspector({ world, mapId, o, ui }: { world: World; mapId: string;
                 <Check label="还能配钥匙（巧力撬锁）" value={o.lock.keyable}
                   onChange={(v) => up(x => { x.lock!.keyable = v; })} />
               </div>}
+              {o.lock?.kind === 'electronic' && <label className="field">密码（作者设；只给主持人看）
+                <input value={o.lock.code ?? ''} placeholder="留空＝主持人临场裁定" autoComplete="off"
+                  onChange={(e) => up(x => { const v = e.target.value; if (v) x.lock!.code = v; else delete x.lock!.code; })} />
+              </label>}
             </>
           )}
           {edit && <Area rows={2} placeholder="一行一个状态" value={o.states.join('\n')}

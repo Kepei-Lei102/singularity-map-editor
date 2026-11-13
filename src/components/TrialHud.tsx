@@ -23,13 +23,60 @@ import { MARK_LIFE, findMap, giveMapKnowledge, setVisionMode } from '../runtime/
 import { HEAR_RANGE } from '../scene/perception';
 import {
   MOVE_PER_TURN, actionsLeft, addTrialPlayer, clearTrialStatus, endTrial, setTrialStatus, statusLeft, switchTrialPlayer, toggleTrialPause,
-  tickRobots, trialDoors, trialOpenDoor, trialPickLock, trialRamDoor, trialRun, trialSense, trialStance,
+  tickRobots, trialAskCode, trialDoors, trialOpenDoor, trialPickLock, trialRamDoor, trialRun, trialSense, trialStance, trialSubmitCode, trialSettleCode, cancelPendingCode,
+  type CodeConsequence,
   toggleCombat, toggleMarkMode, trialAttack, trialAttackTargets, trialRescue, trialOpportunityAttack, trialSkipOpportunity,
   runModeOf, sharpOf,
 } from '../runtime/trial';
 
 const SYMBOLS = ['!', '?', '★', '✕', '→'];
 const STATUS_PRESETS: [string, number][] = [['晕厥', 15], ['泡温泉', 30]];
+
+/** 电子锁：主持人侧的一张密码尝试卡。有玩家窗口时等窗口输入；没有时主持人在卡片上代输。 */
+function CodeAttemptCard() {
+  const ui = useUI();
+  const p = ui.pendingCode;
+  const [code, setCode] = useState('');
+  const [text, setText] = useState('');
+  const [push, setPush] = useState(false);
+  const [consequence, setConsequence] = useState<CodeConsequence>('stay');
+  const [msg, setMsg] = useState('');
+  if (!p) return null;
+  const submitted = p.code !== null;
+  const submitHost = () => {
+    if (!code.trim()) { setMsg('先输入密码'); return; }
+    const e = trialSubmitCode(p.id, code);
+    setMsg(e ?? '');
+    if (!e) setCode('');
+  };
+  return <div className="trial-code">
+    <b>密码锁 · {p.name}</b>
+    {!submitted && p.fromWindow && <span className="muted">等玩家在玩家窗口里输入密码……</span>}
+    {!submitted && !p.fromWindow && <span className="inline">
+      <input className="mark-text" value={code} placeholder="主持人代输密码" autoComplete="off" maxLength={256}
+        onChange={(e) => setCode(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') submitHost(); }} />
+      <button className="small" disabled={!code.trim()} onClick={submitHost}>代输</button>
+    </span>}
+    {submitted && <>
+      <div className="muted">玩家输入：<code>{p.code}</code></div>
+      {p.expectedCode !== null && <div className="muted">作者密码：<code>{p.expectedCode}</code>{p.expectedCode === p.code ? '（完全一致）' : '（不一致，按模组裁定）'}</div>}
+      <textarea className="mark-text" value={text} placeholder="反馈内容（主持人可以只口头念；勾上就同时推到玩家窗口）"
+        onChange={(e) => setText(e.target.value)} />
+      <label className="check"><input type="checkbox" checked={push} onChange={(e) => setPush(e.target.checked)} /> 推到玩家窗口</label>
+      <span className="chips">
+        {([['unlock-open', '解锁并开门'], ['unlock', '只解锁'], ['stay', '保持锁着'], ['jam', '卡死'], ['alarm', '报警']] as const).map(([k, label]) => (
+          <button key={k} className={`small chip ${consequence === k ? 'on' : ''}`} onClick={() => setConsequence(k)}>{label}</button>
+        ))}
+      </span>
+      <button className="small primary" onClick={() => {
+        const e = trialSettleCode(p.id, { text, pushToPlayer: push, consequence });
+        setMsg(e ?? '');
+      }}>落账</button>
+    </>}
+    <button className="small ghost" onClick={() => { const e = cancelPendingCode(); setMsg(e ?? ''); }}>取消等待</button>
+    {msg && <span className="muted">{msg}</span>}
+  </div>;
+}
 
 /** 试玩时浮在地图上的操作栏。 */
 export function TrialHud() {
@@ -164,7 +211,11 @@ export function TrialHud() {
           if (!doors.length) return <span className="muted">身边 1 格内没有看得见的门</span>;
           return doors.map((d) => {
             if (d.open) return <span key={d.objectId} className="muted">{d.name} 开着</span>;
-            if (d.locked && d.kind === 'electronic') return <span key={d.objectId} className="muted">{d.name} 电子锁（这轮还没接开锁）</span>;
+            if (d.locked && d.kind === 'electronic') return <span key={d.objectId} className="inline">
+              <span className="muted">{d.name} 电子锁</span>
+              <button className="small" disabled={t.combat} title={t.combat ? '输密码目前不在战斗阶段用' : '玩家在玩家窗口里输入密码，反馈由主持人裁定'}
+                onClick={() => { const e = trialAskCode(d.objectId); if (e) set({ msg: e }); }}>让玩家输密码</button>
+            </span>;
             const ram = d.rammable
               ? <button key={`${d.objectId}-ram`} className="small" disabled={!actionsLeft(t)}
                   title="力量单骰，DC 20；撞门不看锁，大失败会卡死并吃 1D4"
@@ -191,6 +242,7 @@ export function TrialHud() {
           });
         })()}
       </div>
+      <CodeAttemptCard key={ui.pendingCode?.id ?? 'none'} />
       {/* 姿态：只改视野高度。站着看得远，坐和蹲矮一截，躺下最低。 */}
       <div className="trial-row">
         <span className="muted">姿态</span>
@@ -321,7 +373,7 @@ export function TrialHud() {
           ))}
         </div>
       )}
-      <div className="muted small-text">在主持人窗口用 WASD 移动 · Tab 或角色按钮换人 · G 放标记 · Esc 退出；独立玩家窗口同步视角（退出后恢复原样）</div>
+      <div className="muted small-text">在主持人窗口用 WASD：第一次按方向转向，第二次同方向走 · Tab 或角色按钮换人 · G 放标记 · Esc 退出；独立玩家窗口同步视角（退出后恢复原样）</div>
       {/* 攻击/伤害已经单独在 TrialEventCard 里，这里的 msg 只放转向、推不动这类小提示 */}
       {t.msg && <div className="trial-msg">{t.msg}</div>}
     </div>

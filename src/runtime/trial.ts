@@ -1,11 +1,11 @@
-import { clearTrialWindows, closePendingJudgment, openPlayerWindow, playerWindowFor, pushJudgeCancel, pushJudgmentRequest, registerTrialMove, selectTrialViewer } from './sync';
+import { clearTrialWindows, closePendingJudgment, openPlayerWindow, playerWindowFor, pushCodeRequest, pushCodeResult, pushJudgeCancel, pushJudgmentRequest, registerTrialMove, selectTrialViewer, type TrialMoveSignal } from './sync';
 import { cancelJudgment, publishJudgment } from '../rules/judgments';
 import { playerObject } from '../scene/identity';
 import { effectiveLayer } from '../scene/vision';
 import { objectEnabled } from '../core/objectData.js';
 import { beginSandbox, endSandbox, getUI, getWorld, setUI, toast, update, worldContext, type UIState } from '../core/store';
 import { addMark, autoReveal, cancelPendingPlay, checkEnterTriggers, findMap, ioBusy } from './actions';
-import type { Delta, Facing, GameMap, Id, JumpCheckRecord, JumpRequest, MapObject, PC, PendingJudgment, Stance, Token, World } from '../core/types';
+import type { CodeFeedback, Delta, Facing, GameMap, Id, JumpCheckRecord, JumpRequest, MapObject, PC, PendingCodeAttempt, PendingJudgment, Stance, Token, World } from '../core/types';
 import { gridDist, uid } from '../core/util';
 import { blocksMovement, ROUND_MINUTES } from '../scene/perception';
 import { architectureGeometry, architectureObjectBounds, characterPathClear, furnitureSweepBlocked, nextTokenStep, openingIsOpen, setTokenPosition, tokenPosition } from '../scene/architecture';
@@ -159,7 +159,7 @@ export function startTrial() {
 }
 
 // 玩家窗口按方向键时，sync 回调到这里执行。两边互相 import，用注册避开直接依赖。
-registerTrialMove((dx, dy) => { trialMove(dx, dy); });
+registerTrialMove((dx, dy) => trialMove(dx, dy));
 
 export function addTrialPlayer() {
   const t = tr();
@@ -188,6 +188,7 @@ export function switchTrialPlayer(i?: number) {
 export function endTrial() {
   // 试玩结束：这笔判定跟着试玩一起作废，主持端和玩家窗口都不该再等它。
   closePendingJudgment();
+  setUI({ pendingCode: null });
   clearTrialWindows();
   cancelPendingPlay();
   endSandbox();
@@ -201,7 +202,7 @@ function lyingMsg(tok: { stance?: string; name: string }): string | null {
   return tok.stance === '躺' ? `${tok.name}躺着，先翻身或站起来（要花移动点）` : null;
 }
 
-export function trialMove(dx: number, dy: number) {
+function trialMoveStep(dx: number, dy: number) {
   const t = tr();
   const pl = t?.players[t.current];
   if (!t || !pl) return;
@@ -218,25 +219,27 @@ export function trialMove(dx: number, dy: number) {
   if (tok.down) return setTr({ msg: `${pl.name}昏厥中，动不了` });
   const lying = lyingMsg(tok);
   if (lying) return setTr({ msg: lying });
-  // 朝向：战斗中第一次按方向＝原地转身，再按同方向才走（回合制下等于一次确认）。
-  // 自由行动不确认，朝向跟着走；转身不占行动点；被缠斗时一回合只能转一次。
+  // 朝向：自由行动和战斗一样，第一次按方向＝原地转身，再按同方向才走。
+  // 自由行动不耗移动点；战斗里转身不占行动点，但被缠斗时一回合只能转一次。
   const dir = dirOf(dx, dy);
   const runModeNow = runModeOf(t, pl.tokenId);
   const runSpec = runModeNow ? RUN_MODES[runModeNow] : null;
-  if (t.combat && tok.facing !== dir) {
+  if (tok.facing !== dir) {
     if (t.combat && isEngaged(m, tok) && t.turned?.[pl.tokenId]) return setTr({ msg: '被缠斗住了：这回合只能转一次身' });
-    // 跑起来拐弯有限：奔跑整回合只能拐一次，爆跑一次都不准。
-    if (runSpec && !canTurn(runSpec, runTurnsOf(t, pl.tokenId))) {
+    // 跑起来拐弯有限：奔跑整回合只能拐一次，爆跑一次都不准。只在战斗里管。
+    if (t.combat && runSpec && !canTurn(runSpec, runTurnsOf(t, pl.tokenId))) {
       return setTr({ msg: runSpec.turns === 0 ? `【${runSpec.label}】不能拐弯，往${dir}得先停下来` : `【${runSpec.label}】这一回合已经拐过弯了` });
     }
     update((d) => {
       const dt = findMap(d, t.mapId)!.tokens.find((x) => x.id === pl.tokenId)!;
       dt.facing = dir;
     });
+    // 转身去别的方向，之前为“同方向再按一次”蓄的起跳/攀爬确认作废。
+    if (getUI().pendingGap) setUI({ pendingGap: null });
     setTr({
       msg: `转向${dir}`,
       turned: t.combat ? { ...(t.turned ?? {}), [pl.tokenId]: true } : t.turned,
-      runTurns: runSpec ? { ...(t.runTurns ?? {}), [pl.tokenId]: runTurnsOf(t, pl.tokenId) + 1 } : t.runTurns,
+      runTurns: t.combat && runSpec ? { ...(t.runTurns ?? {}), [pl.tokenId]: runTurnsOf(t, pl.tokenId) + 1 } : t.runTurns,
     });
     return;
   }
@@ -362,7 +365,7 @@ export function trialMove(dx: number, dy: number) {
   update((d) => {
     const dt = findMap(d, t.mapId)!.tokens.find((x) => x.id === pl.tokenId)!;
     setTokenPosition(findMap(d, t.mapId)!, dt, step.b);
-    dt.facing = dir; // 自由行动：朝向跟着移动；战斗中这时朝向已经等于 dir
+    dt.facing = dir; // 自由/战斗同一条路：走到这里说明朝向已经等于 dir，跟上
   });
   // 战斗模式才扣移动点数；自由行动不限步数。
   const poolStart = t.movePoints?.[pl.tokenId] ?? movePool(budget, stored);
@@ -384,6 +387,31 @@ export function trialMove(dx: number, dy: number) {
   });
   checkEnterTriggers(t.mapId, pl.tokenId, step.a.x, step.a.y); // 和正式带团一样：走进触发区就播，范围里的线索自动浮现（试玩结束都会复原）
   autoReveal(t.mapId);
+}
+
+/** 把一步的结果从“有没有提示”里拆出来：
+ * turn＝只改朝向；move＝真的位移（含跳过去/攀上去/跳下去）；prompt＝在等再按一次确认；failed＝没成。 */
+export function trialMove(dx: number, dy: number): TrialMoveSignal {
+  const t0 = tr(), pl0 = t0?.players[t0.current];
+  const w0 = getWorld(), m0 = t0 ? findMap(w0, t0.mapId) : null;
+  const tok0 = m0 && pl0 ? m0.tokens.find((x) => x.id === pl0.tokenId) : null;
+  const gap0 = getUI().pendingGap;
+  const judge0 = getUI().pendingJudgment?.id ?? null;
+  trialMoveStep(dx, dy);
+  const t1 = tr(), pl1 = t1?.players[t1.current];
+  const w1 = getWorld(), m1 = t1 ? findMap(w1, t1.mapId) : null;
+  const tok1 = m1 && pl1 ? m1.tokens.find((x) => x.id === pl1.tokenId) : null;
+  if (!tok0 || !tok1) return 'failed';
+  if (tok0.facing !== tok1.facing) return 'turn';
+  if (tok0.x !== tok1.x || tok0.y !== tok1.y
+    || (tok0.subcell?.x ?? null) !== (tok1.subcell?.x ?? null)
+    || (tok0.subcell?.y ?? null) !== (tok1.subcell?.y ?? null)) return 'move';
+  // 坑前确认会挂 pendingGap；要检定的宽坑/攀爬/跳下会直接开判定、没有位移。
+  // 这两种都是“等下一步”，不是失败；换人后旧 pendingGap 还在也要认新挂的那一笔。
+  const gap1 = getUI().pendingGap;
+  if (gap1 && (!gap0 || gap0.tokenId !== gap1.tokenId || gap0.dx !== gap1.dx || gap0.dy !== gap1.dy)) return 'prompt';
+  if ((getUI().pendingJudgment?.id ?? null) !== judge0) return 'prompt';
+  return 'failed';
 }
 
 /**
@@ -1284,6 +1312,140 @@ export function trialRamDoor(objectId: string, opts: { rolls?: number[] } = {}):
   });
   closePendingJudgment();
   return e;
+}
+
+/** 电子锁的后果：主持人选，不是自动规则。 */
+export type CodeConsequence = 'unlock-open' | 'unlock' | 'stay' | 'jam' | 'alarm';
+
+export interface CodeSettleInput extends CodeFeedback {
+  consequence: CodeConsequence;
+}
+
+/** 开一笔「等密码」：有玩家窗口就让玩家输，没有就让主持人代输。 */
+export function trialAskCode(objectId: string): string | null {
+  const t = tr();
+  if (!t) return '没有正在试玩的角色';
+  if (t.combat) return '战斗中先不接密码锁';
+  const ctx = doorContext(objectId);
+  if (typeof ctx === 'string') return ctx;
+  const { door, pl, tok } = ctx;
+  if (tok.down || tok.corpse) return '现在的状态输不了密码';
+  if (door.lock?.kind !== 'electronic') return '这扇门不是电子锁';
+  if (!door.lock.locked) return '电子锁已经解开了';
+  if (openingIsOpen(door)) return '门已经开着';
+  if (!door.opening?.openStates?.length) return '门缺少打开状态，开不了';
+  if (getUI().pendingCode) return '已经有一扇门在等密码';
+  const expectedCode = door.lock.code ? door.lock.code : null;
+  const fromWindow = !!playerWindowFor(pl.pcId);
+  const p: PendingCodeAttempt = {
+    id: `code-${uid()}`, mapId: t.mapId, objectId: door.id, tokenId: pl.tokenId, pcId: pl.pcId,
+    name: door.name, expectedCode, code: null, at: Date.now(), fromWindow, context: worldContext(),
+  };
+  setUI({ pendingCode: p });
+  if (fromWindow) pushCodeRequest(pl.pcId);
+  return null;
+}
+
+/** 密码输入完成（玩家窗口回传，或主持人代输）。先存着，等主持人裁定反馈。 */
+export function trialSubmitCode(id: string, code: string): string | null {
+  const p = getUI().pendingCode;
+  if (!p || p.id !== id) return '这笔密码等待已经结束';
+  if (p.context !== worldContext()) return '工程或试玩已切换，请重新输入';
+  if (typeof code !== 'string' || !code) return '先输入密码';
+  if (code.length > 256) return '密码太长';
+  if (p.code !== null) return '这次密码已经提交过了';
+  setUI({ pendingCode: { ...p, code } });
+  return null;
+}
+
+/** 主持人裁定：写反馈、选后果、决定要不要推到玩家窗口；最后一条事件。 */
+export function trialSettleCode(id: string, input: CodeSettleInput): string | null {
+  const p = getUI().pendingCode;
+  if (!p || p.id !== id) return '这笔密码等待已经结束';
+  if (p.context !== worldContext()) return '工程或试玩已切换，重开这笔密码';
+  if (p.code === null) return '还没输入密码';
+  if (!['unlock-open', 'unlock', 'stay', 'jam', 'alarm'].includes(input.consequence)) return '后果不对';
+  if (typeof input.text !== 'string') return '反馈要是文字';
+  if (input.pushToPlayer && !input.text.trim()) return '要推到玩家窗口，就写一句反馈';
+  const w = getWorld();
+  const m = findMap(w, p.mapId);
+  if (!m) return '找不到地图';
+  const door = m.objects.find((o) => o.id === p.objectId && o.opening);
+  if (!door) return '找不到这扇门';
+  const tok = m.tokens.find((x) => x.id === p.tokenId);
+  const pc = w.party.find((x) => x.id === p.pcId);
+  if (!tok || !pc) return '找不到角色';
+  if (tok.down || tok.corpse) return '现在的状态输不了密码';
+  const access = doorAccess(m, door, tok, pc, 'recheck');
+  if (access) return access;
+  if (door.lock?.kind !== 'electronic') return '这扇门已经变了，重开判定';
+  if (!door.lock.locked) return '电子锁已经解开了，重开这笔密码';
+  if (openingIsOpen(door) || !door.opening?.openStates?.length) return '这扇门已经变了，重开判定';
+  const t = tr();
+  if (t?.combat) return '战斗中先不接密码锁';
+
+  let msg = '';
+  let consequenceNote = '';
+  update((d) => {
+    const dm = findMap(d, p.mapId)!;
+    const o = dm.objects.find((x) => x.id === p.objectId)!;
+    const deltas: Delta[] = [];
+    const openIdx = o.states.findIndex((_, i) => o.opening?.openStates?.includes(i) ?? false);
+    if (input.consequence === 'unlock-open') {
+      o.lock = { ...o.lock!, locked: false };
+      deltas.push({ kind: 'object', id: o.id, name: o.name, path: '锁具', from: '锁着', to: '已解开' });
+      if (openIdx >= 0 && o.state !== openIdx) {
+        deltas.push({ kind: 'object', id: o.id, name: o.name, path: '状态', from: o.states[o.state], to: o.states[openIdx] });
+        o.state = openIdx;
+      }
+      msg = `${pc.name} 在 ${o.name} 输入密码，锁开了，门也开了`;
+      consequenceNote = '锁解开并开门';
+    } else if (input.consequence === 'unlock') {
+      o.lock = { ...o.lock!, locked: false };
+      deltas.push({ kind: 'object', id: o.id, name: o.name, path: '锁具', from: '锁着', to: '已解开' });
+      msg = `${pc.name} 在 ${o.name} 输入密码，锁开了，门还关着`;
+      consequenceNote = '只解锁，门没开';
+    } else if (input.consequence === 'jam') {
+      const already = !o.lock!.keyable;
+      if (!already) {
+        o.lock = { ...o.lock!, locked: true, keyable: false };
+        deltas.push({ kind: 'object', id: o.id, name: o.name, path: '锁具', from: '锁着', to: '卡死' });
+      }
+      msg = `${pc.name} 在 ${o.name} 输入密码，锁卡死了`;
+      consequenceNote = already ? '锁早就卡死了' : '锁卡死';
+    } else if (input.consequence === 'alarm') {
+      msg = `${pc.name} 在 ${o.name} 输入密码，触发了报警`;
+      consequenceNote = '触发报警，门没动';
+    } else {
+      msg = `${pc.name} 在 ${o.name} 输入密码，门没动`;
+      consequenceNote = '保持锁着';
+    }
+    const noteParts: string[] = [];
+    if (input.text.trim()) noteParts.push(`反馈：${input.text.trim()}`);
+    if (consequenceNote) noteParts.push(consequenceNote);
+    appendEvent(d, newEvent(d, Date.now(),
+      { kind: 'pc', id: pc.id, name: pc.name },
+      { name: '输入密码', source: '临场' },
+      {
+        target: { kind: 'object', id: o.id, name: o.name },
+        deltas,
+        ...(noteParts.length ? { note: noteParts.join('；') } : {}),
+      },
+    ));
+  });
+  setTr({ msg });
+  setUI({ pendingCode: null });
+  pushCodeResult(p.pcId, p.id, input.pushToPlayer ? input.text : undefined);
+  return null;
+}
+
+/** 取消这笔密码等待：玩家窗口也要收掉输入框。 */
+export function cancelPendingCode(): string | null {
+  const p = getUI().pendingCode;
+  if (!p) return '没有等待中的密码';
+  setUI({ pendingCode: null });
+  pushCodeResult(p.pcId, p.id);
+  return null;
 }
 
 /** 门判定的落地：按两颗骰子分别过 DC，都过才算成功；大成功一颗顶俩。 */

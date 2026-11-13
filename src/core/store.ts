@@ -2,7 +2,7 @@ import { architectureTransitionError } from '../scene/architecture';
 import { produce, type Draft } from 'immer';
 import { useSyncExternalStore } from 'react';
 import type { SenseHint, SenseKind, SenseRoll } from '../rules/sense';
-import type { PendingJudgment, World } from './types';
+import type { PendingCodeAttempt, PendingJudgment, World } from './types';
 import { demoWorld, emptyWorld } from './defaults';
 import { isPlayerEntry } from './deployment';
 import { migrateWorld, syncMemory } from '../scene/memory';
@@ -309,6 +309,8 @@ export interface UIState {
   } | null; // 试玩
   /** 开出来等玩家掷的判定；同一时间只开一个。 */
   pendingJudgment: PendingJudgment | null;
+  /** 开出来等玩家输密码的电子锁；同一时间只开一个。 */
+  pendingCode: PendingCodeAttempt | null;
   /** 玩家窗口掷完回传的结果，等见证者确认后广播。 */
   /** 前面是坑，等玩家再按一次同方向确认起跳。 */
   pendingGap: { tokenId: string; dx: number; dy: number } | null;
@@ -350,6 +352,7 @@ let ui: UIState = {
   views: {},
   pendingConn: null,
   pendingJudgment: null,
+  pendingCode: null,
   pendingGap: null,
   judgmentResult: null,
   pick: null,

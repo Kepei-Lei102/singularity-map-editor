@@ -158,8 +158,9 @@ test('trial uses sandbox and rejects another map; ending it restores block and g
 test('ordinary trial push cannot bypass a sliding puzzle even with helper present', () => {
   const { world, map } = fixture(); map.spawn = { x: 1, y: 2 }; install(world); api.startTrial();
   api.addTrialPlayer(); api.switchTrialPlayer(0);
+  api.trialMove(1, 0); // 自由行动也要先转身
   const before = api.getWorld();
-  api.trialMove(1, 0);
+  api.trialMove(1, 0); // 第二下才尝试挪
   assert.equal(api.getWorld(), before);
   assert.match(api.getUI().trial.msg, /滑块/);
   api.endTrial();
@@ -608,6 +609,7 @@ test('door closing refuses occupied aperture, snapshots restore only surviving d
 test('coarse to fine and back movement cannot cross thin walls or corner geometry', () => {
   const { world, map } = fineFixture(); map.subdivisions = [27, 28]; map.architecture = { walls: [{ id: 'w', a: { x: 10, y: 9 }, b: { x: 10, y: 12 }, thickness: 100, material: 'wall' }], doors: [] };
   map.spawn = { x: 2, y: 3 }; install(world); api.startTrial();
+  api.trialMove(1, 0); // 先转身
   const before = api.getWorld().maps[0].tokens[0]; api.trialMove(1, 0);
   assert.deepEqual(api.getWorld().maps[0].tokens[0], before); api.endTrial();
 });

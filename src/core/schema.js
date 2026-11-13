@@ -445,6 +445,7 @@ export function checkWorld(w, migrated = false) {
         obj(o.lock, `${oa}.lock`);
         oneOf(o.lock.kind, ['physical', 'electronic'], `${oa}.lock.kind`);
         bool(o.lock.locked, `${oa}.lock.locked`); bool(o.lock.keyable, `${oa}.lock.keyable`);
+        c.optStr(o.lock.code, `${oa}.lock.code`);
       }
       optBool(o.pushable, `${oa}.pushable`);
       optBool(o.heavy, `${oa}.heavy`);

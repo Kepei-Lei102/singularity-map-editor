@@ -11,14 +11,15 @@ const root = fileURLToPath(new URL('..', import.meta.url));
 const temp = await mkdtemp(join(tmpdir(), 'ts-facing-'));
 const bundle = join(temp, 'editor.cjs');
 await build({
-  stdin: { contents: `export * from './src/runtime/trial'; export * from './src/core/defaults'; export * from './src/core/store'; export * from './src/runtime/actions';`, resolveDir: root },
+  stdin: { contents: `export * from './src/runtime/trial'; export * from './src/runtime/sync'; export * from './src/core/defaults'; export * from './src/core/store'; export * from './src/runtime/actions';`, resolveDir: root },
   outfile: bundle, bundle: true, platform: 'node', format: 'cjs', logLevel: 'silent',
 });
 const storage = () => { const data = new Map(); return { getItem: (k) => data.get(k) ?? null, setItem: (k, v) => data.set(k, v), removeItem: (k) => data.delete(k) }; };
 globalThis.localStorage = storage();
 globalThis.sessionStorage = storage();
 globalThis.location = { search: '', origin: 'http://localhost' };
-globalThis.window = { setTimeout: () => 0, open: () => ({ closed: false, postMessage() {} }) };
+const windows = [];
+globalThis.window = { setTimeout: () => 0, open: () => { const win = { closed: false, got: [], postMessage(m) { this.got.push(m); } }; windows.push(win); return win; } };
 globalThis.BroadcastChannel = class { postMessage() {} };
 const api = createRequire(import.meta.url)(bundle);
 after(() => rm(temp, { recursive: true, force: true }));
@@ -50,14 +51,96 @@ test('方向键映射 4 向', () => {
   assert.equal(api.dirOf(-1, 0), '西');
 });
 
-test('自由行动：按方向直接走，朝向跟着变', () => {
+test('自由行动：第一次按方向只转身，第二次同方向才走', () => {
   const { map } = fixture();
   const before = token(map);
   assert.equal(before.facing, undefined);
   api.trialMove(0, -1);
-  const t = token(map);
-  assert.deepEqual([t.x, t.y], [5, 4]);
+  let t = token(map);
+  assert.deepEqual([t.x, t.y], [5, 5], '第一下不移动');
   assert.equal(t.facing, '北');
+  assert.match(api.getUI().trial.msg, /转向北/);
+  api.trialMove(0, -1);
+  t = token(map);
+  assert.deepEqual([t.x, t.y], [5, 4], '第二下才走');
+  assert.equal(t.facing, '北');
+});
+
+test('自由行动：走起来之后同方向继续走，不用每步都确认', () => {
+  const { map } = fixture();
+  api.trialMove(0, -1);
+  api.trialMove(0, -1);
+  api.trialMove(0, -1);
+  const t = token(map);
+  assert.deepEqual([t.x, t.y], [5, 3]);
+});
+
+test('自由行动：玩家窗口收到转向回执是成功，不是失败', () => {
+  const { map } = fixture();
+  api.openPlayerWindow('pc', true);
+  const win = windows.at(-1);
+  const move = (dx, dy) => api.onMove({ type: 'move', dx, dy, __ts: 'ts-map', seq: 's1', from: api.SESSION, inst: 'inst', born: 1 }, win);
+
+  win.got.length = 0;
+  move(0, -1); // 第一下：只转向
+  const first = win.got.find((m) => m.type === 'move-result');
+  assert.equal(first.ok, true, '转身必须回成功');
+  assert.equal(first.kind, 'turn');
+  assert.match(first.msg, /转向北/);
+  assert.deepEqual([token(map).x, token(map).y], [5, 5]);
+
+  win.got.length = 0;
+  move(0, -1); // 第二下：走
+  const second = win.got.find((m) => m.type === 'move-result');
+  assert.equal(second.ok, true);
+  assert.equal(second.kind, 'move');
+  assert.deepEqual([token(map).x, token(map).y], [5, 4]);
+});
+
+test('自由行动：要检定的宽坑开判定也不算失败', () => {
+  const { map } = fixture();
+  api.update((d) => {
+    d.maps[0].cells[4 * 10 + 5] = 'hole'; // 北边两格都是坑
+    d.maps[0].cells[3 * 10 + 5] = 'hole';
+    d.party[0].attributes = { 力量: 50, 敏捷: 50, 意志: 50, 观察: 50, 智慧: 50, 魅力: 50 };
+  });
+  api.openPlayerWindow('pc', true);
+  const win = windows.at(-1);
+  const move = (dx, dy) => api.onMove({ type: 'move', dx, dy, __ts: 'ts-map', seq: 's3', from: api.SESSION, inst: 'inst', born: 1 }, win);
+
+  move(0, -1); // 转向
+  move(0, -1); // 坑前提示
+  win.got.length = 0;
+  move(0, -1); // 第二确认：开跳跃判定，不位移
+  const judged = win.got.find((m) => m.type === 'move-result');
+  assert.equal(judged.ok, true, '开判定不是失败');
+  assert.equal(judged.kind, 'prompt');
+  assert.match(judged.msg, /判定/);
+  assert.ok(api.getUI().pendingJudgment, '确实开了判定');
+  assert.deepEqual([token(map).x, token(map).y], [5, 5], '判定前不移动');
+});
+
+test('自由行动：坑前确认和跳过去成功都不该是红条', () => {
+  const { map } = fixture();
+  api.update((d) => { d.maps[0].cells[4 * 10 + 5] = 'hole'; }); // 北边一格是坑
+  api.openPlayerWindow('pc', true);
+  const win = windows.at(-1);
+  const move = (dx, dy) => api.onMove({ type: 'move', dx, dy, __ts: 'ts-map', seq: 's2', from: api.SESSION, inst: 'inst', born: 1 }, win);
+
+  move(0, -1); // 转向
+  win.got.length = 0;
+  move(0, -1); // 坑前提示：等再按一次
+  const prompt = win.got.find((m) => m.type === 'move-result');
+  assert.equal(prompt.ok, true, '起跳确认不是失败');
+  assert.equal(prompt.kind, 'prompt');
+  assert.match(prompt.msg, /再按一次同方向/);
+
+  win.got.length = 0;
+  move(0, -1); // 跳过去
+  const jump = win.got.find((m) => m.type === 'move-result');
+  assert.equal(jump.ok, true, '跳过去成功不是失败');
+  assert.equal(jump.kind, 'move');
+  assert.deepEqual([token(map).x, token(map).y], [5, 3]);
 });
 
 test('战斗中：第一次按方向只转身，第二次才移动', () => {

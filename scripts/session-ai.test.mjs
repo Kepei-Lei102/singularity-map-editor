@@ -131,7 +131,8 @@ test('AI status without a duration stays visibly active until manual removal and
     api.toggleCombat(); api.trialEndTurn();
     assert.equal(api.statusLeft(token().status), '持续至手动解除');
     api.toggleCombat(); api.clearTrialStatus('token');
-    api.trialMove(1, 0); assert.equal(token().x, 5);
+    api.trialMove(1, 0); assert.equal(token().x, 4, '第一下只转向');
+    api.trialMove(1, 0); assert.equal(token().x, 5, '第二下才走');
     assert.equal(token().status, undefined);
     assert.equal(api.statusLeft({ roundsLeft: 2 }), '还剩 2 回合');
     assert.equal(api.statusLeft({ endsAt: Date.now() - 1000 }), null);
