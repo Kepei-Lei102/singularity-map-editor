@@ -19,6 +19,7 @@ export * from './src/rules/interaction';
 export * from './src/core/defaults';
 export * from './src/core/schema.js';
 export * from './src/runtime/trial';
+export * from './src/runtime/sync';
 export * from './src/core/store';
 export * from './src/runtime/actions';
 export * from './src/scene/architecture';
@@ -31,7 +32,15 @@ const storage = () => { const data = new Map(); return { getItem: (k) => data.ge
 globalThis.localStorage = storage();
 globalThis.sessionStorage = storage();
 globalThis.location = { search: '', origin: 'http://localhost' };
-globalThis.window = { setTimeout: () => 0, open: () => ({ closed: false, postMessage() {} }) };
+const windows = [];
+globalThis.window = {
+  setTimeout: () => 0,
+  open: () => {
+    const w = { closed: false, got: [], postMessage(m) { this.got.push(m); } };
+    windows.push(w);
+    return w;
+  },
+};
 globalThis.BroadcastChannel = class { postMessage() {} };
 globalThis.crypto ??= (await import('node:crypto')).webcrypto;
 const api = createRequire(import.meta.url)(bundle);
@@ -324,4 +333,217 @@ test('存档校验：真事件能过校验；events 不是数组/超 200 条要�
   assert.match(fixed2.join('；'), /形状不对/);
   assert.equal(partial.events.length, 1);
   assert.equal(partial.events[0].id, w.events.at(-1).id);
+});
+
+test('移动落一条事件：只记 moved，转身和确认不记账', () => {
+  const { m } = fight();
+  api.toggleCombat(); // 自由行动
+  const token = () => api.findMap(api.getWorld(), m.id).tokens.find((t) => t.id === 'ta');
+  const before = token();
+  const count = api.getWorld().events?.length ?? 0;
+
+  api.trialMove(0, -1); // 只转身
+  assert.equal(api.getWorld().events?.length ?? 0, count, '转身不落事件');
+  assert.deepEqual([token().x, token().y], [before.x, before.y]);
+
+  api.trialMove(0, -1); // 走
+  const ev = api.getWorld().events.at(-1);
+  assert.equal(ev.action.name, '移动');
+  assert.equal(ev.target, undefined);
+  assert.equal(ev.check, undefined);
+  assert.deepEqual(ev.deltas, [{
+    kind: 'moved', id: 'a', name: '攻击者',
+    from: { x: before.x, y: before.y }, to: { x: before.x, y: before.y - 1 },
+  }]);
+  assert.match(api.getWorld().log.at(-1).text, /【移动】/);
+  assert.doesNotMatch(api.getWorld().log.at(-1).text, /改为/);
+});
+
+test('推家具落一条「推」事件：目标物件位置 + 自己 moved', () => {
+  const { m } = fight();
+  api.toggleCombat();
+  api.update((d) => {
+    d.maps[0].objects = [{
+      ...api.newObject('object', 2, 1, 1, 1), id: 'shelf', name: '书架',
+      states: ['放着'], state: 0, height: 2, pushable: true, heavy: false, secrets: [],
+    }];
+  });
+
+  api.trialMove(0, -1); // 转身
+  api.trialMove(0, -1); // 推一格并走进去
+  const ev = api.getWorld().events.at(-1);
+  assert.equal(ev.action.name, '推');
+  assert.deepEqual(ev.target, { kind: 'object', id: 'shelf', name: '书架' });
+  assert.equal(ev.deltas.length, 2);
+  assert.equal(ev.deltas[0].kind, 'moved');
+  assert.deepEqual([ev.deltas[0].from, ev.deltas[0].to], [{ x: 2, y: 2 }, { x: 2, y: 1 }]);
+  assert.deepEqual(ev.deltas[1], {
+    kind: 'object', id: 'shelf', name: '书架', path: '位置',
+    from: '(2, 1)', to: '(2, 0)',
+  });
+  assert.match(api.getWorld().log.at(-1).text, /【推】/);
+});
+
+test('感知落一条事件：记属性骰和候选 note，不改世界', () => {
+  const { m } = fight();
+  api.toggleCombat();
+  api.update((d) => {
+    d.maps[0].objects = [{
+      ...api.newObject('object', 2, 3, 1, 1), id: 'clock', name: '钟',
+      states: ['正常'], state: 0, height: 0.2, secrets: [{
+        id: 's1', label: '刻痕', check: '观察', kind: 'roll', range: 2,
+        tiers: { crit: '钟面有刻痕', success: '钟面有刻痕', fail: '', fumble: '' },
+      }],
+    }];
+  });
+
+  assert.equal(api.trialSense('observe', { targetObjectId: 'clock', roll: () => 20 }), null);
+  const ev = api.getWorld().events.at(-1);
+  assert.equal(ev.action.name, '观察');
+  assert.deepEqual(ev.target, { kind: 'object', id: 'clock', name: '钟' });
+  assert.equal(ev.check.success, true);
+  assert.equal(ev.check.tier, 'crit');
+  assert.equal(ev.check.attrs[0].attr, '观察');
+  assert.equal(ev.check.attrs[0].roll, 20);
+  assert.deepEqual(ev.deltas, [], '感知不改世界');
+  assert.match(ev.note, /候选 1 条/);
+  assert.match(api.getWorld().log.at(-1).text, /【观察】/);
+});
+
+test('战斗中移动：moved 之外，移动点变化也入账', () => {
+  const { m } = fight(); // 战斗模式
+  api.trialMove(0, -1); // 转身
+  api.trialMove(0, -1); // 走一格
+  const ev = api.getWorld().events.at(-1);
+  assert.equal(ev.action.name, '移动');
+  const moved = ev.deltas.find((d) => d.kind === 'moved');
+  const points = ev.deltas.find((d) => d.kind === 'points');
+  assert.ok(moved, '必须有 moved');
+  assert.ok(points, '战斗里走一格要记移动点');
+  assert.equal(points.pool, 'move');
+  assert.equal(points.id, 'a');
+  assert.ok(points.from > points.to, `点池应该变少：${points.from} → ${points.to}`);
+  assert.deepEqual([api.findMap(api.getWorld(), m.id).tokens.find((t) => t.id === 'ta').x,
+    api.findMap(api.getWorld(), m.id).tokens.find((t) => t.id === 'ta').y], [2, 1]);
+});
+
+test('推家具：后面攀爬检查失败，不该先挪家具、也不该落账', () => {
+  const { m } = fight();
+  api.toggleCombat();
+  api.update((d) => {
+    const map = d.maps[0];
+    map.heights = new Array(map.width * map.height).fill(0);
+    map.heights[1 * map.width + 2] = 2; // 书架脚下那格比人高 2 格：推过去要攀
+    map.objects = [{
+      ...api.newObject('object', 2, 1, 1, 1), id: 'shelf', name: '书架',
+      states: ['放着'], state: 0, height: 2, pushable: true, heavy: false, secrets: [],
+    }];
+  });
+  const beforeEvents = api.getWorld().events?.length ?? 0;
+  api.trialMove(0, -1); // 转身
+  api.trialMove(0, -1); // 推 + 攀，应该停在确认
+  const map = api.findMap(api.getWorld(), m.id);
+  const shelf = map.objects.find((o) => o.id === 'shelf');
+  const tok = map.tokens.find((t) => t.id === 'ta');
+  assert.deepEqual([shelf.x, shelf.y], [2, 1], '家具不能先挪');
+  assert.deepEqual([tok.x, tok.y], [2, 2], '人也不能动');
+  assert.equal(api.getWorld().events?.length ?? 0, beforeEvents, '确认阶段不落账');
+  assert.match(api.getUI().trial.msg, /高 2 格|攀/);
+
+  api.trialMove(0, -1); // 确认：这时才推 + 攀/跳
+  const after = api.findMap(api.getWorld(), m.id);
+  const shelf2 = after.objects.find((o) => o.id === 'shelf');
+  const tok2 = after.tokens.find((t) => t.id === 'ta');
+  assert.deepEqual([shelf2.x, shelf2.y], [2, 0], '确认后家具才动');
+  assert.notDeepEqual([tok2.x, tok2.y], [shelf2.x, shelf2.y], '人不能和家具叠在一起');
+  const pushEv = api.getWorld().events.findLast((e) => e.action.name === '推');
+  assert.ok(pushEv, '确认后要补一条推的事件');
+  assert.equal(pushEv.deltas.length, 1, '这条推事件只记家具，不记人的位移');
+  assert.deepEqual(pushEv.deltas[0], {
+    kind: 'object', id: 'shelf', name: '书架', path: '位置',
+    from: '(2, 1)', to: '(2, 0)',
+  });
+});
+
+test('推箱确认：攀爬前置条件不满足时不能先挪家具', () => {
+  const { m } = fight();
+  api.toggleCombat();
+  api.update((d) => {
+    const map = d.maps[0];
+    map.heights = new Array(map.width * map.height).fill(0);
+    map.heights[1 * map.width + 2] = 2;
+    d.party[0].attributes = {}; // 六维没填，攀爬会被 beginUpClimb 拒绝
+    map.objects = [{
+      ...api.newObject('object', 2, 1, 1, 1), id: 'shelf', name: '书架',
+      states: ['放着'], state: 0, height: 2, pushable: true, heavy: false, secrets: [],
+    }];
+  });
+  const beforeEvents = api.getWorld().events?.length ?? 0;
+  api.trialMove(0, -1);
+  api.trialMove(0, -1); // 确认状态
+  api.trialMove(0, -1); // 第三下：攀爬前置失败
+  const map = api.findMap(api.getWorld(), m.id);
+  const shelf = map.objects.find((o) => o.id === 'shelf');
+  const tok = map.tokens.find((t) => t.id === 'ta');
+  assert.deepEqual([shelf.x, shelf.y], [2, 1], '前置失败不能挪家具');
+  assert.deepEqual([tok.x, tok.y], [2, 2], '人也不动');
+  assert.equal(api.getWorld().events?.length ?? 0, beforeEvents, '不能先落推的账');
+  assert.match(api.getUI().trial.msg, /六维/);
+});
+
+test('推箱下跳无检定：摔伤骰开不出时不能先挪家具', () => {
+  const { m } = fight();
+  api.toggleCombat();
+  api.update((d) => {
+    const map = d.maps[0];
+    map.heights = new Array(map.width * map.height).fill(0);
+    map.heights[1 * map.width + 2] = -6; // 书架脚下是 6 格深，没有技能就是必摔
+    map.objects = [{
+      ...api.newObject('object', 2, 1, 1, 1), id: 'shelf', name: '书架',
+      states: ['放着'], state: 0, height: 2, pushable: true, heavy: false, secrets: [],
+    }];
+  });
+  api.openPlayerWindow('a', true);
+  api.setUI({ pendingJudgment: { id: 'old-judgment' } });
+  const beforeEvents = api.getWorld().events?.length ?? 0;
+
+  api.trialMove(0, -1);
+  api.trialMove(0, -1); // 下跳确认
+  api.trialMove(0, -1); // 第三下：摔伤骰开不出
+  const map = api.findMap(api.getWorld(), m.id);
+  const shelf = map.objects.find((o) => o.id === 'shelf');
+  const tok = map.tokens.find((t) => t.id === 'ta');
+  assert.deepEqual([shelf.x, shelf.y], [2, 1], '开不出摔伤骰，家具不能先动');
+  assert.deepEqual([tok.x, tok.y], [2, 2], '人也不动');
+  assert.equal(api.getWorld().events?.length ?? 0, beforeEvents, '不能先落推的账');
+  assert.equal(api.getUI().pendingJudgment.id, 'old-judgment');
+});
+
+test('推箱下跳无检定：先落推，再开摔伤骰', () => {
+  const { m } = fight();
+  api.toggleCombat();
+  api.update((d) => {
+    const map = d.maps[0];
+    map.heights = new Array(map.width * map.height).fill(0);
+    map.heights[1 * map.width + 2] = -6;
+    map.objects = [{
+      ...api.newObject('object', 2, 1, 1, 1), id: 'shelf', name: '书架',
+      states: ['放着'], state: 0, height: 2, pushable: true, heavy: false, secrets: [],
+    }];
+  });
+  api.openPlayerWindow('a', true);
+  const win = windows.at(-1);
+  win.got.length = 0;
+  api.trialMove(0, -1);
+  api.trialMove(0, -1);
+  api.trialMove(0, -1); // 推下去
+
+  const ev = api.getWorld().events.at(-1);
+  assert.equal(ev.action.name, '推');
+  assert.ok(api.getUI().pendingJudgment, '摔伤骰要开出去');
+  const log = api.getWorld().log;
+  const pushIdx = log.findLastIndex((x) => /【推】/.test(x.text));
+  const judgeIdx = log.findLastIndex((x) => /开出判定/.test(x.text));
+  assert.ok(pushIdx >= 0 && judgeIdx >= 0);
+  assert.ok(pushIdx < judgeIdx, '推的日志要在开摔伤骰之前');
 });

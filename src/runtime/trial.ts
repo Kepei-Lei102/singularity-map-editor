@@ -5,14 +5,14 @@ import { effectiveLayer } from '../scene/vision';
 import { objectEnabled } from '../core/objectData.js';
 import { beginSandbox, endSandbox, getUI, getWorld, setUI, toast, update, worldContext, type UIState } from '../core/store';
 import { addMark, autoReveal, cancelPendingPlay, checkEnterTriggers, findMap, ioBusy } from './actions';
-import type { CodeFeedback, Delta, Facing, GameMap, Id, JumpCheckRecord, JumpRequest, MapObject, PC, PendingCodeAttempt, PendingJudgment, Stance, Token, World } from '../core/types';
+import type { CodeFeedback, Delta, Facing, GameMap, Id, JumpCheckRecord, JumpRequest, MapObject, PC, PendingCodeAttempt, PendingJudgment, PhysicalEvent, Stance, Token, World } from '../core/types';
 import { gridDist, uid } from '../core/util';
 import { blocksMovement, ROUND_MINUTES } from '../scene/perception';
 import { architectureGeometry, architectureObjectBounds, characterPathClear, furnitureSweepBlocked, nextTokenStep, openingIsOpen, setTokenPosition, tokenPosition } from '../scene/architecture';
 import { terrainBlocksPoint, terrainBlocksRect } from '../scene/terrain';
 import { slidingPuzzleForObject } from '../scene/sliding';
 import { sightCacheFor, viewerOf, visiblePoint } from '../scene/sight';
-import { describeSense, rollSense, senseHints, type SenseKind } from '../rules/sense';
+import { describeSense, rollSense, senseHints, SENSE_LABEL, type SenseKind } from '../rules/sense';
 import { resolveCheck } from '../rules/interaction';
 import {
   describeInjury, describePitFall, describeStepDrop, gapAhead, INJURY_DICE, INJURY_LABEL, injuryTier,
@@ -202,6 +202,26 @@ function lyingMsg(tok: { stance?: string; name: string }): string | null {
   return tok.stance === '躺' ? `${tok.name}躺着，先翻身或站起来（要花移动点）` : null;
 }
 
+/** 确认攀/跳之后，把家具和动作一起落账：人还没动，只记家具。 */
+function commitShelfPush(mapId: string, shelf: MapObject, dx: number, dy: number, actor: PhysicalEvent['actor']): void {
+  update((d) => {
+    const o = findMap(d, mapId)?.objects.find((x) => x.id === shelf.id);
+    if (!o) return;
+    const from = { x: o.x, y: o.y };
+    o.x += dx; o.y += dy;
+    appendEvent(d, newEvent(d, Date.now(), actor,
+      { name: '推', source: '临场' },
+      {
+        target: { kind: 'object', id: o.id, name: o.name },
+        deltas: [{
+          kind: 'object', id: o.id, name: o.name, path: '位置',
+          from: `(${from.x}, ${from.y})`, to: `(${from.x + dx}, ${from.y + dy})`,
+        }],
+      },
+    ));
+  });
+}
+
 function trialMoveStep(dx: number, dy: number) {
   const t = tr();
   const pl = t?.players[t.current];
@@ -210,6 +230,9 @@ function trialMoveStep(dx: number, dy: number) {
   const m = findMap(w, t.mapId);
   const tok = m?.tokens.find((x) => x.id === pl.tokenId);
   if (!m || !tok) return;
+  const actor: PhysicalEvent['actor'] = pl.pcId
+    ? { kind: 'pc', id: pl.pcId, name: pl.name }
+    : { kind: 'npc', id: tok.id, name: tok.name };
   if (tok.status) {
     if (tok.status.endsAt !== undefined && tok.status.endsAt <= Date.now()) clearTrialStatus(tok.id);
     else return setTr({ msg: `${pl.name}${tok.status.label}中，暂时不能行动` });
@@ -266,17 +289,18 @@ function trialMoveStep(dx: number, dy: number) {
   if (puzzleBlock) return setTr({ msg: `${playerObject(puzzleBlock, pl.pcId).name}是滑块，请拖动当前看得见的家具，或使用检查器的方向按钮` });
   // 前面是可推的书架／推车：先把它推一格，再走进去。推不动就停下，不悄悄挪半格。
   const shelf = m.objects.find((o) => o.kind === 'object' && objectEnabled(m, o) && blocksMovement(o) && insideRect(o, nx, ny));
+  const shelfFrom = shelf ? { x: shelf.x, y: shelf.y } : null;
+  // 推箱的“已推”状态只拿来做检查；真正的挪动放到最后和 token 同一个 update，
+  // 这样后面攀爬/跳下/点数检查失败时不会出现“家具先动一半、人没动”。
+  const projected = shelf
+    ? { ...m, objects: m.objects.map((o) => o.id === shelf.id ? { ...o, x: o.x + dx, y: o.y + dy } : o) }
+    : m;
   if (shelf) {
     if (step.cost !== 3) return setTr({ msg: '推家具需要回到主格中心，整格推动' });
     if (!shelf.pushable) return setTr({ msg: '走不过去' });
     if (shelf.heavy && !hasHelper(m, shelf, pl.tokenId)) return setTr({ msg: `${playerObject(shelf, pl.pcId).name}太沉，要两个人一起推` });
     if (!canPush(w, m, shelf, dx, dy)) return setTr({ msg: `${playerObject(shelf, pl.pcId).name}推不动` });
-    const projected = { ...m, objects: m.objects.map(o => o.id === shelf.id ? { ...o, x: o.x + dx, y: o.y + dy } : o) };
     if (!characterPathClear(w, projected, step.a, step.b, tok.id)) return setTr({ msg: '人物路径被墙或其它人挡住' });
-    update((d) => {
-      const o = findMap(d, t.mapId)!.objects.find((x) => x.id === shelf.id)!;
-      o.x += dx; o.y += dy;
-    });
   }
   const now = getWorld(), m2 = findMap(now, t.mapId);
   if (!m2) return setTr({ msg: '走不过去' });
@@ -319,7 +343,8 @@ function trialMoveStep(dx: number, dy: number) {
   const standingInPit = hasPitBottom(now, m2, from.x, from.y) && heightAt(m2, from.x, from.y) === here;
   const intoPitBottom = cellFloor(now, m2, destX, destY) === 'gap'
     && hasPitBottom(now, m2, destX, destY) && heightAt(m2, destX, destY) >= here;
-  if (!characterPathClear(now, m2, step.a, step.b, tok.id, { skipTerrain: standingInPit || intoPitBottom })) {
+  const pathMap = shelf ? projected : m2;
+  if (!characterPathClear(now, pathMap, step.a, step.b, tok.id, { skipTerrain: standingInPit || intoPitBottom })) {
     return setTr({ msg: '人物或墙体挡住了路径' });
   }
   // 落差：上一步台阶能走（双倍点数），再高就得上攀跳/攀爬；往下就是跳，会摔。
@@ -340,7 +365,8 @@ function trialMoveStep(dx: number, dy: number) {
       return setTr({ msg: `${drop.reason}。${need}${climbPlan.usesAction ? '，占行动点' : ''}。再按一次同方向就攀上去` });
     }
     setUI({ pendingGap: null });
-    return beginUpClimb(now, m2, tok, landing, drop.height, dx, dy, pl.pcId, price);
+    return beginUpClimb(now, m2, tok, landing, drop.height, dx, dy, pl.pcId, price,
+      shelf ? () => commitShelfPush(t.mapId, shelf, dx, dy, actor) : undefined);
   }
   if (drop.kind === 'blocked') return setTr({ msg: drop.reason });
   // 往下 2 格以上不是走着下去的，是跳下去——会摔。同方向按第二下才跳。
@@ -352,7 +378,8 @@ function trialMoveStep(dx: number, dy: number) {
       return setTr({ msg: `${describeStepDrop(drop)}。再按一次同方向就跳下去` });
     }
     setUI({ pendingGap: null });
-    return beginDownJump(now, m2, tok, landing, drop.height, dx, dy, pl.pcId, price);
+    return beginDownJump(now, m2, tok, landing, drop.height, dx, dy, pl.pcId, price,
+      shelf ? () => commitShelfPush(t.mapId, shelf, dx, dy, actor) : undefined);
   }
   const extraPrice = drop.kind === 'stepUp' ? price : 0; // 上台阶再付一份
   if (t.combat && drop.kind !== 'flat') {
@@ -362,16 +389,39 @@ function trialMoveStep(dx: number, dy: number) {
   // 借机攻击：只认贴身脱离（原本 1–2 格内，这一步往外挪）。弹提示，不自动打。
   const others = m2.tokens.filter((k) => k.id !== tok.id);
   const opp = t.combat ? opportunityTriggers(landingOf(step.a), landingOf(step.b), others) : null;
-  update((d) => {
-    const dt = findMap(d, t.mapId)!.tokens.find((x) => x.id === pl.tokenId)!;
-    setTokenPosition(findMap(d, t.mapId)!, dt, step.b);
-    dt.facing = dir; // 自由/战斗同一条路：走到这里说明朝向已经等于 dir，跟上
-  });
-  // 战斗模式才扣移动点数；自由行动不限步数。
   const poolStart = t.movePoints?.[pl.tokenId] ?? movePool(budget, stored);
-  const pointsLeft = t.combat
-    ? Math.max(0, poolStart - price - extraPrice)
-    : t.movePoints?.[pl.tokenId];
+  const pointsLeft = t.combat ? Math.max(0, poolStart - price - extraPrice) : t.movePoints?.[pl.tokenId];
+  update((d) => {
+    const dm = findMap(d, t.mapId)!;
+    const dt = dm.tokens.find((x) => x.id === pl.tokenId)!;
+    const from = landingOf(tokenPosition(dt));
+    if (shelf) {
+      const o = dm.objects.find((x) => x.id === shelf.id);
+      if (o) { o.x += dx; o.y += dy; }
+    }
+    setTokenPosition(dm, dt, step.b);
+    dt.facing = dir; // 自由/战斗同一条路：走到这里说明朝向已经等于 dir，跟上
+    // 移动也是一次物理事件：只记真挪了格，转身/确认/prompt 不记。
+    // 推家具时并成一条「推」：目标是家具，自己 moved，家具记位置。
+    const deltas: Delta[] = [{ kind: 'moved', id: dt.pcId ?? dt.id, name: dt.name, from, to: landing }];
+    if (t.combat && pointsLeft !== undefined && pointsLeft !== poolStart) {
+      deltas.push({ kind: 'points', id: dt.pcId ?? dt.id, name: dt.name, pool: 'move', from: poolStart, to: pointsLeft });
+    }
+    if (shelf && shelfFrom) {
+      deltas.push({
+        kind: 'object', id: shelf.id, name: shelf.name, path: '位置',
+        from: `(${shelfFrom.x}, ${shelfFrom.y})`, to: `(${shelfFrom.x + dx}, ${shelfFrom.y + dy})`,
+      });
+    }
+    appendEvent(d, newEvent(d, Date.now(), actor,
+      shelf ? { name: '推', source: '临场' } : { name: '移动', source: '临场' },
+      {
+        ...(shelf ? { target: { kind: 'object' as const, id: shelf.id, name: shelf.name } } : {}),
+        deltas,
+      },
+    ));
+  });
+  // 战斗模式才扣移动点数；自由行动不限步数。点池在事件里已记，这里只算蓄力。
   // 蓄的那一格用掉就清零，得重新蓄。
   // 「用掉」= 这回合花掉的点数超过本身移动值——池子里超出的那部分就是蓄来的。
   const chargeUsed = t.combat && chargeUsedThisTurn(budget, pointsLeft ?? 0, stored);
@@ -428,6 +478,7 @@ function attributesFilled(pc: World['party'][number] | null | undefined): boolea
 function beginUpClimb(
   w: World, m: GameMap, tok: GameMap['tokens'][number], landing: { x: number; y: number },
   climb: number, dx: number, dy: number, pcId: string, unitPrice: number,
+  onCommit?: () => void,
 ) {
   const t = tr();
   if (!t) return;
@@ -442,7 +493,7 @@ function beginUpClimb(
   };
   req.landingStep = 1;
   req.unitPrice = unitPrice;
-  if (!plan.check) { settleJump(req, []); return; }
+  if (!plan.check) { onCommit?.(); settleJump(req, []); return; }
   if (!attributesFilled(pc)) {
     return setTr({ msg: `${tok.name} 还没填六维（右上角角色面板 → 六维与 HP）。没填的话任何检定都是必败，先填上再攀` });
   }
@@ -457,6 +508,7 @@ function beginUpClimb(
     jump: req,
   });
   if (err) return setTr({ msg: err });
+  onCommit?.();
   pushJudgmentRequest(pcId);
   setTr({ msg: '往上攀的判定已开出。他掷完你点「按结果执行」' });
 }
@@ -465,6 +517,7 @@ function beginUpClimb(
 function beginDownJump(
   w: World, m: GameMap, tok: GameMap['tokens'][number], landing: { x: number; y: number },
   fall: number, dx: number, dy: number, pcId: string, unitPrice: number,
+  onCommit?: () => void,
 ) {
   const t = tr();
   if (!t) return;
@@ -477,7 +530,13 @@ function beginDownJump(
   };
   req.landingStep = 1;
   req.unitPrice = unitPrice;
-  if (!plan.check) { beginFall(req, null); return; }
+  if (!plan.check) {
+    // 摔伤骰也是 openJudgment：先确认没有旧判定在等，再落推，最后才开摔伤骰。
+    if (getUI().pendingJudgment) return setTr({ msg: '已经有一个判定在等玩家掷骰，先结算或取消它' });
+    onCommit?.();
+    beginFall(req, null);
+    return;
+  }
   const pc = w.party.find((p) => p.id === pcId);
   if (!attributesFilled(pc)) {
     return setTr({ msg: `${tok.name} 还没填六维（右上角角色面板 → 六维与 HP）。没填的话任何检定都是必败，先填上再跳` });
@@ -492,6 +551,7 @@ function beginDownJump(
     jump: req,
   });
   if (err) return setTr({ msg: err });
+  onCommit?.();
   pushJudgmentRequest(pcId);
   setTr({ msg: '往下跳的判定已开出。他掷完你点「按结果执行」' });
 }
@@ -2099,8 +2159,25 @@ export function trialSense(kind: SenseKind, opts: { targetObjectId?: string | nu
   const useful = hints.filter((h) => h.from !== 'none');
 
   setTr({ acted: t.combat ? { ...(t.acted ?? {}), [pl.tokenId]: true } : t.acted, sense: { kind, roll, hints: useful, at: Date.now() }, msg: describeSense(roll, pl.name) });
+  const target = opts.targetObjectId ? m.objects.find((o) => o.id === opts.targetObjectId) : undefined;
+  const attrs = roll.rolls.map((r) => ({
+    attr: r.attr, dice: 'single' as const, roll: r.value, used: r.value, value: r.zone, total: r.value + r.zone,
+  }));
   update((d) => {
-    d.log.push({ id: uid(), at: Date.now(), session: d.session, kind: 'note', text: describeSense(roll, pl.name) });
+    // 感知不改世界：只记一次判定和候选数量；候选不是“已经得知”，等见证者挑。
+    appendEvent(d, newEvent(d, Date.now(),
+      { kind: 'pc', id: pl.pcId, name: pl.name },
+      { name: SENSE_LABEL[kind], source: '动作库' },
+      {
+        ...(target ? { target: { kind: 'object' as const, id: target.id, name: target.name } } : {}),
+        check: {
+          kind: 'check', scale: 'd20', merge: kind === 'search' ? 'all' : 'single', dc: 20,
+          attrs, success: roll.success,
+          tier: roll.tier === 'crit' ? 'crit' as const : roll.tier === 'fumble' ? 'fumble' as const : null,
+        },
+        note: useful.length ? `候选 ${useful.length} 条，等见证者挑` : '没有候选，见证者自己写',
+      },
+    ));
   });
   return null;
 }
