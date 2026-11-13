@@ -974,8 +974,25 @@ export function trialDoors(): TrialDoor[] {
       objectId: o.id, name: o.name, open: openingIsOpen(o),
       locked: !!o.lock?.locked, keyable: o.lock ? o.lock.keyable : true, kind: o.lock?.kind,
       canPick: (pc.skills ?? []).includes(LOCKPICK_SKILL_ID),
-      rammable: !openingIsOpen(o) && o.lock?.kind !== 'electronic' && !tok.down && !tok.corpse,
+      rammable: !openingIsOpen(o) && !!o.opening?.openStates?.length && o.lock?.kind !== 'electronic' && !tok.down && !tok.corpse,
     }));
+}
+
+/**
+ * 门操作共同的空间前置：门还在、没被藏起来、贴身 1 格、视线能到门板中央。
+ * initial 给刚发起的动作用（找不到就是找不到）；recheck 给第二颗骰/结算前复核用（统一说“变了，重开判定”）。
+ */
+function doorAccess(m: GameMap, door: MapObject, tok: Token, pc: PC, mode: 'initial' | 'recheck'): string | null {
+  const w = getWorld();
+  if (!objectEnabled(m, door)) return mode === 'initial' ? '找不到这扇门' : '这扇门已经变了，重开判定';
+  if (door.hidden) return '看不见这扇门';
+  const at = tokenPosition(tok), b = architectureObjectBounds(m, door);
+  const dist = Math.max(b.x - at.x, 0, at.x - (b.x + b.w), b.y - at.y, 0, at.y - (b.y + b.h));
+  if (dist > 1) return '要贴身才能操作这扇门';
+  const eye = { ...viewerOf(tok, { sex: pc.sex, heightCm: pc.heightCm }), facing: undefined };
+  const geom = architectureGeometry(m).filter((r) => r.objectId !== door.id);
+  if (!visiblePoint(w, m, eye, { x: b.x + b.w / 2, y: b.y + b.h / 2 }, geom)) return '看不见这扇门';
+  return null;
 }
 
 interface DoorCtx {
@@ -996,17 +1013,12 @@ function doorContext(objectId: string): DoorCtx | string {
   const m = findMap(w, t.mapId);
   if (!m) return '找不到试玩地图';
   const door = m.objects.find((o) => o.id === objectId && o.opening);
-  if (!door || !objectEnabled(m, door)) return '找不到这扇门';
-  if (door.hidden) return '看不见这扇门';
+  if (!door) return '找不到这扇门';
   const tok = m.tokens.find((x) => x.id === pl.tokenId);
   const pc = w.party.find((p) => p.id === pl.pcId);
   if (!tok || !pc) return '找不到当前角色';
-  const at = tokenPosition(tok), b = architectureObjectBounds(m, door);
-  const dist = Math.max(b.x - at.x, 0, at.x - (b.x + b.w), b.y - at.y, 0, at.y - (b.y + b.h));
-  if (dist > 1) return '要贴身才能操作这扇门';
-  const eye = { ...viewerOf(tok, { sex: pc.sex, heightCm: pc.heightCm }), facing: undefined };
-  const geom = architectureGeometry(m).filter((r) => r.objectId !== door.id);
-  if (!visiblePoint(w, m, eye, { x: b.x + b.w / 2, y: b.y + b.h / 2 }, geom)) return '看不见这扇门';
+  const access = doorAccess(m, door, tok, pc, 'initial');
+  if (access) return access;
   if (t.combat && actedOf(t, pl.tokenId)) return '这回合的行动点已经用掉了，按空格结束回合';
   return { t, m, door, pl, pc, tok };
 }
@@ -1103,13 +1115,8 @@ function ramPrecheck(mapId: Id, objectId: Id, tokenId: Id, subjectId: Id): { m: 
   const pc = w.party.find((x) => x.id === subjectId);
   if (!pc) return '找不到角色卡';
   // 第二颗之前人可能被挪走、门可能被关掉/藏起来、行动点可能被别的动作用掉；这些都要和第一颗一样拦。
-  if (!objectEnabled(m, door)) return '这扇门已经变了，重开判定';
-  const at = tokenPosition(tok), b = architectureObjectBounds(m, door);
-  const dist = Math.max(b.x - at.x, 0, at.x - (b.x + b.w), b.y - at.y, 0, at.y - (b.y + b.h));
-  if (dist > 1) return '要贴身才能撞门';
-  const eye = { ...viewerOf(tok, { sex: pc.sex, heightCm: pc.heightCm }), facing: undefined };
-  const geom = architectureGeometry(m).filter((r) => r.objectId !== door.id);
-  if (!visiblePoint(w, m, eye, { x: b.x + b.w / 2, y: b.y + b.h / 2 }, geom)) return '看不见这扇门';
+  const access = doorAccess(m, door, tok, pc, 'recheck');
+  if (access) return access;
   const t = tr();
   if (t?.combat && actedOf(t, tokenId)) return '这回合的行动点已经用掉了，按空格结束回合';
   return { m, door, tok, pc };
@@ -1119,7 +1126,7 @@ function ramCheckOf(pc: PC, roll: number) {
   return resolveCheck({ attributes: pc.attributes, attr: RAM_ATTR, rolls: [roll], scale: 'd20', dc: RAM_DC });
 }
 
-function ramTokenFor(p: PendingJudgment): Id | null {
+function pendingTokenFor(p: PendingJudgment): Id | null {
   if (p.ramImpact) return p.ramImpact.tokenId;
   const t = tr();
   return t?.players.find((x) => x.pcId === p.subjectId)?.tokenId ?? null;
@@ -1290,7 +1297,15 @@ function settleDoorAttempt(
   const pc = w.party.find((x) => x.id === p.subjectId);
   const m = findMap(w, p.door.mapId);
   const door = m?.objects.find((o) => o.id === p.door!.objectId);
-  if (!pc || !door || !door.lock || !door.opening || !door.opening.openStates.length) return '这扇门已经变了，重开判定';
+  if (!pc || !m || !door) return '这扇门已经变了，重开判定';
+  const tokenId = pendingTokenFor(p);
+  const tok = tokenId ? m.tokens.find((x) => x.id === tokenId) : undefined;
+  if (!tok) return '这扇门已经变了，重开判定';
+  const access = doorAccess(m, door, tok, pc, 'recheck');
+  if (access) return access;
+  if (openingIsOpen(door) || !door.lock || !door.opening?.openStates?.length) return '这扇门已经变了，重开判定';
+  const trialNow = tr();
+  if (trialNow?.combat && actedOf(trialNow, tokenId)) return '这回合的行动点已经用掉了，按空格结束回合';
   const values = input.values?.length ? input.values : [input.value];
   if (values.length !== p.check.attrs.length) return '骰子数量不对';
   const checks = p.check.attrs.map((a, i) => resolveCheck({
@@ -1522,7 +1537,7 @@ export function settlePendingJudgment(input: JudgmentRollInput, byStandIn = fals
   }
   // 撞门第一棒：力量 D20。不是大失败就当场落事件；大失败则开第二笔等 1D4。
   if (p.door?.method === 'ram') {
-    const tokenId = ramTokenFor(p);
+    const tokenId = pendingTokenFor(p);
     if (!tokenId) { closePendingJudgment(); return '找不到角色'; }
     const pre = ramPrecheck(p.door.mapId, p.door.objectId, tokenId, p.subjectId);
     if (typeof pre === 'string') { closePendingJudgment(); return pre; }

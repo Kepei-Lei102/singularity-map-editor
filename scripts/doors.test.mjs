@@ -886,3 +886,28 @@ test('见证者代掷大失败：settle 的随机 D4 也按骰面走', () => {
     assert.equal(api.getWorld().judgments.length, 2);
   } finally { stop(); }
 });
+
+
+test('门缺打开状态：HUD 不显示撞门按钮（引擎本来就会拒）', () => {
+  stage();
+  try {
+    api.update((d) => { d.maps[0].objects.find((o) => o.id === 'door1').opening.openStates = []; });
+    const listed = api.trialDoors().find((d) => d.objectId === 'door1');
+    assert.ok(listed, '门本身还列得出来');
+    assert.equal(listed.rammable, false);
+  } finally { stop(); }
+});
+
+test('撬锁判定开着时人被挪走：按结果执行拒绝，不落账', () => {
+  stage({ lock: { kind: 'physical', locked: true, keyable: true } });
+  try {
+    api.openPlayerWindow('a', true);
+    assert.equal(api.trialPickLock('door1', 'pick'), null);
+    assert.ok(api.getUI().pendingJudgment);
+    api.update((d) => { d.maps[0].tokens[0].x = 9; d.maps[0].tokens[0].y = 9; });
+    assert.match(settle([15, 15], 20, 'r1') ?? '', /贴身|变了/);
+    assert.equal(lastEvent(), undefined);
+    assert.equal(door().lock.locked, true);
+    assert.equal(door().state, 0);
+  } finally { stop(); }
+});
