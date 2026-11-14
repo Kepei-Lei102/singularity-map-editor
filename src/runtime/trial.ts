@@ -490,21 +490,22 @@ function beginUpClimb(
   const skills = jumpSkillsOf(pc?.skills ?? []);
   const plan = planJump('up', climb, skills, climb);
   if (!plan.allowed) return setTr({ msg: plan.reason });
+  const check = plan.check;
+  if (!check) return setTr({ msg: '往上攀没有检定数据' });
   const req: JumpRequest = {
     tokenId: tok.id, dx, dy, kind: 'up', cells: climb, fall: climb,
-    attr: plan.check?.attr ?? null, dice: plan.check?.dice, landing, injury: plan.injury, moveMultiplier: plan.moveMultiplier,
+    attr: check.attr, dice: check.dice, landing, injury: plan.injury, moveMultiplier: plan.moveMultiplier,
     usesAction: plan.usesAction,
   };
   req.landingStep = 1;
   req.unitPrice = unitPrice;
-  if (!plan.check) { onCommit?.(); settleJump(req, []); return; }
   if (!attributesFilled(pc)) {
     return setTr({ msg: `${tok.name} 还没填六维（右上角角色面板 → 六维与 HP）。没填的话任何检定都是必败，先填上再攀` });
   }
   const tier = plan.injury ?? injuryTier(climb);
   const err = openJudgment({
     title: `往上攀：${climb} 格`,
-    ruling: `${tok.name} 爬到上面 ${climb} 格（${(climb * CELL_METERS).toFixed(2)} 米）高处，过【${plan.check.attr}】。`
+    ruling: `${tok.name} 爬到上面 ${climb} 格（${(climb * CELL_METERS).toFixed(2)} 米）高处，过【${check.attr}】。`
       + `没攀住就从 ${climb} 格摔下来：${INJURY_LABEL[tier]} 1D${INJURY_DICE[tier]}。`
       + (plan.usesAction ? '这一下占掉行动点。' : ''),
     sides: 20, subjectId: pcId,

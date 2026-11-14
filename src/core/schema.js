@@ -131,6 +131,16 @@ export function repairWorld(w) {
     else {
       // 丢弃面跟 checkWorld 保持同一张单子：缺字段/枚举错的条目在这里就该掉，别等到校验整份存档时才炸。
       const KINDS = new Set(['hp', 'me', 'moved', 'status', 'points', 'object']);
+      const attrsOk = (a) => a && typeof a === 'object' && typeof a.attr === 'string'
+        && ['single', 'advantage', 'disadvantage'].includes(a.dice)
+        && typeof a.value === 'number'
+        && (a.roll === undefined || typeof a.roll === 'number')
+        && (a.used === undefined || typeof a.used === 'number')
+        && (a.total === undefined || typeof a.total === 'number')
+        && (a.success === undefined || typeof a.success === 'boolean')
+        && (a.tier === undefined || a.tier === null || a.tier === 'crit' || a.tier === 'fumble');
+      const checkOk = (c) => c === undefined || (c && typeof c === 'object'
+        && Array.isArray(c.attrs) && c.attrs.every(attrsOk));
       const ok = w.events.filter((e) => e && typeof e === 'object' && typeof e.id === 'string'
         && typeof e.at === 'number' && typeof e.session === 'number'
         && e.actor && typeof e.actor === 'object' && ['pc', 'npc', 'object', 'terrain'].includes(e.actor.kind)
@@ -138,7 +148,8 @@ export function repairWorld(w) {
         && e.action && typeof e.action === 'object' && typeof e.action.name === 'string'
         && ['动作库', '技能', '临场'].includes(e.action.source)
         && Array.isArray(e.deltas)
-        && e.deltas.every((d) => d && typeof d === 'object' && KINDS.has(d.kind) && typeof d.id === 'string' && typeof d.name === 'string'));
+        && e.deltas.every((d) => d && typeof d === 'object' && KINDS.has(d.kind) && typeof d.id === 'string' && typeof d.name === 'string')
+        && checkOk(e.check));
       if (ok.length !== w.events.length) { fixed.push(`事件账本丢了 ${w.events.length - ok.length} 条形状不对的`); w.events = ok; }
       if (w.events.length > 200) { fixed.push(`事件账本裁到最近 200 条（原 ${w.events.length} 条）`); w.events = w.events.slice(-200); }
     }
@@ -669,7 +680,15 @@ export function checkWorld(w, migrated = false) {
         if (e.check.kind !== undefined) oneOf(e.check.kind, ['check', 'attack'], `${ca}.kind`);
         if (e.check.band !== undefined) oneOf(e.check.band, ['miss', 'hit', 'great', 'super'], `${ca}.band`);
         optNum(e.check.dc, `${ca}.dc`); optNum(e.check.total, `${ca}.total`); bool(e.check.success, `${ca}.success`);
-        e.check.attrs.forEach((a, j) => { if (a?.total !== undefined) optNum(a.total, `${ca}.attrs[${j}].total`); });
+        e.check.attrs.forEach((a, j) => {
+          const aa = `${ca}.attrs[${j}]`;
+          obj(a, aa); str(a.attr, `${aa}.attr`);
+          oneOf(a.dice, ['single', 'advantage', 'disadvantage'], `${aa}.dice`);
+          optNum(a.roll, `${aa}.roll`); optNum(a.used, `${aa}.used`);
+          num(a.value, `${aa}.value`); optNum(a.total, `${aa}.total`);
+          optBool(a.success, `${aa}.success`);
+          if (a.tier !== undefined && a.tier !== null) oneOf(a.tier, ['crit', 'fumble'], `${aa}.tier`);
+        });
         if (e.check.tier !== null && e.check.tier !== undefined) oneOf(e.check.tier, ['crit', 'fumble'], `${ca}.tier`);
         optStr(e.check.outcome, `${ca}.outcome`);
         if (e.check.rolledBy !== undefined) oneOf(e.check.rolledBy, ['player', 'witness', 'host'], `${ca}.rolledBy`);

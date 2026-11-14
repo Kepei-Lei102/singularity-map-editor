@@ -335,6 +335,30 @@ test('存档校验：真事件能过校验；events 不是数组/超 200 条要�
   assert.equal(partial.events[0].id, w.events.at(-1).id);
 });
 
+test('存档校验：check.attrs 的逐项成败/极值也要校验，坏条目导入时丢掉', () => {
+  const w = api.emptyWorld();
+  w.events = [api.newEvent(w, 1, { kind: 'pc', id: 'a', name: '甲' }, { name: '观察', source: '动作库' }, {
+    check: {
+      kind: 'check', scale: 'd20', merge: 'single', dc: 20, success: true, tier: null,
+      attrs: [{ attr: '观察', dice: 'single', roll: 15, used: 15, value: 6, total: 21, success: true, tier: null }],
+    },
+    deltas: [],
+  })];
+  api.checkWorld(w);
+
+  const badSuccess = JSON.parse(JSON.stringify(w));
+  badSuccess.events[0].check.attrs[0].success = 'yes';
+  assert.throws(() => api.checkWorld(badSuccess), /attrs\[0\]/);
+  const fixed = api.repairWorld(badSuccess);
+  assert.match(fixed.join('；'), /形状不对/);
+  assert.equal(badSuccess.events.length, 0);
+
+  const badTier = JSON.parse(JSON.stringify(w));
+  badTier.events[0].check.attrs[0].tier = 'great';
+  assert.throws(() => api.checkWorld(badTier), /attrs\[0\]/);
+  assert.equal(api.repairWorld(badTier).some((x) => /形状不对/.test(x)), true);
+});
+
 test('移动落一条事件：只记 moved，转身和确认不记账', () => {
   const { m } = fight();
   api.toggleCombat(); // 自由行动
