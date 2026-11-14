@@ -77,9 +77,78 @@ export function checkNpc(n, where, partial = false, c = checker(partial ? '' : '
   }
 }
 
+/** 旧档里的互动档案：结构坏了就整份删；能救的只删坏档位/重复动作，别把效果悄悄塞到第一个状态。 */
+function repairObjectInteraction(o, fixed) {
+  const label = typeof o?.name === 'string' && o.name ? `「${o.name}」` : '物件';
+  const it = o?.interaction;
+  if (it === undefined) return;
+  if (!it || typeof it !== 'object' || !Array.isArray(it.overrides)) {
+    delete o.interaction;
+    fixed.push(`${label}的互动档案结构不对，已删掉`);
+    return;
+  }
+  const states = Array.isArray(o.states) ? o.states : [];
+  const byAction = new Map();
+  const keep = [];
+  for (const ov of it.overrides) {
+    if (!ov || typeof ov !== 'object' || typeof ov.actionId !== 'string' || !ov.actionId.trim()) {
+      fixed.push(`${label}的互动档案里有无效动作，已删掉`);
+      continue;
+    }
+    const actionId = ov.actionId.trim();
+    ov.actionId = actionId;
+    if (!ov.outcomes || typeof ov.outcomes !== 'object' || Array.isArray(ov.outcomes)) {
+      ov.outcomes = {};
+      fixed.push(`${label}里动作 ${actionId} 的档位结构不对，已清空`);
+    }
+    for (const key of Object.keys(ov.outcomes)) {
+      if (!['crit', 'success', 'fail', 'fumble'].includes(key)) {
+        delete ov.outcomes[key];
+        fixed.push(`${label}里动作 ${actionId} 的档位 ${key} 不认识，已删掉`);
+        continue;
+      }
+      const v = ov.outcomes[key];
+      if (!Number.isInteger(v) || v < 0 || v >= states.length) {
+        delete ov.outcomes[key];
+        fixed.push(`${label}里动作 ${actionId} 的档位 ${key} 指向不存在的状态，已清空`);
+      }
+    }
+    const prev = byAction.get(actionId);
+    if (prev) {
+      for (const [tier, index] of Object.entries(ov.outcomes)) {
+        if (prev.outcomes[tier] === undefined) prev.outcomes[tier] = index;
+      }
+      fixed.push(`${label}里动作 ${actionId} 重复了，已把后一条的空档并进第一条`);
+      continue;
+    }
+    if (!Object.keys(ov.outcomes).length) {
+      fixed.push(`${label}里动作 ${actionId} 没有可用档位，已删掉`);
+      continue;
+    }
+    byAction.set(actionId, ov);
+    keep.push(ov);
+  }
+  it.overrides = keep;
+  if (!keep.length) {
+    delete o.interaction;
+    fixed.push(`${label}的互动档案没有可用动作，已删掉`);
+  }
+}
+/** 账本里的 rolls 只有三件事：有限数字、颗数跟骰势对得上、采用骰必须来自这一组。 */
+function rollsConsistent(a) {
+  if (a.rolls === undefined) return true;
+  if (!Array.isArray(a.rolls) || !a.rolls.every((v) => typeof v === 'number' && Number.isFinite(v))) return false;
+  const need = a.dice === 'single' ? 1 : 2;
+  if (a.rolls.length !== need) return false;
+  if (a.roll !== undefined && a.roll !== null && !a.rolls.includes(a.roll)) return false;
+  if (a.used !== undefined && a.used !== null && !a.rolls.includes(a.used)) return false;
+  return true;
+}
+
 /**
  * 旧版输入框允许过、现在不允许的值（高度过千、楼层带小数、物件边长超过 200……）：夹回范围内，返回改了什么。
- * 只动数值范围，不动结构；结构不对的仍交给 checkWorld 报错。命令行和浏览器导入都先过这一步。
+ * 数值夹回范围内；互动档案里的坏档位/重复动作、账本里骰点不一致的事件会被清掉。
+ * 其余结构不对的仍交给 checkWorld 报错。命令行和浏览器导入都先过这一步。
  */
 export function repairWorld(w) {
   const fixed = [];
@@ -112,6 +181,7 @@ export function repairWorld(w) {
       clampNum(o, 'w', 1, MAX_SIDE, `「${o?.name}」的宽`, true);
       clampNum(o, 'h', 1, MAX_SIDE, `「${o?.name}」的高`, true);
       for (const s of Array.isArray(o?.secrets) ? o.secrets : []) clampNum(s, 'range', 0, MAX_SIDE * 2, `「${o?.name}」线索的距离`, true);
+      repairObjectInteraction(o, fixed);
     }
     // 记忆里的快照（全队的、每个人的）是旧版本存下的，同样可能超范围
     const memories = [m.seen, ...Object.values(m.views && typeof m.views === 'object' ? m.views : {}).map((L) => L?.seen)];
@@ -137,7 +207,7 @@ export function repairWorld(w) {
         && (a.roll === undefined || a.roll === null || typeof a.roll === 'number')
         && (a.used === undefined || a.used === null || typeof a.used === 'number')
         && (a.total === undefined || a.total === null || typeof a.total === 'number')
-        && (a.rolls === undefined || (Array.isArray(a.rolls) && a.rolls.every((v) => typeof v === 'number' && Number.isFinite(v))))
+        && rollsConsistent(a)
         && (a.success === undefined || typeof a.success === 'boolean')
         && (a.tier === undefined || a.tier === null || a.tier === 'crit' || a.tier === 'fumble');
       const checkOk = (c) => c === undefined || (c && typeof c === 'object'
@@ -705,7 +775,14 @@ export function checkWorld(w, migrated = false) {
           oneOf(a.dice, ['single', 'advantage', 'disadvantage'], `${aa}.dice`);
           optNum(a.roll, `${aa}.roll`); optNum(a.used, `${aa}.used`);
           num(a.value, `${aa}.value`); optNum(a.total, `${aa}.total`);
-          if (a.rolls !== undefined) arr(a.rolls, `${aa}.rolls`).forEach((v, k) => num(v, `${aa}.rolls[${k}]`));
+          if (a.rolls !== undefined) {
+            const rs = arr(a.rolls, `${aa}.rolls`);
+            rs.forEach((v, k) => num(v, `${aa}.rolls[${k}]`));
+            const need = a.dice === 'single' ? 1 : 2;
+            if (rs.length !== need) fail(`${aa}.rolls`, `${a.dice} 要有 ${need} 颗骰，现在是 ${rs.length} 颗`);
+            if (a.roll !== undefined && a.roll !== null && !rs.includes(a.roll)) fail(`${aa}.roll`, '采用的骰不在 rolls 里');
+            if (a.used !== undefined && a.used !== null && !rs.includes(a.used)) fail(`${aa}.used`, '使用的骰不在 rolls 里');
+          }
           optBool(a.success, `${aa}.success`);
           if (a.tier !== undefined && a.tier !== null) oneOf(a.tier, ['crit', 'fumble'], `${aa}.tier`);
         });

@@ -5,6 +5,7 @@ import { toast, update } from '../core/store';
 import { ACTION_LIBRARY, PANEL_ACTIONS, actionById, actionCheckSpec, type RawAction } from '../rules/actionLibrary';
 import { resolve, type Advantage, type Attr, type CheckResult, type CheckSpec } from '../rules/interaction';
 import { objectOutcomePlan } from '../rules/objectInteraction';
+import { interactionPreviewValid, makeInteractionPreviewSnapshot, type InteractionPreviewSnapshot } from '../rules/interactionPreview';
 import { commitObjectInteraction } from '../runtime/objectInteraction';
 import { Section, Row, Txt } from './fields';
 
@@ -25,12 +26,7 @@ interface Preview {
   result: CheckResult;
   plan: { from: number; to: number } | null;
   spec: CheckSpec;
-  actorId: string;
-  actionId: string;
-  objectId: string;
-  advantage: Advantage;
-  rollKey: string;
-  state: number;
+  snapshot: InteractionPreviewSnapshot;
 }
 
 function ActionPick({ value, onChange, list }: { value: string; onChange: (id: string) => void; list: RawAction[] }) {
@@ -122,10 +118,25 @@ function RunPanel({ world, mapId, o, defaultActorId }: { world: World; mapId: st
     if (!world.party.some((p) => p.id === actorId)) setActorId(world.party[0]?.id ?? '');
   }, [world.party, actorId, defaultActorId]);
   useEffect(() => { setRolls({}); setPreview(null); setMsg(''); }, [actionId, advantage]);
-  useEffect(() => { setPreview(null); setMsg(''); }, [actorId, o.id, o.state]);
+  useEffect(() => { setPreview(null); }, [o.state]);
+  useEffect(() => { setPreview(null); setMsg(''); setRolls({}); }, [actorId, o.id]);
   useEffect(() => { if (!preview) committing.current = false; }, [preview]);
 
   const rollKeyOf = (attrs: string[]) => attrs.map((attr) => (rolls[attr] ?? '').trim()).join('|');
+  const snapshotOf = (): InteractionPreviewSnapshot => makeInteractionPreviewSnapshot({
+    mapId, objectId: o.id, actorId, actionId, advantage,
+    rollKey: rollKeyOf(spec?.attributes ?? []),
+    state: o.state,
+    actorAttributes: actor?.attributes ?? null,
+    interaction: o.interaction ?? null,
+    states: o.states,
+  });
+  const freshPreview = preview && interactionPreviewValid(preview.snapshot, snapshotOf()) ? preview : null;
+  // 地图/六维/映射/状态名这些不在下拉和输入框的依赖里，靠派生比对发现；
+  // 发现旧预览失效就清掉，避免改回原值又冒出来。
+  useEffect(() => {
+    if (preview && !freshPreview) { setPreview(null); if (!msg) setMsg('输入或物件已经变了，请重新看结果'); }
+  }, [preview, freshPreview]);
   const setRoll = (attr: string, value: string) => {
     setRolls((x) => ({ ...x, [attr]: value }));
     setPreview(null);
@@ -148,10 +159,7 @@ function RunPanel({ world, mapId, o, defaultActorId }: { world: World; mapId: st
     if (bad) { setMsg(`【${bad}】要填 ${advantage === 'normal' ? '一颗' : '两颗'} 1–20 的骰点`); return; }
     const result = resolve({ check: spec, actor: attrs, d20s, advantage });
     const plan = result.tier ? objectOutcomePlan(o, actionId, result.tier) : null;
-    setPreview({
-      result, plan, spec, actorId, actionId, objectId: o.id, advantage,
-      rollKey: rollKeyOf(spec.attributes), state: o.state,
-    });
+    setPreview({ result, plan, spec, snapshot: snapshotOf() });
     setMsg(plan ? '' : '这一档没配效果；可以换档或先到编辑模式补映射');
   };
 
@@ -176,33 +184,35 @@ function RunPanel({ world, mapId, o, defaultActorId }: { world: World; mapId: st
     </Row>)}
     <div className="btns"><button onClick={doPreview}>看结果</button></div>
     {msg && <div className="hint">{msg}</div>}
-    {preview && <>
+    {preview && !freshPreview && <div className="hint">输入或物件已经变了，请重新看结果。</div>}
+    {freshPreview && <>
       <div className="card">
-        <div className="card-title">{preview.result.tier ? TIER_LABEL[preview.result.tier] : '见证者裁决'} · {preview.result.success ? '过' : '没过'}</div>
-        {preview.result.rolls.map((r) => <div key={r.attr} className="kv">{r.attr}：{r.rolls.length > 1 ? `${r.rolls.join('/')}→取${r.roll}` : r.roll}+{r.value} = {r.total} {r.pass ? '✓' : '✗'}</div>)}
-        {preview.plan
-          ? <div className="kv">{o.name}：{o.states[preview.plan.from]} → {o.states[preview.plan.to]}</div>
+        <div className="card-title">{freshPreview.result.tier ? TIER_LABEL[freshPreview.result.tier] : '见证者裁决'} · {freshPreview.result.success ? '过' : '没过'}</div>
+        {freshPreview.result.rolls.map((r) => <div key={r.attr} className="kv">{r.attr}：{r.rolls.length > 1 ? `${r.rolls.join('/')}→取${r.roll}` : r.roll}+{r.value} = {r.total} {r.pass ? '✓' : '✗'}</div>)}
+        {freshPreview.plan
+          ? <div className="kv">{o.name}：{o.states[freshPreview.plan.from]} → {o.states[freshPreview.plan.to]}</div>
           : <div className="hint">这一档没有预置效果，不落账。</div>}
       </div>
-      {preview.plan && <div className="btns"><button onClick={() => {
-        if (committing.current) return;
-        if (preview.actorId !== actorId || preview.actionId !== actionId || preview.objectId !== o.id
-          || preview.advantage !== advantage || preview.state !== o.state
-          || preview.rollKey !== rollKeyOf(preview.spec.attributes)) {
-          setMsg('输入或物件已经变了，请重新看结果');
-          setPreview(null);
-          return;
-        }
-        committing.current = true;
-        const merge = checked.spec.mode === 'single' ? 'single' : checked.spec.mode === 'or' ? 'any' : 'all';
-        const err = commitObjectInteraction({
-          mapId, objectId: o.id, actorId, actionId, actionName: action.name,
-          result: preview.result, merge, scale: 'd20', advantage,
-        });
-        setMsg(err ?? '已落账');
-        if (err) committing.current = false;
-        else setPreview(null);
-      }}>确认，落账</button></div>}
+      <div className="btns">
+        <button className="small" onClick={() => { setPreview(null); setMsg(''); }}>取消预览</button>
+        {freshPreview.plan && <button onClick={() => {
+          if (committing.current) return;
+          if (!interactionPreviewValid(freshPreview.snapshot, snapshotOf())) {
+            setMsg('输入或物件已经变了，请重新看结果');
+            setPreview(null);
+            return;
+          }
+          committing.current = true;
+          const merge = checked.spec.mode === 'single' ? 'single' : checked.spec.mode === 'or' ? 'any' : 'all';
+          const err = commitObjectInteraction({
+            mapId, objectId: o.id, actorId, actionId, actionName: action.name,
+            result: freshPreview.result, merge, scale: 'd20', advantage,
+          });
+          setMsg(err ?? '已落账');
+          if (err) committing.current = false;
+          else setPreview(null);
+        }}>确认，落账</button>}
+      </div>
     </>}
   </Section>;
 }

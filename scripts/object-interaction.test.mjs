@@ -15,6 +15,7 @@ await build({
   stdin: {
     contents: `export * from './src/rules/actionLibrary';
 export * from './src/rules/objectInteraction';
+export * from './src/rules/interactionPreview';
 export * from './src/runtime/objectInteraction';
 export * from './src/runtime/sync';
 export * from './src/runtime/actions';
@@ -171,4 +172,142 @@ test('优势/劣势：账本写真实骰势和两颗骰，日志不再只剩一�
   assert.equal(ev.check.attrs[0].roll, 15);
   assert.match(api.getWorld().log.at(-1).text, /15\/10→取15\+区值/);
   assert.doesNotThrow(() => api.checkWorld(api.getWorld()));
+});
+
+test('预览快照：任一输入变了都会失效', () => {
+  const base = {
+    mapId: 'm1', objectId: 'clay', actorId: 'a', actionId: '5', advantage: 'advantage',
+    rollKey: '15,10|10,1', state: 0, actorKey: '{"力量":30}', interactionKey: '{"overrides":[]}', statesKey: '["完好","裂"]',
+  };
+  assert.equal(api.interactionPreviewValid(base, { ...base }), true);
+  for (const key of Object.keys(base)) {
+    assert.equal(api.interactionPreviewValid(base, { ...base, [key]: 'changed' }), false, `${key} 变了仍被判有效`);
+  }
+});
+
+test('劣势：账本写 disadvantage、采用骰与两颗骰一致', () => {
+  const { m } = fixture();
+  const spec = api.actionCheckSpec(api.actionById('5')).spec;
+  const result = api.resolve({ check: spec, actor: ATTRS, d20s: [[15, 10], [19, 1]], advantage: 'disadvantage' });
+  assert.equal(result.rolls[0].roll, 10);
+  const err = api.commitObjectInteraction({
+    mapId: m.id, objectId: 'clay', actorId: 'a', actionId: '5', actionName: '教授',
+    result, merge: 'any', scale: 'd20', advantage: 'disadvantage',
+  });
+  assert.equal(err, null);
+  const ev = api.getWorld().events.at(-1);
+  assert.equal(ev.check.attrs[0].dice, 'disadvantage');
+  assert.deepEqual(ev.check.attrs[0].rolls, [15, 10]);
+  assert.equal(ev.check.attrs[0].roll, 10);
+  assert.match(api.getWorld().log.at(-1).text, /15\/10→取10/);
+  assert.doesNotThrow(() => api.checkWorld(api.getWorld()));
+});
+
+test('旧事件没有 rolls 仍兼容；普通日志不写 undefined', () => {
+  const w = api.getWorld();
+  const old = JSON.parse(JSON.stringify(w));
+  old.events = [api.newEvent(old, Date.now(),
+    { kind: 'pc', id: 'a', name: '甲' },
+    { id: '5', name: '教授', source: '动作库' },
+    {
+      target: { kind: 'object', id: 'clay', name: '橡皮泥' },
+      check: {
+        kind: 'check', scale: 'd20', merge: 'any', dc: 20,
+        attrs: [{ attr: '魅力', dice: 'advantage', roll: 15, value: 10, total: 25, success: true, tier: null }],
+        success: true, tier: null, rolledBy: 'host',
+      },
+      deltas: [],
+    })];
+  assert.doesNotThrow(() => api.checkWorld(old));
+  const text = api.resultText(old.events[0]);
+  assert.match(text, /魅力 15\+区值10✓/);
+  assert.doesNotMatch(text, /undefined/);
+});
+
+test('rolls 与骰势不一致会被 checkWorld 拒绝，repair 会丢掉坏事件', () => {
+  const w = api.getWorld();
+  const base = JSON.parse(JSON.stringify(w));
+  base.events = [api.newEvent(base, Date.now(),
+    { kind: 'pc', id: 'a', name: '甲' },
+    { id: '5', name: '教授', source: '动作库' },
+    {
+      target: { kind: 'object', id: 'clay', name: '橡皮泥' },
+      check: {
+        kind: 'check', scale: 'd20', merge: 'any', dc: 20,
+        attrs: [{ attr: '魅力', dice: 'advantage', roll: 15, value: 10, total: 25, rolls: [15, 10], success: true, tier: null }],
+        success: true, tier: null, rolledBy: 'host',
+      },
+      deltas: [],
+    })];
+  const kept = JSON.parse(JSON.stringify(base));
+  api.repairWorld(kept);
+  assert.equal(kept.events.length, 1);
+
+  const wrongCount = JSON.parse(JSON.stringify(base));
+  wrongCount.events[0].check.attrs[0].dice = 'single';
+  assert.throws(() => api.checkWorld(wrongCount), /rolls/);
+  const fixedCount = JSON.parse(JSON.stringify(wrongCount));
+  api.repairWorld(fixedCount);
+  assert.equal(fixedCount.events.length, 0);
+
+  const wrongRoll = JSON.parse(JSON.stringify(base));
+  wrongRoll.events[0].check.attrs[0].roll = 12;
+  assert.throws(() => api.checkWorld(wrongRoll), /roll/);
+
+  const broken = JSON.parse(JSON.stringify(base));
+  broken.events[0].check.attrs[0].rolls = [15, null];
+  assert.throws(() => api.checkWorld(broken), /rolls/);
+  const fixed = api.repairWorld(broken);
+  assert.ok(fixed.length > 0);
+  assert.equal(broken.events.length, 0);
+});
+
+test('旧档互动档案：删未知档位/越界状态/重复动作；空档案不留下', () => {
+  const w1 = JSON.parse(JSON.stringify(api.getWorld()));
+  const o = w1.maps[0].objects[0];
+  o.interaction.overrides = [
+    { actionId: '5', outcomes: { crit: 2, success: 99, great: 1 } },
+    { actionId: '5', outcomes: { success: 1 } },
+    { actionId: '', outcomes: { success: 1 } },
+    { actionId: '4', outcomes: null },
+  ];
+  const fixed = api.repairWorld(w1);
+  assert.ok(fixed.some((x) => x.includes('档位')));
+  assert.equal(o.interaction.overrides.length, 1);
+  assert.deepEqual(o.interaction.overrides[0].outcomes, { crit: 2, success: 1 });
+  assert.doesNotThrow(() => api.checkWorld(w1));
+
+  const w2 = JSON.parse(JSON.stringify(api.getWorld()));
+  w2.maps[0].objects[0].interaction.overrides = [
+    { actionId: '5', outcomes: {} },
+    { actionId: '5', outcomes: { success: 1 } },
+  ];
+  api.repairWorld(w2);
+  assert.equal(w2.maps[0].objects[0].interaction.overrides.length, 1);
+  assert.deepEqual(w2.maps[0].objects[0].interaction.overrides[0].outcomes, { success: 1 });
+
+  const w3 = JSON.parse(JSON.stringify(api.getWorld()));
+  w3.maps[0].objects[0].interaction.overrides = [{ actionId: ' 5 ', outcomes: { success: 1 } }];
+  api.repairWorld(w3);
+  assert.equal(w3.maps[0].objects[0].interaction.overrides[0].actionId, '5');
+  assert.doesNotThrow(() => api.checkWorld(w3));
+
+  const w4 = JSON.parse(JSON.stringify(api.getWorld()));
+  w4.maps[0].objects[0].interaction.overrides = [];
+  api.repairWorld(w4);
+  assert.equal(w4.maps[0].objects[0].interaction, undefined);
+});
+
+test('快照工厂：把角色属性、物件映射、状态名都序列化进快照', () => {
+  const snap = api.makeInteractionPreviewSnapshot({
+    mapId: 'm1', objectId: 'clay', actorId: 'a', actionId: '5', advantage: 'normal',
+    rollKey: '15', state: 0, actorAttributes: { 力量: 30 }, interaction: null, states: ['完好', '裂'],
+  });
+  assert.equal(snap.mapId, 'm1');
+  assert.equal(snap.actorKey, '{"力量":30}');
+  assert.equal(snap.interactionKey, 'null');
+  assert.equal(snap.statesKey, '["完好","裂"]');
+  assert.equal(snap.rollKey, '15');
+  assert.equal(api.makeInteractionPreviewSnapshot({ ...snap, actorAttributes: undefined }).actorKey, 'null');
+  assert.equal(api.makeInteractionPreviewSnapshot({ ...snap, interaction: undefined }).interactionKey, 'null');
 });
