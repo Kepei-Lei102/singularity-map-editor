@@ -98,7 +98,8 @@ function repairObjectInteraction(o, fixed) {
     } else {
       const tags = it.tags.filter((t) => typeof t === 'string');
       if (tags.length !== it.tags.length) {
-        it.tags = tags;
+        if (tags.length) it.tags = tags;
+        else delete it.tags;
         fixed.push(`${label}的标签里有非文字项，已删掉`);
       }
     }

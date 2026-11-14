@@ -13,7 +13,7 @@ import { JSDOM } from 'jsdom';
 const root = fileURLToPath(new URL('..', import.meta.url));
 const temp = await mkdtemp(join(tmpdir(), 'ts-interaction-ui-'));
 const bundle = join(temp, 'panel.cjs');
-await build({
+try { await build({
   stdin: {
     contents: `export { ObjectInteractionPanel } from './src/components/ObjectInteraction';
 export * as React from 'react';
@@ -26,8 +26,10 @@ export * from './src/core/store';`,
   },
   outfile: bundle, bundle: true, platform: 'node', format: 'cjs',
   jsx: 'automatic', logLevel: 'silent',
-});
+}); } catch (e) { await rm(temp, { recursive: true, force: true }); throw e; }
 
+const isolated = process.env.NODE_TEST_CONTEXT !== undefined;
+if (isolated) {
 const saved = {
   window: globalThis.window,
   document: globalThis.document,
@@ -40,6 +42,7 @@ const saved = {
   BroadcastChannel: globalThis.BroadcastChannel,
   requestAnimationFrame: globalThis.requestAnimationFrame,
   cancelAnimationFrame: globalThis.cancelAnimationFrame,
+  crypto: Object.getOwnPropertyDescriptor(globalThis, 'crypto'),
   IS_REACT_ACT_ENVIRONMENT: globalThis.IS_REACT_ACT_ENVIRONMENT,
 };
 const dom = new JSDOM('<!doctype html><html><body><div id="root"></div></body></html>', { url: 'http://localhost/' });
@@ -68,13 +71,12 @@ afterEach(() => {
 after(async () => {
   dom.window.close();
   for (const [key, value] of Object.entries(saved)) {
-    if (key === 'navigator') {
-      if (value) Object.defineProperty(globalThis, 'navigator', value);
-      else delete globalThis.navigator;
+    if (key === 'navigator' || key === 'crypto') {
+      if (value) Object.defineProperty(globalThis, key, value);
+      else delete globalThis[key];
     } else if (value === undefined) delete globalThis[key];
     else globalThis[key] = value;
   }
-  await rm(temp, { recursive: true, force: true });
 });
 
 const ATTRS = { 力量: 30, 敏捷: 30, 意志: 30, 观察: 30, 智慧: 30, 魅力: 30 };
@@ -86,6 +88,11 @@ function fixture() {
     state: 0, stateRev: 0, interaction: {
       overrides: [{ actionId: '4', outcomes: { crit: 1, success: 1, fail: 0, fumble: 0 } }],
     },
+  }, {
+    ...api.newObject('object', 4, 4, 1, 1), id: 'other', name: '另一件', states: ['完好', '坏'],
+    state: 0, stateRev: 0, interaction: {
+      overrides: [{ actionId: '4', outcomes: { success: 1, fail: 1 } }],
+    },
   }];
   w.maps = [m];
   w.party = [{ id: 'a', name: '甲', color: '#fff', tags: [], attributes: ATTRS }];
@@ -93,14 +100,15 @@ function fixture() {
   return { w, m };
 }
 
-function mount(world) {
-  const o = world.maps[0].objects[0];
+function mount(world, objectId = 'clay', mapId = world.maps[0].id) {
+  const o = world.maps[0].objects.find((x) => x.id === objectId);
+  assert.ok(o, `找不到物件：${objectId}`);
   const container = document.createElement('div');
   document.body.append(container);
   const root = api.createRoot(container);
   mounted.push({ root, container });
   api.act(() => root.render(api.React.createElement(api.ObjectInteractionPanel, {
-    world, mapId: world.maps[0].id, o, edit: false, defaultActorId: 'a',
+    world, mapId, o, edit: false, defaultActorId: 'a',
   })));
   return root;
 }
@@ -225,3 +233,69 @@ test('面板：改角色六维后旧预览失效', () => {
   assert.ok(![...document.querySelectorAll('button')].some((x) => x.textContent?.trim() === '确认，落账'));
   assert.match(document.body.textContent, /输入或物件已经变了，请重新看结果/);
 });
+
+test('面板：换动作后旧预览失效', () => {
+  const { w } = fixture();
+  mount(w);
+  setRoll('15');
+  click('看结果');
+  assert.ok([...document.querySelectorAll('button')].some((x) => x.textContent?.trim() === '确认，落账'));
+  const actionSelect = [...document.querySelectorAll('select')].find((sel) => [...sel.options].some((o) => o.value === '4'));
+  assert.ok(actionSelect, '找不到动作选择器');
+  api.act(() => {
+    const setter = Object.getOwnPropertyDescriptor(dom.window.HTMLSelectElement.prototype, 'value').set;
+    setter.call(actionSelect, '9');
+    actionSelect.dispatchEvent(new dom.window.Event('change', { bubbles: true }));
+  });
+  assert.ok(![...document.querySelectorAll('button')].some((x) => x.textContent?.trim() === '确认，落账'));
+});
+
+test('面板：换物件后旧预览失效', () => {
+  const { w } = fixture();
+  const root = mount(w);
+  setRoll('15');
+  click('看结果');
+  assert.ok([...document.querySelectorAll('button')].some((x) => x.textContent?.trim() === '确认，落账'));
+  const o = w.maps[0].objects.find((x) => x.id === 'other');
+  api.act(() => root.render(api.React.createElement(api.ObjectInteractionPanel, {
+    world: w, mapId: w.maps[0].id, o, edit: false, defaultActorId: 'a',
+  })));
+  assert.ok(![...document.querySelectorAll('button')].some((x) => x.textContent?.trim() === '确认，落账'));
+});
+
+test('面板：切地图后旧预览失效', () => {
+  const { w } = fixture();
+  const root = mount(w);
+  setRoll('15');
+  click('看结果');
+  assert.ok([...document.querySelectorAll('button')].some((x) => x.textContent?.trim() === '确认，落账'));
+  const o = w.maps[0].objects[0];
+  api.act(() => root.render(api.React.createElement(api.ObjectInteractionPanel, {
+    world: w, mapId: 'another-map', o, edit: false, defaultActorId: 'a',
+  })));
+  assert.ok(![...document.querySelectorAll('button')].some((x) => x.textContent?.trim() === '确认，落账'));
+  assert.match(document.body.textContent, /输入或物件已经变了，请重新看结果/);
+});
+
+test('面板：改状态名后旧预览失效', () => {
+  const { w } = fixture();
+  const root = mount(w);
+  setRoll('15');
+  click('看结果');
+  assert.ok([...document.querySelectorAll('button')].some((x) => x.textContent?.trim() === '确认，落账'));
+  const next = JSON.parse(JSON.stringify(api.getWorld()));
+  next.maps[0].objects[0].states = ['完好', '碎裂'];
+  api.act(() => {
+    const o = next.maps[0].objects[0];
+    root.render(api.React.createElement(api.ObjectInteractionPanel, {
+      world: next, mapId: next.maps[0].id, o, edit: false, defaultActorId: 'a',
+    }));
+  });
+  assert.ok(![...document.querySelectorAll('button')].some((x) => x.textContent?.trim() === '确认，落账'));
+  assert.match(document.body.textContent, /输入或物件已经变了，请重新看结果/);
+});
+
+} else {
+  test('面板 UI 测试需要按文件隔离进程', { skip: '默认 npm test 按文件分进程；--test-isolation=none 下 jsdom 全局会和别的测试打架' }, () => {});
+}
+after(async () => { await rm(temp, { recursive: true, force: true }); });

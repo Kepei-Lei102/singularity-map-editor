@@ -282,6 +282,21 @@ test('rolls 与骰势不一致会被 checkWorld 拒绝，repair 会丢掉坏事�
   api.repairWorld(fixedDice);
   assert.equal(fixedDice.events.length, 0);
 
+  const emptyRolls = JSON.parse(JSON.stringify(base));
+  emptyRolls.events[0].check.attrs[0].dice = 'single';
+  emptyRolls.events[0].check.attrs[0].rolls = [];
+  assert.throws(() => api.checkWorld(emptyRolls), /rolls/);
+  const fixedEmpty = JSON.parse(JSON.stringify(emptyRolls));
+  api.repairWorld(fixedEmpty);
+  assert.equal(fixedEmpty.events.length, 0);
+
+  const noRoll = JSON.parse(JSON.stringify(base));
+  delete noRoll.events[0].check.attrs[0].roll;
+  noRoll.events[0].check.attrs[0].dice = 'single';
+  noRoll.events[0].check.attrs[0].rolls = [15];
+  assert.doesNotThrow(() => api.checkWorld(noRoll));
+  assert.doesNotMatch(api.resultText(noRoll.events[0]), /undefined/);
+
   const broken = JSON.parse(JSON.stringify(base));
   broken.events[0].check.attrs[0].rolls = [15, null];
   assert.throws(() => api.checkWorld(broken), /rolls/);
@@ -357,7 +372,7 @@ test('旧档互动档案：材质/标签边界与空 states', () => {
   const o2 = w2.maps[0].objects[0];
   o2.interaction.tags = [1, 2];
   api.repairWorld(w2);
-  assert.deepEqual(o2.interaction.tags, []);
+  assert.equal(o2.interaction.tags, undefined);
   assert.doesNotThrow(() => api.checkWorld(w2));
 
   const w3 = JSON.parse(JSON.stringify(api.getWorld()));
