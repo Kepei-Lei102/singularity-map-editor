@@ -134,9 +134,9 @@ export function repairWorld(w) {
       const attrsOk = (a) => a && typeof a === 'object' && typeof a.attr === 'string'
         && ['single', 'advantage', 'disadvantage'].includes(a.dice)
         && typeof a.value === 'number'
-        && (a.roll === undefined || typeof a.roll === 'number')
-        && (a.used === undefined || typeof a.used === 'number')
-        && (a.total === undefined || typeof a.total === 'number')
+        && (a.roll === undefined || a.roll === null || typeof a.roll === 'number')
+        && (a.used === undefined || a.used === null || typeof a.used === 'number')
+        && (a.total === undefined || a.total === null || typeof a.total === 'number')
         && (a.success === undefined || typeof a.success === 'boolean')
         && (a.tier === undefined || a.tier === null || a.tier === 'crit' || a.tier === 'fumble');
       const checkOk = (c) => c === undefined || (c && typeof c === 'object'

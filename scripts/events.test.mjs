@@ -359,6 +359,21 @@ test('存档校验：check.attrs 的逐项成败/极值也要校验，坏条目�
   assert.equal(api.repairWorld(badTier).some((x) => /形状不对/.test(x)), true);
 });
 
+test('存档校验：attrs 可选数字的 null 口径与 checkWorld 一致', () => {
+  const w = api.emptyWorld();
+  w.events = [api.newEvent(w, 1, { kind: 'pc', id: 'a', name: '甲' }, { name: '观察', source: '动作库' }, {
+    check: {
+      kind: 'check', scale: 'd20', merge: 'single', dc: 20, success: true, tier: null,
+      attrs: [{ attr: '观察', dice: 'single', roll: null, used: null, value: 6, total: null, success: true, tier: null }],
+    },
+    deltas: [],
+  })];
+  api.checkWorld(w); // null 是 checkWorld 允许的“没掷/没总数”
+  const fixed = api.repairWorld(w);
+  assert.equal(w.events.length, 1, 'repair 不能把 null 当成形状错');
+  assert.ok(!fixed.some((x) => /形状不对/.test(x)));
+});
+
 test('移动落一条事件：只记 moved，转身和确认不记账', () => {
   const { m } = fight();
   api.toggleCombat(); // 自由行动
