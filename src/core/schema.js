@@ -87,6 +87,22 @@ function repairObjectInteraction(o, fixed) {
     fixed.push(`${label}的互动档案结构不对，已删掉`);
     return;
   }
+  if (it.material !== undefined && typeof it.material !== 'string') {
+    delete it.material;
+    fixed.push(`${label}的材质备注不是文字，已清空`);
+  }
+  if (it.tags !== undefined) {
+    if (!Array.isArray(it.tags)) {
+      delete it.tags;
+      fixed.push(`${label}的标签不是数组，已清空`);
+    } else {
+      const tags = it.tags.filter((t) => typeof t === 'string');
+      if (tags.length !== it.tags.length) {
+        it.tags = tags;
+        fixed.push(`${label}的标签里有非文字项，已删掉`);
+      }
+    }
+  }
   const states = Array.isArray(o.states) ? o.states : [];
   const byAction = new Map();
   const keep = [];
@@ -115,10 +131,15 @@ function repairObjectInteraction(o, fixed) {
     }
     const prev = byAction.get(actionId);
     if (prev) {
+      let filled = 0;
+      let conflicts = 0;
       for (const [tier, index] of Object.entries(ov.outcomes)) {
-        if (prev.outcomes[tier] === undefined) prev.outcomes[tier] = index;
+        if (prev.outcomes[tier] === undefined) { prev.outcomes[tier] = index; filled++; }
+        else conflicts++;
       }
-      fixed.push(`${label}里动作 ${actionId} 重复了，已把后一条的空档并进第一条`);
+      const detail = [filled ? `补了 ${filled} 个空档` : '', conflicts ? `${conflicts} 个档位冲突，保留第一条` : '']
+        .filter(Boolean).join('；');
+      fixed.push(`${label}里动作 ${actionId} 重复了，${detail || '后一条没有可用档位，已忽略'}`);
       continue;
     }
     if (!Object.keys(ov.outcomes).length) {

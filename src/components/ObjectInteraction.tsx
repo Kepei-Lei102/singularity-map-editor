@@ -135,7 +135,7 @@ function RunPanel({ world, mapId, o, defaultActorId }: { world: World; mapId: st
   // 地图/六维/映射/状态名这些不在下拉和输入框的依赖里，靠派生比对发现；
   // 发现旧预览失效就清掉，避免改回原值又冒出来。
   useEffect(() => {
-    if (preview && !freshPreview) { setPreview(null); if (!msg) setMsg('输入或物件已经变了，请重新看结果'); }
+    if (preview && !freshPreview) { setPreview(null); setMsg('输入或物件已经变了，请重新看结果'); }
   }, [preview, freshPreview]);
   const setRoll = (attr: string, value: string) => {
     setRolls((x) => ({ ...x, [attr]: value }));

@@ -222,6 +222,9 @@ test('旧事件没有 rolls 仍兼容；普通日志不写 undefined', () => {
   const text = api.resultText(old.events[0]);
   assert.match(text, /魅力 15\+区值10✓/);
   assert.doesNotMatch(text, /undefined/);
+  const keptOld = JSON.parse(JSON.stringify(old));
+  api.repairWorld(keptOld);
+  assert.equal(keptOld.events.length, 1);
 });
 
 test('rolls 与骰势不一致会被 checkWorld 拒绝，repair 会丢掉坏事件', () => {
@@ -253,6 +256,31 @@ test('rolls 与骰势不一致会被 checkWorld 拒绝，repair 会丢掉坏事�
   const wrongRoll = JSON.parse(JSON.stringify(base));
   wrongRoll.events[0].check.attrs[0].roll = 12;
   assert.throws(() => api.checkWorld(wrongRoll), /roll/);
+  const fixedRoll = JSON.parse(JSON.stringify(wrongRoll));
+  api.repairWorld(fixedRoll);
+  assert.equal(fixedRoll.events.length, 0);
+
+  const wrongUsed = JSON.parse(JSON.stringify(base));
+  wrongUsed.events[0].check.attrs[0].used = 12;
+  assert.throws(() => api.checkWorld(wrongUsed), /used/);
+  const fixedUsed = JSON.parse(JSON.stringify(wrongUsed));
+  api.repairWorld(fixedUsed);
+  assert.equal(fixedUsed.events.length, 0);
+
+  const single = JSON.parse(JSON.stringify(base));
+  single.events[0].check.attrs[0].dice = 'single';
+  single.events[0].check.attrs[0].rolls = [15];
+  assert.doesNotThrow(() => api.checkWorld(single));
+  const keptSingle = JSON.parse(JSON.stringify(single));
+  api.repairWorld(keptSingle);
+  assert.equal(keptSingle.events.length, 1);
+
+  const badDice = JSON.parse(JSON.stringify(base));
+  badDice.events[0].check.attrs[0].dice = 'weird';
+  assert.throws(() => api.checkWorld(badDice), /dice/);
+  const fixedDice = JSON.parse(JSON.stringify(badDice));
+  api.repairWorld(fixedDice);
+  assert.equal(fixedDice.events.length, 0);
 
   const broken = JSON.parse(JSON.stringify(base));
   broken.events[0].check.attrs[0].rolls = [15, null];
@@ -265,6 +293,8 @@ test('rolls 与骰势不一致会被 checkWorld 拒绝，repair 会丢掉坏事�
 test('旧档互动档案：删未知档位/越界状态/重复动作；空档案不留下', () => {
   const w1 = JSON.parse(JSON.stringify(api.getWorld()));
   const o = w1.maps[0].objects[0];
+  o.interaction.material = 42;
+  o.interaction.tags = ['脆', 7];
   o.interaction.overrides = [
     { actionId: '5', outcomes: { crit: 2, success: 99, great: 1 } },
     { actionId: '5', outcomes: { success: 1 } },
@@ -273,9 +303,24 @@ test('旧档互动档案：删未知档位/越界状态/重复动作；空档案
   ];
   const fixed = api.repairWorld(w1);
   assert.ok(fixed.some((x) => x.includes('档位')));
+  assert.ok(fixed.some((x) => x.includes('材质')));
+  assert.ok(fixed.some((x) => x.includes('标签')));
+  assert.ok(fixed.some((x) => x.includes('补了')));
+  assert.equal(o.interaction.material, undefined);
+  assert.deepEqual(o.interaction.tags, ['脆']);
   assert.equal(o.interaction.overrides.length, 1);
   assert.deepEqual(o.interaction.overrides[0].outcomes, { crit: 2, success: 1 });
   assert.doesNotThrow(() => api.checkWorld(w1));
+
+  const conflict = JSON.parse(JSON.stringify(api.getWorld()));
+  conflict.maps[0].objects[0].interaction.overrides = [
+    { actionId: '5', outcomes: { success: 1 } },
+    { actionId: '5', outcomes: { success: 0 } },
+  ];
+  const conflictFixed = api.repairWorld(conflict);
+  assert.ok(conflictFixed.some((x) => x.includes('冲突')));
+  assert.deepEqual(conflict.maps[0].objects[0].interaction.overrides[0].outcomes, { success: 1 });
+  assert.doesNotThrow(() => api.checkWorld(conflict));
 
   const w2 = JSON.parse(JSON.stringify(api.getWorld()));
   w2.maps[0].objects[0].interaction.overrides = [
@@ -298,12 +343,42 @@ test('旧档互动档案：删未知档位/越界状态/重复动作；空档案
   assert.equal(w4.maps[0].objects[0].interaction, undefined);
 });
 
+test('旧档互动档案：材质/标签边界与空 states', () => {
+  const w1 = JSON.parse(JSON.stringify(api.getWorld()));
+  const o1 = w1.maps[0].objects[0];
+  o1.interaction.material = null;
+  o1.interaction.tags = 'x';
+  api.repairWorld(w1);
+  assert.equal(o1.interaction.material, undefined);
+  assert.equal(o1.interaction.tags, undefined);
+  assert.doesNotThrow(() => api.checkWorld(w1));
+
+  const w2 = JSON.parse(JSON.stringify(api.getWorld()));
+  const o2 = w2.maps[0].objects[0];
+  o2.interaction.tags = [1, 2];
+  api.repairWorld(w2);
+  assert.deepEqual(o2.interaction.tags, []);
+  assert.doesNotThrow(() => api.checkWorld(w2));
+
+  const w3 = JSON.parse(JSON.stringify(api.getWorld()));
+  const o3 = w3.maps[0].objects[0];
+  o3.states = [];
+  api.repairWorld(w3);
+  assert.equal(o3.interaction, undefined);
+  assert.throws(() => api.checkWorld(w3), /states/);
+});
+
 test('快照工厂：把角色属性、物件映射、状态名都序列化进快照', () => {
   const snap = api.makeInteractionPreviewSnapshot({
     mapId: 'm1', objectId: 'clay', actorId: 'a', actionId: '5', advantage: 'normal',
     rollKey: '15', state: 0, actorAttributes: { 力量: 30 }, interaction: null, states: ['完好', '裂'],
   });
   assert.equal(snap.mapId, 'm1');
+  assert.equal(snap.objectId, 'clay');
+  assert.equal(snap.actorId, 'a');
+  assert.equal(snap.actionId, '5');
+  assert.equal(snap.advantage, 'normal');
+  assert.equal(snap.state, 0);
   assert.equal(snap.actorKey, '{"力量":30}');
   assert.equal(snap.interactionKey, 'null');
   assert.equal(snap.statesKey, '["完好","裂"]');
