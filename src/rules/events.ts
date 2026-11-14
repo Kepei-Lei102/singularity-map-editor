@@ -94,7 +94,8 @@ export function resultText(ev: PhysicalEvent): string {
     .filter((a) => typeof a.success === 'boolean')
     .map((a) => {
       const roll = a.used ?? a.roll;
-      const rollText = roll === undefined ? '' : ` ${roll}+区值${a.value}`;
+      const shown = a.rolls && a.rolls.length > 1 ? `${a.rolls.join('/')}→取${roll}` : `${roll}`;
+      const rollText = roll === undefined ? '' : ` ${shown}+区值${a.value}`;
       const tier = a.tier === 'crit' ? '（大成功）' : a.tier === 'fumble' ? '（大失败）' : '';
       return `${a.attr}${rollText}${a.success ? '✓' : '✗'}${tier}`;
     });

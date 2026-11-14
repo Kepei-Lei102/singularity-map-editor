@@ -63,6 +63,21 @@ export interface MediaAttach {
   fired?: boolean;
 }
 
+/** 物件自己的互动档案：只在模组里，不进公共动作库。 */
+export interface ObjectInteractionOverride {
+  /** 指向 src/rules/actions.json 的动作 id。 */
+  actionId: string;
+  /** 四档各改到哪个 state；没写的档＝这一档没有预置效果。 */
+  outcomes: Partial<Record<Tier, number>>;
+}
+
+export interface ObjectInteraction {
+  /** 材质/标签先留作作者备注和以后的匹配条件；v0.1 的效果查找按物件 + 动作 id。 */
+  material?: string;
+  tags?: string[];
+  overrides: ObjectInteractionOverride[];
+}
+
 /** kind=zone 是不可见的触发区：玩家看不到，用来挂"走进来就播"的媒体或隐藏信息。 */
 export interface MapObject {
   id: Id;
@@ -97,6 +112,8 @@ export interface MapObject {
   pushable?: boolean;
   /** 沉重：要另一个棋子也贴着这件东西，才能推。做成需要两人合力。 */
   heavy?: boolean;
+  /** 模组自己的互动效果：动作 × 本物件 → 四档状态。 */
+  interaction?: ObjectInteraction;
   stateRev?: number; // 状态改过几次（自动加一）：流程图撤销时用来判断之后有没有被别人改过
   notes: string; // 只有主持人看得到
   hidden: boolean; // 对玩家隐藏
@@ -701,6 +718,8 @@ export interface PhysicalEvent {
     attrs: {
       attr: string; dice: 'single' | 'advantage' | 'disadvantage';
       roll?: number; used?: number; value: number; total?: number;
+      /** 优势/劣势实际掷出的每颗骰（正常只有一颗）；账本重放时要用。 */
+      rolls?: number[];
       /** 逐属性成败；只有感知这类“多项各掷各的”实现才填，渲染日志时用。 */
       success?: boolean;
       /** 逐属性极值；没有极值就是 null。 */

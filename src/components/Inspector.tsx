@@ -16,6 +16,7 @@ import { CELL_METERS, nearestPc, type Nearest } from '../scene/perception';
 import { cellName, parseCell, rangeName, uid } from '../core/util';
 import { MAX_SIDE } from '../core/schema.js';
 import { Area, Check, Num, Row, Section, Txt } from './fields';
+import { ObjectInteractionPanel } from './ObjectInteraction';
 
 export function Inspector() {
   const w = useWorld();
@@ -380,6 +381,8 @@ function ObjectInspector({ world, mapId, o, ui }: { world: World; mapId: string;
       </Section>
 
       {!isZone && !architecture && <IdentityControls world={world} mapId={mapId} o={o} enabled={enabled} />}
+
+      {!isZone && !o.geometry && <ObjectInteractionPanel world={world} mapId={mapId} o={o} edit={ui.mode === 'edit' && !ui.trial} defaultActorId={ui.trial ? ui.trial.players[ui.trial.current]?.pcId : undefined} />}
 
       <Section title="多媒体" extra={edit && world.media.length > 0 && (
         <button className="small" onClick={() => up((x) => {

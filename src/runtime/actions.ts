@@ -15,7 +15,7 @@ import type { Flow, GameMap, LogEntry, MapObject, MediaAttach, Memory, Room, Roo
 import { newObject } from '../core/defaults';
 import { NODE_H, NODE_W } from '../rules/flow';
 export { NODE_H, NODE_W, reachable } from '../rules/flow';
-import { CONN_LABEL } from '../core/types';
+import { CONN_LABEL, TIERS } from '../core/types';
 import { TIER_LABEL } from '../core/types';
 import { download, uid } from '../core/util';
 import { contentKey, getRaw, listStored, mediaChanged, putBlobs, storageKey } from './media';
@@ -458,6 +458,7 @@ const findFlow = (w: World | Draft<World>, id: string) => w.flows.find((f) => f.
  */
 export function setObjectStates(mapId: string, objId: string, states: string[]) {
   let lost: string[] = [];
+  let lostEffects: string[] = [];
   update((d) => {
     const o = findObj(d, mapId, objId);
     if (!o) return;
@@ -517,9 +518,24 @@ export function setObjectStates(mapId: string, objId: string, states: string[]) 
         if (a < 0 || b < 0) delete n.applied; else n.applied = { ...n.applied, from: a, to: b };
       }
     }
+    // 物件的互动档案也按同一套序号映射迁；被删掉的状态不硬塞到第一个状态，
+    // 否则「大成功→碎」可能悄悄变成「大成功→完好」，语义完全变了。直接清空这一档。
+    for (const ov of o.interaction?.overrides ?? []) {
+      for (const tier of TIERS) {
+        const v = ov.outcomes[tier];
+        if (v === undefined) continue;
+        const j = to(v);
+        if (j < 0) { delete ov.outcomes[tier]; lostEffects.push(`${ov.actionId}/${TIER_LABEL[tier]}`); }
+        else ov.outcomes[tier] = j;
+      }
+    }
   }, { coalesce: 'states' + objId });
+  const notes: string[] = [];
   lost = [...new Set(lost)];
-  if (lost.length) toast(`这些事件引用的状态被删掉了，已改成第一个状态：${lost.join('、')}`);
+  if (lost.length) notes.push(`这些事件引用的状态被删掉了，已改成第一个状态：${lost.join('、')}`);
+  lostEffects = [...new Set(lostEffects)];
+  if (lostEffects.length) notes.push(`这些互动档位引用的状态被删掉了，已清空：${lostEffects.join('、')}`);
+  if (notes.length) toast(notes.join('；'));
 }
 /** 一个事件可能是从哪几条连线过来的：起点已经发生了的连线，条件满足的排前面，同样满足的按起点发生的时间从近到远。 */
 export function incomingCandidates(f: Flow | Draft<Flow>, nodeId: string, tags: Set<string>) {

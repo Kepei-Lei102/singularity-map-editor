@@ -137,6 +137,7 @@ export function repairWorld(w) {
         && (a.roll === undefined || a.roll === null || typeof a.roll === 'number')
         && (a.used === undefined || a.used === null || typeof a.used === 'number')
         && (a.total === undefined || a.total === null || typeof a.total === 'number')
+        && (a.rolls === undefined || (Array.isArray(a.rolls) && a.rolls.every((v) => typeof v === 'number' && Number.isFinite(v))))
         && (a.success === undefined || typeof a.success === 'boolean')
         && (a.tier === undefined || a.tier === null || a.tier === 'crit' || a.tier === 'fumble');
       const checkOk = (c) => c === undefined || (c && typeof c === 'object'
@@ -460,6 +461,24 @@ export function checkWorld(w, migrated = false) {
       }
       optBool(o.pushable, `${oa}.pushable`);
       optBool(o.heavy, `${oa}.heavy`);
+      if (o.interaction !== undefined) {
+        obj(o.interaction, `${oa}.interaction`);
+        optStr(o.interaction.material, `${oa}.interaction.material`);
+        if (o.interaction.tags !== undefined) strings(o.interaction.tags, `${oa}.interaction.tags`);
+        const tiers = ['crit', 'success', 'fail', 'fumble'];
+        const usedActions = new Set();
+        arr(o.interaction.overrides, `${oa}.interaction.overrides`).forEach((ov, k) => {
+          const va = `${oa}.interaction.overrides[${k}]`;
+          obj(ov, va); id(ov.actionId, `${va}.actionId`);
+          if (usedActions.has(ov.actionId)) fail(`${va}.actionId`, '同一个动作只能有一条效果');
+          usedActions.add(ov.actionId);
+          const outcomes = obj(ov.outcomes, `${va}.outcomes`);
+          for (const key of Object.keys(outcomes)) if (!tiers.includes(key)) fail(`${va}.outcomes.${key}`, '不是有效档位');
+          for (const t of tiers) {
+            if (outcomes[t] !== undefined) int(outcomes[t], `${va}.outcomes.${t}`, 0, o.states.length - 1);
+          }
+        });
+      }
       optNum(o.stateRev, `${oa}.stateRev`);
       arr(o.secrets, `${oa}.secrets`).forEach((s, k) => {
         const sa = `${oa}.secrets[${k}]`;
@@ -686,6 +705,7 @@ export function checkWorld(w, migrated = false) {
           oneOf(a.dice, ['single', 'advantage', 'disadvantage'], `${aa}.dice`);
           optNum(a.roll, `${aa}.roll`); optNum(a.used, `${aa}.used`);
           num(a.value, `${aa}.value`); optNum(a.total, `${aa}.total`);
+          if (a.rolls !== undefined) arr(a.rolls, `${aa}.rolls`).forEach((v, k) => num(v, `${aa}.rolls[${k}]`));
           optBool(a.success, `${aa}.success`);
           if (a.tier !== undefined && a.tier !== null) oneOf(a.tier, ['crit', 'fumble'], `${aa}.tier`);
         });
