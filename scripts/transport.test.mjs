@@ -111,3 +111,38 @@ test('host transport：窗口关掉后 peerClosed 能区分 saved binding 和已
   assert.equal(t.peerClosed('b1'), false);
   t.close();
 });
+
+test('SwitchTransport：换传输会关旧传输，close 后不能再被订阅复活', () => {
+  const fake = (role = 'host', kind = 'local') => ({
+    role, kind, hasBroadcast: false, closed: false, handlers: [],
+    openPeer() { return false; }, bindPeer() { return false; }, bindingFor() { return null; },
+    hasPeer() { return false; }, peerClosed() { return false; }, dropPeer() {},
+    sendToPeer() { return false; }, sendToHost() { return false; }, broadcast() {},
+    onMessage(fn) { this.handlers.push(fn); return () => { this.handlers = this.handlers.filter((x) => x !== fn); }; },
+    emit(m) { for (const fn of [...this.handlers]) fn(m, { from: null, source: null }); },
+    close() { this.closed = true; this.handlers = []; },
+  });
+  const { createSwitchTransport } = createRequire(import.meta.url)(bundle);
+  const a = fake('host', 'local'), b = fake('host', 'ws'), wrong = fake('player', 'ws');
+  const s = createSwitchTransport(a);
+  const got = [];
+  s.onMessage((m) => got.push(m.seq));
+  a.emit(msg('world', 'a1'));
+  assert.equal(got.at(-1), 'a1');
+  assert.throws(() => s.use(wrong), /传输角色不能/);
+  assert.equal(a.closed, false); // 角色不对时不动旧传输
+  s.use(b);
+  assert.equal(a.closed, true);
+  assert.equal(s.kind, 'ws');
+  b.emit(msg('world', 'b1'));
+  assert.equal(got.at(-1), 'b1');
+  a.emit(msg('world', 'a2')); // 旧传输已经关掉，收不到
+  assert.equal(got.at(-1), 'b1');
+  s.close();
+  assert.equal(b.closed, true);
+  const off = s.onMessage(() => got.push('revived'));
+  assert.equal(typeof off, 'function');
+  b.emit(msg('world', 'b2'));
+  assert.equal(got.includes('revived'), false);
+  assert.throws(() => s.use(fake('host', 'local')), /已经关闭/);
+});

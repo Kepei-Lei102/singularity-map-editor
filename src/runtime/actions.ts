@@ -21,7 +21,7 @@ import { download, uid } from '../core/util';
 import { contentKey, getRaw, listStored, mediaChanged, putBlobs, storageKey } from './media';
 import { checkRoomObjects, checkWorld, repairDoorOpenStates, repairOrphanSubcells, repairWorld } from '../core/schema.js';
 import { allSlots, dropSlot, loadSlot, saveSlot } from '../core/persist';
-import { send } from './sync';
+import { isOnlineTransport, send } from './sync';
 import { migrateWorld } from '../scene/memory';
 import { knowledgeLayers, spatialKeys, visionMembers } from '../scene/vision';
 import { applySlidingMove, seesSlidingObject } from '../scene/sliding';
@@ -328,6 +328,8 @@ let playSeq = 0; // 每次播放 / 停止都加一：读文件是异步的，读
 export function playMedia(mediaId: string, label: string, broadcast: boolean) {
   const meta = getWorld().media.find((m) => m.id === mediaId);
   if (!meta) return toast('找不到这个媒体文件');
+  // 线上房间这一版只同步 world/判定/输入；Blob 过不了 JSON relay，先在本机播。
+  if (broadcast && !getUI().trial && isOnlineTransport()) return toast('线上房间暂不支持同步媒体；先用「▶ 仅主持人」在本机播放');
   const seq = ++playSeq;
   const key = storageKey(mediaId); // 按开始播放那一刻的版本
   const ctx = worldContext();

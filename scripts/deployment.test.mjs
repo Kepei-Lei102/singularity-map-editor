@@ -75,6 +75,7 @@ test('只起一个 dev server 时，玩家窗口用同源打开，不跳到没�
     // 没有配 VITE_PLAYER_ORIGIN：模拟只跑了 dev:host
     await build({stdin:{contents:`export * from './src/core/deployment';export * from './src/runtime/sync';export * from './src/core/store';export * from './src/core/defaults';`,resolveDir:root},outfile:file,bundle:true,platform:'node',format:'cjs',logLevel:'silent',define:{'import.meta.env':JSON.stringify({VITE_APP_ROLE:'host'})}});
     const api = createRequire(import.meta.url)(file);
+    globalThis.location.search='?room=r&invite=i';assert.equal(api.isPlayerEntry(),true);globalThis.location.search='';
     const w = api.emptyWorld(); w.party=[{id:'a',name:'Alice',tags:[],color:'#fff'}];
     const m = api.newMap('test','real',0,6,6,'floor',false); m.autoFog=false; m.fog.fill(1); w.maps=[m]; w.playerMapId=m.id; api.replaceWorld(w);
     api.openPlayerWindow('a');

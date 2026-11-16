@@ -1,4 +1,6 @@
+import { useSyncExternalStore } from 'react';
 import { cleanupMedia, stopMedia, playMedia } from '../runtime/actions';
+import { isOnlineTransport, subscribeTransportKind } from '../runtime/sync';
 import { storeBlob, useBlobUrl } from '../runtime/media';
 import { toast, update, useUI, useWorld, worldContext } from '../core/store';
 import { uid } from '../core/util';
@@ -9,6 +11,7 @@ const kindOf = (mime: string) => (mime.startsWith('video') ? '视频' : mime.sta
 
 export function MediaPanel() {
   const w = useWorld();
+  const online = useSyncExternalStore(subscribeTransportKind, isOnlineTransport, isOnlineTransport);
   const upload = async (files: FileList | null) => {
     if (!files) return;
     const ctx = worldContext(); // 上传途中换了工程、进出了试玩：传完的文件不挂到那时恰好打开的世界上
@@ -38,7 +41,7 @@ export function MediaPanel() {
           <span>{kindOf(m.mime)} · {m.name} <span className="muted">{(m.size / 1048576).toFixed(1)}MB</span></span>
           <span className="inline">
             <button className="small" title="只在主持人这边播放" onClick={() => playMedia(m.id, m.name, false)}>▶</button>
-            <button className="small" title="同步给玩家窗口" onClick={() => playMedia(m.id, m.name, true)}>📡</button>
+            <button className="small" disabled={online} title={online ? '线上房间暂不支持同步媒体；先在本机播放' : '同步给玩家窗口'} onClick={() => playMedia(m.id, m.name, true)}>📡</button>
             <button className="danger small" onClick={() => {
               if (!confirm(`删除「${m.name}」？挂在物件上的引用也会一起删掉。`)) return;
               // 文件本身先不删：撤销、试玩结束恢复时还要用到。浏览器里多留一份不碍事，导出的工程只带还在用的。

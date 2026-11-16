@@ -20,6 +20,7 @@ import { PartyPanel } from './components/PartyPanel';
 import { NpcPanel } from './components/NpcPanel';
 import { MediaDock, MediaPanel } from './components/MediaPanel';
 import { PlayerView } from './components/PlayerView';
+import { OnlinePanel } from './components/OnlinePanel';
 import { Splitter, usePanel } from './components/Splitter';
 import { endTrial, startTrial, switchTrialPlayer, toggleMarkMode, trialClick, trialEndTurn, trialMove } from './runtime/trial';
 import { TrialHud } from './components/TrialHud';
@@ -152,6 +153,7 @@ function Editor() {
         <select aria-label="打开绑定角色的玩家窗口" value="" onChange={e => { if (e.target.value) openPlayerWindow(e.target.value); }}>
           <option value="">打开玩家窗口…</option>{getRealWorld().party.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
         </select>
+        <OnlinePanel />
         <button title="撤销 ⌘Z" onClick={undo}>↶</button>
         <button title="重做 ⇧⌘Z" onClick={redo}>↷</button>
         <details className="menu">

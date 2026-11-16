@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
-import { listenAsPlayer, playerDiceMode, reportJudgmentRoll, send } from '../runtime/sync';
+import { listenAsPlayer, playerDiceMode, reportJudgmentRoll, send, type SyncMsg } from '../runtime/sync';
+import { ensureOnlinePlayer, onlinePlayerInfo, onOnlinePlayerClosed } from '../runtime/onlineRoom';
 import type { CodeRequest, CombatNotice, Focus, PendingJudgment, PublicSkill, SkillCast, Utterance, World } from '../core/types';
 import { TIER_LABEL } from '../core/types';
 import { MapCanvas } from './MapCanvas';
@@ -36,6 +37,9 @@ export function PlayerView() {
   const [rolled, setRolled] = useState<{ sides: number; rolls: DiceTrayRecord[]; taken: number } | null>(null);
   /** 底部抽屉：一次只开一个。 */
   const [drawer, setDrawer] = useState<'clues' | 'skills' | 'notes' | 'talk' | null>(null);
+  /** 线上房间：连上了等主持人推地图；连不上就把原因显示出来。 */
+  const [online, setOnline] = useState(false);
+  const [joinError, setJoinError] = useState<string | null>(null);
   /** 笔记只存在这个浏览器里，不发给主持人。 */
   const [notes, setNotes] = useState(() => { try { return localStorage.getItem('ts-player-notes') ?? ''; } catch { return ''; } });
   /** 对话抽屉里正在打的那句话，和说给谁。 */
@@ -65,8 +69,14 @@ export function PlayerView() {
   }, [moveNote]);
   const saveNotes = (v: string) => { setNotes(v); try { localStorage.setItem('ts-player-notes', v); } catch { /* 存不了也不影响看 */ } };
 
+  useEffect(() => onOnlinePlayerClosed((reason) => {
+    setWorld(null); setMedia(null); setPending(null); setRolled(null);
+    setJoinError(`房间已关闭：${reason}`);
+  }), []);
   useEffect(() => {
-    const off = listenAsPlayer((m) => {
+    let off: (() => void) | undefined;
+    let cancelled = false;
+    const handle = (m: SyncMsg) => {
       if (m.type === 'world') {
         setWorld(m.world);
         setFocus(m.focus ?? null);
@@ -93,9 +103,16 @@ export function PlayerView() {
       else if (m.type === 'move-result') setMoveNote(m.ok ? (m.kind === 'prompt' ? { ok: true, msg: m.msg } : null) : { ok: false, msg: m.msg });
       else if (m.type === 'play') setMedia({ mediaId: m.mediaId, label: m.label, mime: m.mime, blob: m.blob });
       else if (m.type === 'stop') setMedia(null);
-    });
+    };
     document.title = '奇点之后 · 玩家视角';
-    return off;
+    ensureOnlinePlayer()
+      .then((isOnline) => {
+        if (cancelled) return;
+        setOnline(isOnline);
+        off = listenAsPlayer(handle, isOnline ? { online: true, binding: onlinePlayerInfo()?.binding } : {});
+      })
+      .catch((e) => { if (!cancelled) setJoinError(e instanceof Error ? e.message : '线上房间连不上'); });
+    return () => { cancelled = true; off?.(); };
   }, []);
 
   // 方向键走一格，发给见证者那边执行。焦点在输入框里就不抢。
@@ -124,7 +141,7 @@ export function PlayerView() {
   const iAmCaster = !!cast && !!you && cast.actorPcId === you;
   return (
     <div className="player">
-      {map ? <MapCanvas world={world!} map={map} mode="player" playerNumbers={nums} viewer={undefined} /> : <div className="player-wait">{window.opener ? '等待主持人推送地图……' : '玩家端已就绪。请在创作者／见证者端选择「打开玩家窗口…」中的角色，建立专属视角。'}</div>}
+      {map ? <MapCanvas world={world!} map={map} mode="player" playerNumbers={nums} viewer={undefined} /> : <div className="player-wait">{joinError ? (online ? joinError : `加入线上房间失败：${joinError}`) : online ? '线上房间已连上，等待主持人推送地图……' : window.opener ? '等待主持人推送地图……' : '玩家端已就绪。请在创作者／见证者端选择「打开玩家窗口…」中的角色，建立专属视角。'}</div>}
       {map && <div className="player-title">{map.layer} · {map.name}</div>}
 
 

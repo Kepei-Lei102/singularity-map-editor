@@ -9,6 +9,7 @@ const CROSS_ORIGIN_FROM_PLAYER = new Set(['hello', 'judge-roll', 'say', 'move', 
 
 class LocalTransport implements Transport {
   readonly role: TransportRole;
+  readonly kind = 'local' as const;
   readonly hasBroadcast: boolean;
   private readonly peers = new Map<string, Window>();
   private readonly channel: BroadcastChannel | null;

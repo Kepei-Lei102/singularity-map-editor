@@ -80,7 +80,7 @@ test('转发：建房、邀请、加入、双向 relay、断线、重连、关�
   host.send(envelope('room.invite', 'h2', { roomId, token: hostToken }));
   const invited = await host.next('room.invited');
   assert.equal(invited.payload.inviteId.length > 0, true);
-  assert.match(invited.payload.joinUrl, /room=/);
+  assert.match(invited.payload.joinUrl, /\?view=player&room=/);
   assert.equal(server.rooms.size(), 1);
 
   const player = await connect(url);

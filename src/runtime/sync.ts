@@ -12,6 +12,7 @@ import { numbering } from '../scene/render';
 import { getRealWorld, getWorld, getUI, setUI, saveNow, worldContext, toast } from '../core/store';
 import { SESSION, rand, renewSession } from '../core/session';
 import { createLocalTransport } from './transportLocal';
+import { createSwitchTransport, type Transport } from './transport';
 import type { SyncBody, SyncMsg, TrialMoveSignal } from './messages';
 export type { SyncBody, SyncMsg, TrialMoveSignal } from './messages';
 import { effectiveLayer, emptyVision } from '../scene/vision';
@@ -23,7 +24,7 @@ import { onProjectReplaced, projectContext } from '../core/store';
 export { SESSION };
 const INST = rand(); // 这个页面实例（刷新就是新的实例，但会话标识不变）
 const BORN = Date.now();
-const transport = createLocalTransport(isPlayerEntry() ? 'player' : 'host');
+const transport = createSwitchTransport(createLocalTransport(isPlayerEntry() ? 'player' : 'host'));
 
 // Binding is held only by the host; the URL carries an opaque reconnect capability, never a selectable pcId.
 const players = new Map<string, { pcId: string; context: number; trialContext?: string }>();
@@ -34,6 +35,33 @@ try {
 } catch { /* no reconnect state */ }
 function saveBindings() {
   try { sessionStorage.setItem(bindingsKey(), JSON.stringify(Object.fromEntries([...players].filter(([, p]) => !p.trialContext).map(([key, p]) => [key, p.pcId])))); } catch { /* unavailable */ }
+}
+/** 本地窗口/线上房间切换；订阅者不用重挂。 */
+const transportKindListeners = new Set<() => void>();
+function notifyTransportKind(): void { for (const fn of [...transportKindListeners]) fn(); }
+/** 给 UI 用：线上/本地切换时重新渲染（比如媒体同步按钮）。 */
+export function subscribeTransportKind(fn: () => void): () => void {
+  transportKindListeners.add(fn);
+  return () => { transportKindListeners.delete(fn); };
+}
+export function setTransport(next: Transport): void { transport.use(next); notifyTransportKind(); }
+/** 关掉线上房间后回本地窗口模式（新建一条本地传输，不重用已经关掉的）。 */
+export function useLocalTransport(): void { transport.use(createLocalTransport(transport.role)); notifyTransportKind(); }
+export function isOnlineTransport(): boolean { return transport.kind === 'ws'; }
+/** 主持端从本地窗口切到线上房间时，旧的本地 binding 不再有意义，清掉。 */
+export function resetPlayerBindings(): void {
+  for (const binding of players.keys()) {
+    transport.sendToPeer(binding, { type: 'clear', __ts: 'ts-map', seq: rand(), from: SESSION, inst: INST, born: BORN });
+    transport.dropPeer(binding);
+  }
+  players.clear();
+  saveBindings();
+}
+/** 线上邀请被加入时，主持端先把 binding 对到角色；服务器只知道 inviteId，不知道 pcId。 */
+export function registerOnlinePlayer(binding: string, pcId: string): void {
+  if (!binding || !pcId) return;
+  players.set(binding, { pcId, context: projectContext() });
+  saveBindings();
 }
 /**
  * 试玩里刚发生的攻击，推给跟他有关的玩家。
@@ -107,6 +135,7 @@ function pendingFor(pcId: string, trialContext?: string): PendingJudgment | null
 }
 
 export function openPlayerWindow(pcId?: string, trial = false) {
+  if (transport.kind === 'ws') { toast('线上房间请用「线上房间」面板里的邀请链接'); return; }
   const w = trial ? getWorld() : getRealWorld(), id = pcId ?? w.party[0]?.id;
   if (!id || !w.party.some(p => p.id === id)) return;
   const binding = rand();
@@ -540,7 +569,9 @@ export function listenAsEditor(onHello: () => void) {
     if (m.type === 'move') { onMove(m, meta.from ?? meta.source); return; }
     if (m.type !== 'hello' || (m.to && m.to !== SESSION)) return;
     const p = m.binding && players.get(m.binding);
-    if (!p || !transport.bindPeer(m.binding!, meta.source)) return;
+    if (!p) return;
+    // 线上房间的绑定由服务器和 onlineRoom 维护，没有本地 window 可绑。
+    if (transport.kind !== 'ws' && !transport.bindPeer(m.binding!, meta.source)) return;
     onHello();
   });
   if (transport.hasBroadcast) { quietUntil = Date.now() + 250; send({ type: 'claim' }); }
@@ -553,20 +584,24 @@ export function listenAsEditor(onHello: () => void) {
  * 网址带会话和主持人创建的绑定凭据；不提供玩家端换角色或全队总览。
  * 一段时间没收到消息就再打个招呼（编辑器刷新过、只能走 postMessage 时靠这个重新连上）。
  */
-export function listenAsPlayer(fn: (m: SyncMsg) => void) {
+export interface PlayerListenOptions { session?: string | null; binding?: string | null; online?: boolean }
+
+export function listenAsPlayer(fn: (m: SyncMsg) => void, opts: PlayerListenOptions = {}) {
   const url = new URL(location.href);
-  const bound = url.searchParams.get('session');
-  const binding = url.searchParams.get('binding');
+  let bound = opts.online ? opts.session ?? null : opts.session ?? url.searchParams.get('session');
+  const binding = opts.binding ?? url.searchParams.get('binding');
   // 只认一个编辑器实例：同一个会话标识出现第二个实例（复制了标签页、还没来得及换号）时不理它；
   // 只有原来那个实例安静了一阵（关了、刷新了），才改认新的实例
   let inst: string | null = null;
   let lastHeard = 0;
   const QUIET = 5000;
+  if (!binding) return () => {};
   const off = transport.onMessage((m, meta) => {
     if (m.type !== 'world' && m.type !== 'play' && m.type !== 'stop' && m.type !== 'clear' && m.type !== 'alive' && m.type !== 'judge-request' && m.type !== 'judge-cancel' && m.type !== 'code-request' && m.type !== 'code-result' && m.type !== 'move-result') return;
-    if (!bound || !binding) return;
     if (m.type !== 'alive' && meta.from !== 'host') return;
-    if (m.from !== bound) return;
+    // 线上第一份 world 到了才知道主持人的 SESSION；本地 URL 里已经钉死。
+    if (bound && m.from !== bound) return;
+    if (!bound) bound = m.from;
     if (inst && m.inst !== inst) {
       if (Date.now() - lastHeard < QUIET) return; // 原来那个还活着：这是复制出来的，不认
       if (m.type !== 'world' && m.type !== 'clear') { send({ type: 'hello', binding: binding ?? undefined }, bound); return; } // 换认新实例：先请它推一整份世界，从世界开始认

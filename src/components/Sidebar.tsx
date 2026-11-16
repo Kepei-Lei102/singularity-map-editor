@@ -52,7 +52,7 @@ export function Sidebar() {
       </Section>
 
       <Section title="工具">
-        <div className="tools">
+        <div className="tool-groups">
           {GROUP_ORDER.map((g) => {
             const inGroup = tools.filter(([, , , gg]) => gg === g);
             if (!inGroup.length) return null;

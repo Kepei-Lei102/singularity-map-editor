@@ -221,7 +221,7 @@ export function createServer(options: ServerOptions = {}): StartedServer {
       if (!rooms.issueInvite(conn.roomId!, conn.token!, id, secret)) {
         return sendError(conn, requestId, 'invite-failed', '邀请发不出去');
       }
-      const joinUrl = `${playerOrigin.replace(/\/$/, '')}/?room=${encodeURIComponent(conn.roomId!)}&invite=${encodeURIComponent(secret)}`;
+      const joinUrl = `${playerOrigin.replace(/\/$/, '')}/?view=player&room=${encodeURIComponent(conn.roomId!)}&invite=${encodeURIComponent(secret)}`;
       send(conn, envelope('room.invited', requestId, {
         roomId: conn.roomId, payload: { inviteId: id, inviteToken: secret, joinUrl },
       }));

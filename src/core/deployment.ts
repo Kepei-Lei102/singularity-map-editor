@@ -1,8 +1,11 @@
 // A deployed player entry stays a player even if its query string is changed.
 const env = import.meta.env;
 export const appRole = env?.VITE_APP_ROLE ?? '';
-/** 显式要玩家视角（?view=player）。 */
-const wantsPlayer = () => new URLSearchParams(location.search).get('view') === 'player';
+/** 显式要玩家视角（?view=player），或拿的是线上邀请链接。 */
+const wantsPlayer = () => {
+  const q = new URLSearchParams(location.search);
+  return q.get('view') === 'player' || (!!q.get('room') && !!q.get('invite'));
+};
 /**
  * 玩家窗口。分开部署时玩家端整个就是 player 角色，改 query 也不会变回主持人；
  * 但开发时只起一个 dev server（或单独文件版），主页面和玩家窗口是同一个 URL，
