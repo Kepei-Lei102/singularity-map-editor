@@ -76,7 +76,7 @@ export function createServer(options: ServerOptions = {}): StartedServer {
   const playerOrigin = options.playerOrigin ?? process.env.PLAYER_ORIGIN ?? 'http://localhost:5179';
   const envOrigins = process.env.ALLOWED_ORIGINS?.split(',').map((s) => s.trim()).filter(Boolean) ?? [];
   const allowedOrigins = options.allowedOrigins ?? (envOrigins.length ? envOrigins : DEFAULT_ORIGINS);
-  const allowNoOrigin = options.allowNoOrigin ?? process.env.NODE_ENV !== 'production';
+  const allowNoOrigin = options.allowNoOrigin ?? (process.env.ALLOW_NO_ORIGIN === '1' || process.env.NODE_ENV !== 'production');
   const maxMessageBytes = options.maxMessageBytes ?? Number(process.env.MAX_MESSAGE_BYTES ?? 8 * 1024 * 1024);
   const maxRooms = options.maxRooms ?? Number(process.env.MAX_ROOMS ?? 1000);
   const maxConnections = options.maxConnections ?? Number(process.env.MAX_CONNECTIONS ?? 2000);

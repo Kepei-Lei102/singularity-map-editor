@@ -127,9 +127,13 @@ test('玩家窗口回传：只认自己那个 cast，别的 id 不动', () => {
   fixture();
   api.beginSkillCast('pc', '037-9-101', 'gm');
   const id = api.castOf().id;
-  assert.equal(api.handlePlayerDecision({ type: 'skill-decision', castId: 'nope', ok: true }), false);
+  assert.equal(api.handlePlayerDecision({ type: 'skill-decision', castId: 'nope', ok: true }, 'pc'), false);
   assert.equal(api.castOf().step, 'approval');
-  assert.equal(api.handlePlayerDecision({ type: 'skill-decision', castId: id, ok: false }), true);
+  assert.equal(api.handlePlayerDecision({ type: 'skill-decision', castId: id, ok: false }, 'other'), false);
+  assert.equal(api.castOf().step, 'approval');
+  assert.equal(api.handlePlayerDecision({ type: 'skill-decision', castId: id, ok: false }, null), false);
+  assert.equal(api.castOf().step, 'approval');
+  assert.equal(api.handlePlayerDecision({ type: 'skill-decision', castId: id, ok: false }, 'pc'), true);
   assert.equal(api.castOf(), null); // 拒绝后直接清掉
 });
 
@@ -137,7 +141,7 @@ test('不是同意阶段的回传不处理', () => {
   fixture();
   api.beginSkillCast('pc', '037-9-101', 'player'); // 玩家自己发起，没有 approval 阶段
   const id = api.castOf().id;
-  assert.equal(api.handlePlayerDecision({ type: 'skill-decision', castId: id, ok: true }), false);
+  assert.equal(api.handlePlayerDecision({ type: 'skill-decision', castId: id, ok: true }, 'pc'), false);
   assert.equal(api.castOf().step, 'confirm');
   api.closeSkillCast();
 });

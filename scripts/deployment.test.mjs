@@ -40,16 +40,25 @@ test('split ports pin origins and bindings, keep player role fixed, and reconnec
     const payload=opened.messages.at(-1);assert.equal(payload.target,player);assert.equal(payload.data.world.viewerId,'a');
     api.send({type:'alive'});assert.equal(opened.messages.at(-1).data.type,'alive');assert.equal(opened.messages.at(-1).target,player);
     assert.ok(!broadcasts.some(m=>m.type==='world'));
+    const bindKey=`ts-player-bindings-${api.SESSION}`;
+    assert.equal(JSON.parse(sessionStorage.getItem(bindKey)??'{}')[binding],'a');
+    opened.closed=true;
+    api.send({type:'world',world:api.getWorld()});
+    assert.equal(JSON.parse(sessionStorage.getItem(bindKey)??'{}')[binding],undefined);
     const hostSession=api.SESSION;const url=opened.url;
     handlers=[];globalThis.sessionStorage=storage();globalThis.location={origin:player,href:url,search:new URL(url).search};
     const messages=[];globalThis.window.opener={closed:false,postMessage:(data,target)=>messages.push({data,target})};
     const p=await bundle('player');assert.equal(p.isPlayerEntry(),true);assert.equal(p.getWorld().party.length,0);assert.ok(p.getWorld().maps.every(m=>m.objects.length===0));
     globalThis.location.search='?view=editor';assert.equal(p.isPlayerEntry(),true);globalThis.location.search=new URL(url).search;
     const received=[];p.listenAsPlayer(m=>received.push(m));assert.equal(messages[0].target,host);
+    messages.length=0;
+    p.send({type:'skill-decision',castId:'c1',ok:true});
+    assert.equal(messages.at(-1).data.type,'skill-decision');
+    assert.equal(messages.at(-1).target,host);
     const deliver=(origin,source,seq)=>{for(const f of handlers)f({origin,source,data:{...payload.data,from:hostSession,seq}});};
     deliver(player,window.opener,'wrong-origin');deliver(host,{},'wrong-opener');assert.equal(received.length,0);
     deliver(host,window.opener,'right');assert.equal(received.at(-1).world.viewerId,'a');
-    handlers=[];const again=[];p.listenAsPlayer(m=>again.push(m));deliver(host,window.opener,'refresh');assert.equal(again.at(-1).world.viewerId,'a');
+    const again=[];p.listenAsPlayer(m=>again.push(m));deliver(host,window.opener,'refresh');assert.equal(again.at(-1).world.viewerId,'a');
   } finally { await rm(dir,{recursive:true,force:true}); }
 });
 
@@ -146,14 +155,17 @@ test('判定：见证者只宣告不掷，骰子交给玩家', async () => {
 
 test('玩家窗口回传的掷骰结果不会被当成「复制标签页」丢掉', async () => {
   const src = await readFile(join(root, 'src/runtime/sync.ts'), 'utf8');
+  const local = await readFile(join(root, 'src/runtime/transportLocal.ts'), 'utf8');
   // 会话撞车那段守卫必须显式放过 judge-roll：它和主持人带同一个 SESSION，
   // 但它是绑定窗口发回来的，不是第二个编辑器实例。
-  const guard = src.split('export function listenAsEditor')[1].split('if (m.type === \'claim\'')[0];
+  const guard = src.split('export function listenAsEditor')[1].split("if (m.type === 'claim'")[0];
   assert.match(guard, /m\.type !== 'judge-roll'/);
   // 回传要直发 opener，不走广播，避免被玩家窗口自己的监听再吃一遍
-  assert.match(src, /body\.type === 'judge-roll'[\s\S]{0,200}window\.opener/);
+  assert.match(src, /body\.type === 'judge-roll' \|\| body\.type === 'say'[\s\S]{0,160}transport\.sendToHost/);
+  assert.match(src, /body\.type === 'code-submit' \|\| body\.type === 'skill-decision'[\s\S]{0,80}transport\.sendToHost/);
+  assert.match(local, /sendToHost\(msg: SyncMsg\): boolean \{[\s\S]{0,160}window\.opener/);
   // 主持人这边要能收
-  assert.match(src, /if \(m\.type === 'judge-roll'\) \{ onJudgeRoll\(m, source\); return; \}/);
+  assert.match(src, /if \(m\.type === 'judge-roll'\) \{ onJudgeRoll\(m, meta\.from \?\? meta\.source\); return; \}/);
 });
 
 test('战斗通报只发给当事人，且只带结果不带骰子细节', async () => {
@@ -170,19 +182,21 @@ test('战斗通报只发给当事人，且只带结果不带骰子细节', async
 
 test('玩家窗口回传的消息（掷骰、说话、走一格）都送到见证者那边，不被两道守卫吃掉', async () => {
   const src = await readFile(join(root, 'src/runtime/sync.ts'), 'utf8');
+  const local = await readFile(join(root, 'src/runtime/transportLocal.ts'), 'utf8');
   // 走 opener 直发，不走广播
-  assert.match(src, /body\.type === 'judge-roll' \|\| body\.type === 'say'[\s\S]{0,160}window\.opener/);
+  assert.match(src, /body\.type === 'judge-roll' \|\| body\.type === 'say'[\s\S]{0,160}transport\.sendToHost/);
   // 两道守卫都要放行这三种
-  assert.match(src, /e\.data\.type !== 'say' && e\.data\.type !== 'move'/);
+  assert.match(local, /CROSS_ORIGIN_FROM_PLAYER = new Set\(\['hello', 'judge-roll', 'say', 'move', 'code-submit', 'skill-decision'\]\)/);
   assert.match(src, /m\.type !== 'say' && m\.type !== 'move'[\s\S]{0,120}m\.from === SESSION/);
   // 玩家点「同意/不同意」也要放行，否则同源部署下会被当成复制出来的编辑器标签页，触发换号把玩家窗口踢下线。
   assert.match(src, /m\.type !== 'skill-decision'/);
   // 主持人这边要能收，并且用绑定信息认人，不信玩家自报
-  const handler = src.split('function onSay')[1].split('function onJudgeRoll')[0];
-  assert.match(handler, /players\.entries\(\)[\s\S]{0,80}p\.win === source/);
+  const handler = src.split('function onSay')[1].split('export function onMove')[0];
+  assert.match(handler, /const binding = bindingOf\(ref\)/);
+  assert.match(handler, /players\.get\(binding\)/);
   assert.match(handler, /p\.pcId/);
   // 掷骰也只认绑给「判定角色」的那个窗口，不信消息里自报的身份
-  const judge = src.split('function onJudgeRoll')[1].split('function reportJudgmentRoll')[0];
-  assert.match(judge, /players\.values\(\)[\s\S]{0,120}e\.win === source/);
+  const judge = src.split('export function onJudgeRoll')[1].split('export function reportJudgmentRoll')[0];
+  assert.match(judge, /const binding = bindingOf\(ref\)/);
   assert.match(judge, /entry\.pcId !== p\.subjectId/);
 });

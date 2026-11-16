@@ -1,9 +1,9 @@
-import { hostOriginForPlayer, playerWindowBase, playerWindowOrigin, messageTarget, isPlayerEntry } from '../core/deployment';
+import { playerWindowBase, isPlayerEntry } from '../core/deployment';
 import { identityKnown, playerSeen, UNKNOWN_OBJECT } from '../scene/identity';
 import { objectEnabled } from '../core/objectData.js';
 import { isArchitectureObject, clipArchitecture, fogAt, tokenPosition } from '../scene/architecture';
 import { anyVisible } from '../scene/memory';
-import type { CodeRequest, CombatNotice, DiceJudgment, Endpoint, GameMap, PendingJudgment, PlayerClue, VisionLayer, World, Focus, SkillCast, PublicSkill } from '../core/types';
+import type { CodeRequest, CombatNotice, DiceJudgment, Endpoint, GameMap, PendingJudgment, PlayerClue, VisionLayer, World } from '../core/types';
 import { say, utterancesFor } from '../rules/dialogue';
 import { visibleMarks } from '../scene/perception';
 import { viewerOf, visiblePoint } from '../scene/sight';
@@ -11,48 +11,26 @@ import { currentPathwayOf, publicSkillsOf } from '../rules/skills';
 import { numbering } from '../scene/render';
 import { getRealWorld, getWorld, getUI, setUI, saveNow, worldContext, toast } from '../core/store';
 import { SESSION, rand, renewSession } from '../core/session';
+import { createLocalTransport } from './transportLocal';
+import type { SyncBody, SyncMsg, TrialMoveSignal } from './messages';
+export type { SyncBody, SyncMsg, TrialMoveSignal } from './messages';
 import { effectiveLayer, emptyVision } from '../scene/vision';
 import { onProjectReplaced, projectContext } from '../core/store';
 
-// 主持人窗口 ↔ 玩家窗口。玩家窗口用来共享屏幕给玩家（第一阶段还没有联网，靠共享屏幕）。
-// world / 播放仅通过已绑定窗口的 postMessage 定向发送。
-// 公共 BroadcastChannel 只传会话占用与存活，不传 world、角色或绑定凭据。
-
-export type SyncBody =
-  | { type: 'world'; world: World; focus?: Focus | null; cast?: SkillCast | null; you?: string; skills?: PublicSkill[]; pathway?: string | null; avatar?: string | null }
-  | { type: 'skill-decision'; castId: string; ok: boolean } // 玩家窗口回传：同不同意发动
-  | { type: 'hello'; binding?: string }
-  | { type: 'judge-request'; judgment: PendingJudgment } // 见证者→玩家：轮到你自己掷
-  | { type: 'judge-cancel'; id: string } // 见证者取消整个判定
-  | { type: 'code-request'; request: CodeRequest } // 见证者→玩家：到电子锁前输密码
-  | { type: 'code-submit'; id: string; code: string } // 玩家窗口→见证者：这次输入的密码
-  | { type: 'code-result'; id: string; text?: string } // 见证者→玩家：反馈（口头时可空，只为收掉输入框）
-  | { type: 'judge-roll'; id: string; title: string; sides: number; value: number; values?: number[]; tens: number | null; units: number | null; material: string; seed: number; rollId: string } // 玩家掷完回传；value 是采信的那颗，优势/劣势时 values 带两颗
-  | { type: 'say'; text: string; targetTokenId: string | null } // 玩家窗口→见证者：玩家说了什么
-  | { type: 'move'; dx: number; dy: number } // 玩家窗口→见证者：我要往这个方向走一格
-  | { type: 'move-result'; ok: boolean; msg: string; kind?: TrialMoveSignal } // 见证者→玩家：这一走成没成/是转身还是确认
-  | { type: 'clear' }
-  | { type: 'play'; mediaId: string; label: string; mime: string; blob?: Blob }
-  | { type: 'stop' }
-  | { type: 'claim' } // 编辑器启动时：这个会话标识有人在用吗？
-  | { type: 'taken' } // 回答：在用（复制标签页时会碰上），换一个
-  | { type: 'alive' }; // 编辑器每两秒报一声"我还在"：玩家窗口靠它判断原来那个编辑器是不是已经关了 / 刷新了
-/** from：发送方的会话；to：只给某个会话（玩家窗口打招呼时用）。 */
-/** inst / born：发送的是哪个页面实例、什么时候打开的（同一个会话标识出现在两个实例上时，后打开的让）。 */
-export type SyncMsg = SyncBody & { __ts: 'ts-map'; seq: string; from: string; to?: string; inst: string; born: number };
+// 主持人窗口 ↔ 玩家窗口。线上入口还没接，现在本地窗口走 LocalTransport。
+// world / 播放只经 Transport 发给已绑定窗口；广播只传会话占用与存活，不传 world、角色或绑定凭据。
 
 export { SESSION };
 const INST = rand(); // 这个页面实例（刷新就是新的实例，但会话标识不变）
 const BORN = Date.now();
-let channel: BroadcastChannel | null = null;
-try { channel = new BroadcastChannel('ts-map-sync'); } catch { /* 不支持就只走 postMessage */ }
+const transport = createLocalTransport(isPlayerEntry() ? 'player' : 'host');
 
 // Binding is held only by the host; the URL carries an opaque reconnect capability, never a selectable pcId.
-const players = new Map<string, { win: Window | null; pcId: string; context: number; trialContext?: string }>();
+const players = new Map<string, { pcId: string; context: number; trialContext?: string }>();
 const bindingsKey = () => `ts-player-bindings-${SESSION}`;
 try {
   const saved = JSON.parse(sessionStorage.getItem(bindingsKey()) ?? '{}') as Record<string, string>;
-  for (const [binding, pcId] of Object.entries(saved)) if (typeof pcId === 'string') players.set(binding, { win: null, pcId, context: projectContext() });
+  for (const [binding, pcId] of Object.entries(saved)) if (typeof pcId === 'string') players.set(binding, { pcId, context: projectContext() });
 } catch { /* no reconnect state */ }
 function saveBindings() {
   try { sessionStorage.setItem(bindingsKey(), JSON.stringify(Object.fromEntries([...players].filter(([, p]) => !p.trialContext).map(([key, p]) => [key, p.pcId])))); } catch { /* unavailable */ }
@@ -133,13 +111,15 @@ export function openPlayerWindow(pcId?: string, trial = false) {
   if (!id || !w.party.some(p => p.id === id)) return;
   const binding = rand();
   const base = playerWindowBase();
-  const win = window.open(`${base}?view=player&session=${SESSION}&binding=${binding}`, `ts-player-${binding}`, 'width=1280,height=800');
-  if (win) { players.set(binding, { win, pcId: id, context: projectContext(), ...(trial ? { trialContext: worldContext() } : {}) }); saveBindings(); }
-  else toast(`玩家窗口被浏览器拦截，请允许此站点弹出窗口，再点「${trial ? '打开试玩玩家端' : '打开玩家窗口…'}」`);
+  if (transport.openPeer(binding, `${base}?view=player&session=${SESSION}&binding=${binding}`)) {
+    players.set(binding, { pcId: id, context: projectContext(), ...(trial ? { trialContext: worldContext() } : {}) });
+    saveBindings();
+  } else toast(`玩家窗口被浏览器拦截，请允许此站点弹出窗口，再点「${trial ? '打开试玩玩家端' : '打开玩家窗口…'}」`);
 }
 export function clearTrialWindows() {
   for (const [id, p] of players) if (p.trialContext) {
-    try { p.win?.postMessage({ type: 'clear', __ts: 'ts-map', seq: rand(), from: SESSION, inst: INST, born: BORN }, target()); } catch { /* closed */ }
+    transport.sendToPeer(id, { type: 'clear', __ts: 'ts-map', seq: rand(), from: SESSION, inst: INST, born: BORN });
+    transport.dropPeer(id);
     players.delete(id);
   }
 }
@@ -153,8 +133,6 @@ export function clearTrialWindows() {
 export function selectTrialViewer(_pcId?: string) {
   send({ type: 'world', world: getWorld() });
 }
-
-const isMsg = (d: unknown): d is SyncMsg => !!d && typeof d === 'object' && (d as SyncMsg).__ts === 'ts-map' && typeof (d as SyncMsg).from === 'string' && typeof (d as SyncMsg).inst === 'string' && typeof (d as SyncMsg).born === 'number';
 
 /**
  * 发给玩家窗口的"玩家版"世界：主持人才能看的东西在发出去之前就删掉，而不只是不画。
@@ -276,14 +254,12 @@ export function playerMap(m: GameMap, L: VisionLayer, pcId?: string): GameMap {
 onProjectReplaced(() => {
   // 换工程：主持端还等着的判定跨工程没有意义，先收掉；下面会给所有窗口发 clear。
   setUI({ pendingJudgment: null, judgmentResult: null, pendingCode: null });
-  for (const p of players.values()) if (p.win && !p.win.closed) {
-    try { p.win.postMessage({ type: 'clear', __ts: 'ts-map', seq: rand(), from: SESSION, inst: INST, born: BORN }, target()); } catch { /* closed */ }
+  for (const binding of players.keys()) {
+    transport.sendToPeer(binding, { type: 'clear', __ts: 'ts-map', seq: rand(), from: SESSION, inst: INST, born: BORN });
+    transport.dropPeer(binding);
   }
   players.clear(); saveBindings();
 });
-
-// Each deployment pins the other endpoint; 开发时没配就发当前页面的来源（同源窗口）。
-const target = () => messageTarget(playerWindowOrigin());
 
 let quietUntil = 0; // 编辑器刚启动、还在确认会话标识没撞车时，先不往外推
 
@@ -298,8 +274,12 @@ export function send(body: SyncBody, to?: string) {
   if (body.type === 'world' || body.type === 'play' || body.type === 'stop' || body.type === 'clear') {
     for (const [binding, p] of players) {
       const w = p.trialContext ? getWorld() : getRealWorld();
-      if (!p.win) { if (p.context !== projectContext() || !w.party.some(pc => pc.id === p.pcId)) { players.delete(binding); saveBindings(); } continue; }
-      if (p.win.closed) { players.delete(binding); saveBindings(); continue; }
+      if (!transport.hasPeer(binding)) {
+        if (transport.peerClosed(binding) || p.context !== projectContext() || !w.party.some(pc => pc.id === p.pcId)) {
+          players.delete(binding); saveBindings(); transport.dropPeer(binding);
+        }
+        continue;
+      }
       // A new project requires a fresh host binding. Trial leaves the real project untouched.
       const context = projectContext();
       const valid = p.context === context && (!p.trialContext || !!getUI().trial && p.trialContext === worldContext()) && w.party.some(pc => pc.id === p.pcId);
@@ -311,25 +291,36 @@ export function send(body: SyncBody, to?: string) {
             pathway: currentPathwayOf(w.party.find((pc) => pc.id === p.pcId) ?? { skills: [] }),
             avatar: w.party.find((pc) => pc.id === p.pcId)?.avatar ?? null }
           : body;
-      try { p.win.postMessage(msg(out), target()); } catch { /* closed */ }
-      if (!valid) { players.delete(binding); saveBindings(); }
+      transport.sendToPeer(binding, msg(out));
+      if (!valid) { players.delete(binding); saveBindings(); transport.dropPeer(binding); }
     }
     return;
   }
   const out = msg(body);
   if (body.type === 'hello') {
-    if (window.opener && !window.opener.closed) window.opener.postMessage(out, messageTarget(hostOriginForPlayer()));
+    transport.sendToHost(out);
     return;
   }
-  if (body.type === 'alive') for (const p of players.values()) {
-    if (p.win && !p.win.closed) try { p.win.postMessage(out, target()); } catch { /* closed */ }
+  if (body.type === 'alive') for (const binding of players.keys()) {
+    if (transport.hasPeer(binding)) transport.sendToPeer(binding, out);
   }
   // 玩家端回传判定的掷骰结果：直接回给打开它的那个主持人窗口。
-  if (body.type === 'judge-roll' || body.type === 'say' || body.type === 'move' || body.type === 'code-submit') {
-    if (window.opener && !window.opener.closed) { try { window.opener.postMessage(out, messageTarget(hostOriginForPlayer())); } catch { /* closed */ } }
+  if (body.type === 'judge-roll' || body.type === 'say' || body.type === 'move' || body.type === 'code-submit' || body.type === 'skill-decision') {
+    transport.sendToHost(out);
     return;
   }
-  try { channel?.postMessage(out); } catch { /* unavailable */ }
+  transport.broadcast(out);
+}
+
+/** 守卫的入口里，binding 和窗口来源都可能传进来：测试传窗口，WebSocket 传 binding。 */
+type PeerRef = string | MessageEventSource | null;
+function bindingOf(ref: PeerRef): string | null {
+  if (typeof ref === 'string') return players.has(ref) ? ref : null;
+  return transport.bindingFor(ref);
+}
+/** 供 consent 这类规则层使用：把传输层认出来的 binding 换成 pcId。 */
+export function pcIdForBinding(binding: string): string | null {
+  return players.get(binding)?.pcId ?? null;
 }
 
 /** 这条消息该发到哪一类窗口：试玩里的判定只发给试玩窗口，真实世界的判定只发给真实窗口。 */
@@ -348,27 +339,28 @@ function codeForPlayer(pcId: string): CodeRequest | null {
 export function pushCodeRequest(pcId: string): void {
   const request = codeForPlayer(pcId);
   if (!request) return;
-  for (const [, entry] of players) {
-    if (entry.pcId !== pcId || !entry.win || entry.win.closed || !sameContextWindow(entry)) continue;
+  for (const [binding, entry] of players) {
+    if (entry.pcId !== pcId || !transport.hasPeer(binding) || !sameContextWindow(entry)) continue;
     const msg: SyncMsg = { type: 'code-request', request, __ts: 'ts-map', seq: rand(), from: SESSION, inst: INST, born: BORN };
-    try { entry.win.postMessage(msg, target()); } catch { /* closed */ }
+    transport.sendToPeer(binding, msg);
   }
 }
 
 /** 密码裁定完了：玩家窗口收到反馈并收掉输入框。只发文字，不发密码和门锁内部数据。 */
 export function pushCodeResult(pcId: string, id: string, text?: string): void {
-  for (const [, entry] of players) {
-    if (entry.pcId !== pcId || !entry.win || entry.win.closed || !sameContextWindow(entry)) continue;
+  for (const [binding, entry] of players) {
+    if (entry.pcId !== pcId || !transport.hasPeer(binding) || !sameContextWindow(entry)) continue;
     const msg: SyncMsg = { type: 'code-result', id, ...(text ? { text } : {}), __ts: 'ts-map', seq: rand(), from: SESSION, inst: INST, born: BORN };
-    try { entry.win.postMessage(msg, target()); } catch { /* closed */ }
+    transport.sendToPeer(binding, msg);
   }
 }
 
 /** 玩家窗口发来的密码：只认绑定给「这条等待」的那扇窗。 */
-export function onCodeSubmit(m: Extract<SyncMsg, { type: 'code-submit' }>, source: MessageEventSource | null): void {
+export function onCodeSubmit(m: Extract<SyncMsg, { type: 'code-submit' }>, ref: PeerRef): void {
   const p = getUI().pendingCode;
   if (!p || p.id !== m.id) return;
-  const entry = [...players.values()].find((e) => e.win === source);
+  const binding = bindingOf(ref);
+  const entry = binding ? players.get(binding) : undefined;
   if (!entry || entry.pcId !== p.pcId) return;
   if (!sameContextWindow(entry)) return;
   if (m.from !== SESSION) return;
@@ -381,8 +373,8 @@ export function onCodeSubmit(m: Extract<SyncMsg, { type: 'code-submit' }>, sourc
 /** 开出判定后，直接把「轮到你了」推到对应玩家的窗口。 */
 /** 这个角色有没有开着的玩家窗口：有就让他自己掷，没有就见证者代掷。 */
 export function playerWindowFor(pcId: string, trialContext: string | null = getUI().trial ? worldContext() : null): boolean {
-  for (const e of players.values()) {
-    if (e.pcId !== pcId || !e.win || e.win.closed) continue;
+  for (const [binding, e] of players) {
+    if (e.pcId !== pcId || !transport.hasPeer(binding)) continue;
     // 试玩窗口和真实窗口不能互相冒充：只认当前上下文的那个。
     if ((e.trialContext ?? null) === trialContext) return true;
   }
@@ -393,22 +385,21 @@ export function pushJudgmentRequest(pcId: string): void {
   // 只发「要掷什么」，不发主持端内部的结算数据：
   // jump 里带着落点、摔伤档，推给玩家等于把结果提前告诉他；context 也不给玩家。
   for (const [binding, entry] of players) {
-    if (entry.pcId !== pcId || !entry.win || entry.win.closed || !sameContextWindow(entry)) continue;
+    if (entry.pcId !== pcId || !transport.hasPeer(binding) || !sameContextWindow(entry)) continue;
     const p = pendingFor(pcId, entry.trialContext);
     if (!p) continue;
     const judgment = forPlayer(p);
     const msg: SyncMsg = { type: 'judge-request', judgment, __ts: 'ts-map', seq: rand(), from: SESSION, inst: INST, born: BORN };
-    try { entry.win.postMessage(msg, target()); } catch { /* closed */ }
-    void binding;
+    transport.sendToPeer(binding, msg);
   }
 }
 
 /** 取消判定时把「别等了」推到那个玩家的窗口：不然他的骰盘会一直挂着，掷了也没人接。 */
 export function pushJudgeCancel(pcId: string, judgmentId: string): void {
-  for (const [, entry] of players) {
-    if (entry.pcId !== pcId || !entry.win || entry.win.closed || !sameContextWindow(entry)) continue;
+  for (const [binding, entry] of players) {
+    if (entry.pcId !== pcId || !transport.hasPeer(binding) || !sameContextWindow(entry)) continue;
     const msg: SyncMsg = { type: 'judge-cancel', id: judgmentId, __ts: 'ts-map', seq: rand(), from: SESSION, inst: INST, born: BORN };
-    try { entry.win.postMessage(msg, target()); } catch { /* closed */ }
+    transport.sendToPeer(binding, msg);
   }
 }
 
@@ -425,8 +416,8 @@ export function closePendingJudgment(): void {
  * 玩家窗口发来的一句话：落到主持人这边的 world 里，等见证者接。
  * 发言人和地图都用主持人这边的绑定信息，不信玩家自报的身份。
  */
-function onSay(m: Extract<SyncMsg, { type: 'say' }>, source: MessageEventSource | null): void {
-  const binding = [...players.entries()].find(([, p]) => p.win === source)?.[0];
+function onSay(m: Extract<SyncMsg, { type: 'say' }>, ref: PeerRef): void {
+  const binding = bindingOf(ref);
   const p = binding ? players.get(binding) : undefined;
   if (!p) return;
   const t = getUI().trial;
@@ -448,43 +439,43 @@ function trialFlagsFor(pcId: string): { paused: boolean; isCurrent: boolean } | 
 /** 试玩执行一步移动。trial 和 sync 互相 import，用注册回调避开直接依赖。
  * 返回动作结果而不是“有没有 msg”：转身、起跳确认、跳过去成功都可能有提示，
  * 不能把提示本身当成失败。 */
-export type TrialMoveSignal = 'turn' | 'move' | 'prompt' | 'failed';
 let trialMoveHandler: ((dx: number, dy: number) => TrialMoveSignal) | null = null;
 export function registerTrialMove(fn: (dx: number, dy: number) => TrialMoveSignal): void { trialMoveHandler = fn; }
 
-function replyMove(entry: { win: Window | null }, ok: boolean, msg: string, kind: TrialMoveSignal): void {
-  try {
-    entry.win?.postMessage({ type: 'move-result', ok, msg, kind, __ts: 'ts-map', seq: rand(), from: SESSION, inst: INST, born: BORN }, target());
-  } catch { /* closed */ }
+function replyMove(binding: string, ok: boolean, msg: string, kind: TrialMoveSignal): void {
+  transport.sendToPeer(binding, { type: 'move-result', ok, msg, kind, __ts: 'ts-map', seq: rand(), from: SESSION, inst: INST, born: BORN });
 }
 
 /**
  * 玩家窗口按了方向键。
  * 身份用主持人这边的绑定反查，不信玩家自报；不是他的回合一概不认。
  */
-export function onMove(m: Extract<SyncMsg, { type: 'move' }>, source: MessageEventSource | null): void {
-  const binding = [...players.entries()].find(([, p]) => p.win === source)?.[0];
-  const entry = binding ? players.get(binding) : undefined;
+export function onMove(m: Extract<SyncMsg, { type: 'move' }>, ref: PeerRef): void {
+  const binding = bindingOf(ref);
+  if (!binding) return;
+  const entry = players.get(binding);
   if (!entry || !trialMoveHandler) return;
   if (!Number.isInteger(m.dx) || !Number.isInteger(m.dy)) return;
   if (Math.abs(m.dx) + Math.abs(m.dy) !== 1) return; // 只认一格一步
   const t = getUI().trial;
   if (!t) return;
   const pl = t.players[t.current];
-  if (!pl || pl.pcId !== entry.pcId) return replyMove(entry, false, '现在不是你的回合', 'failed');
-  if (pl.paused) return replyMove(entry, false, '见证者暂停了你的操作', 'failed');
+  if (!pl || pl.pcId !== entry.pcId) return replyMove(binding, false, '现在不是你的回合', 'failed');
+  if (pl.paused) return replyMove(binding, false, '见证者暂停了你的操作', 'failed');
   const outcome = trialMoveHandler(m.dx, m.dy);
   const msg = getUI().trial?.msg ?? '';
   // 转身、起跳确认、跳过去成功都不是失败；只有 failed 才弹红条。
   const ok = outcome === 'turn' || outcome === 'move' || outcome === 'prompt';
-  replyMove(entry, ok, msg, outcome);
+  replyMove(binding, ok, msg, outcome);
 }
 
-export function onJudgeRoll(m: Extract<SyncMsg, { type: 'judge-roll' }>, source: MessageEventSource | null): void {
+export function onJudgeRoll(m: Extract<SyncMsg, { type: 'judge-roll' }>, ref: PeerRef): void {
   const p = getUI().pendingJudgment;
   if (!p || p.id !== m.id) return;
   // 这颗骰子必须来自绑给「判定角色」的那个窗口：别的玩家窗口、甚至别的标签页塞来的都不算。
-  const entry = [...players.values()].find((e) => e.win === source);
+  const binding = bindingOf(ref);
+  if (!binding) return;
+  const entry = players.get(binding);
   if (!entry || entry.pcId !== p.subjectId) return;
   // 也不能跨上下文：判定自己的上下文要对，来源窗口也得是同一类窗口——
   // 试玩窗口不能替真实判定掷，真实窗口也不能替试玩判定掷。
@@ -519,31 +510,8 @@ export function reportJudgmentRoll(body: Extract<SyncBody, { type: 'judge-roll' 
 }
 
 /** 订阅消息（两条路都听，按编号去重）。 */
-export function listen(fn: (m: SyncMsg, source: MessageEventSource | null) => void, player = isPlayerEntry()) {
-  const seen = new Set<string>();
-  const handle = (e: MessageEvent) => {
-    if (!isMsg(e.data) || seen.has(e.data.seq)) return;
-    // 主持端这边：自己的窗口（另一个编辑器标签、BroadcastChannel）来自本机 origin，
-    // 玩家窗口来自配置的玩家 origin——分端口部署时这两个不一样，得都认。
-    const allowed = player
-      ? [hostOriginForPlayer()]
-      : e.data.type === 'hello'
-        ? [playerWindowOrigin()]
-        : [location.origin, playerWindowOrigin()];
-    if (e.origin && !allowed.includes(e.origin)) return;
-    // Cross-origin windows never participate in host session-collision negotiation.
-    // 玩家窗口回传的掷骰结果例外：那是绑定窗口自己发的，要收。
-    if (!player && e.data.type !== 'hello' && e.data.type !== 'judge-roll' && e.data.type !== 'say' && e.data.type !== 'move' && e.data.type !== 'code-submit' && e.source) return;
-    seen.add(e.data.seq);
-    if (seen.size > 500) seen.clear();
-    fn(e.data, e.source);
-  };
-  channel?.addEventListener('message', handle);
-  window.addEventListener('message', handle);
-  return () => {
-    channel?.removeEventListener('message', handle);
-    window.removeEventListener('message', handle);
-  };
+export function listen(fn: (m: SyncMsg, source: MessageEventSource | null, from?: string | null) => void, _player = isPlayerEntry()) {
+  return transport.onMessage((m, meta) => fn(m, meta.source, meta.from));
 }
 
 /**
@@ -553,7 +521,7 @@ export function listen(fn: (m: SyncMsg, source: MessageEventSource | null) => vo
  * - 只回应找自己的玩家窗口（没指定找谁的也回应），顺便记下它，之后直接 postMessage。
  */
 export function listenAsEditor(onHello: () => void) {
-  const off = listen((m, source) => {
+  const off = transport.onMessage((m, meta) => {
     // 另一个编辑器实例在用同一个会话标识（复制了标签页）：不管消息来得多晚，都按"后打开的让"处理
     // 玩家窗口的 judge-roll 也带同一个 SESSION，但那是绑定窗口发的，不是复制出来的编辑器，得放行。
     // skill-decision 也要放行：玩家点「同意/不同意」时同源部署下玩家窗口的 sessionStorage 是主持人的副本，
@@ -566,17 +534,16 @@ export function listenAsEditor(onHello: () => void) {
       return;
     }
     if (m.type === 'claim' || m.type === 'taken' || m.type === 'alive') return;
-    if (m.type === 'judge-roll') { onJudgeRoll(m, source); return; }
-    if (m.type === 'code-submit') { onCodeSubmit(m, source); return; }
-    if (m.type === 'say') { onSay(m, source); return; }
-    if (m.type === 'move') { onMove(m, source); return; }
+    if (m.type === 'judge-roll') { onJudgeRoll(m, meta.from ?? meta.source); return; }
+    if (m.type === 'code-submit') { onCodeSubmit(m, meta.from ?? meta.source); return; }
+    if (m.type === 'say') { onSay(m, meta.from ?? meta.source); return; }
+    if (m.type === 'move') { onMove(m, meta.from ?? meta.source); return; }
     if (m.type !== 'hello' || (m.to && m.to !== SESSION)) return;
     const p = m.binding && players.get(m.binding);
-    if (!p || !source || !('postMessage' in source) || p.win && source !== p.win) return;
-    p.win = source as Window;
+    if (!p || !transport.bindPeer(m.binding!, meta.source)) return;
     onHello();
   });
-  if (channel) { quietUntil = Date.now() + 250; send({ type: 'claim' }); }
+  if (transport.hasBroadcast) { quietUntil = Date.now() + 250; send({ type: 'claim' }); }
   const beat = window.setInterval(() => send({ type: 'alive' }), 2000);
   return () => { off(); clearInterval(beat); };
 }
@@ -595,10 +562,10 @@ export function listenAsPlayer(fn: (m: SyncMsg) => void) {
   let inst: string | null = null;
   let lastHeard = 0;
   const QUIET = 5000;
-  const off = listen((m, source) => {
+  const off = transport.onMessage((m, meta) => {
     if (m.type !== 'world' && m.type !== 'play' && m.type !== 'stop' && m.type !== 'clear' && m.type !== 'alive' && m.type !== 'judge-request' && m.type !== 'judge-cancel' && m.type !== 'code-request' && m.type !== 'code-result' && m.type !== 'move-result') return;
     if (!bound || !binding) return;
-    if (m.type !== 'alive' && (!source || source !== window.opener)) return;
+    if (m.type !== 'alive' && meta.from !== 'host') return;
     if (m.from !== bound) return;
     if (inst && m.inst !== inst) {
       if (Date.now() - lastHeard < QUIET) return; // 原来那个还活着：这是复制出来的，不认
@@ -607,7 +574,7 @@ export function listenAsPlayer(fn: (m: SyncMsg) => void) {
     inst = m.inst;
     lastHeard = Date.now();
     if (m.type !== 'alive') fn(m);
-  }, true);
+  });
   send({ type: 'hello', binding: binding ?? undefined }, bound ?? undefined);
   const beat = window.setInterval(() => {
     if (lastHeard && Date.now() - lastHeard > 10000) fn({ type: 'clear', __ts: 'ts-map', seq: rand(), from: bound ?? '', inst: INST, born: BORN });
