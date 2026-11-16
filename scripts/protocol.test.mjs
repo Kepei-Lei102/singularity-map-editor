@@ -42,7 +42,13 @@ test('握手载荷：缺字段/空字段不认', () => {
   assert.equal(api.isRoomReconnectedPayload({ binding: 'b' }), true);
   assert.equal(api.isPeerJoinedPayload({ inviteId: 'i', binding: 'b' }), true);
   assert.equal(api.isPeerLeftPayload({ binding: 'b' }), true);
+  assert.equal(api.isRoomInvitePayload({ pcId: 'pc' }), true);
+  assert.equal(api.isRoomInvitePayload({ pcId: 3 }), false);
+  assert.equal(api.isRoomClosedPayload({ reason: 'host-closed' }), true);
+  assert.equal(api.isRoomClosedPayload({ reason: 3 }), false);
   assert.equal(api.isErrorPayload({ code: 'E' }), true);
+  assert.equal(api.isErrorPayload({ code: 'E', message: 'x' }), true);
+  assert.equal(api.isErrorPayload({ code: 'E', message: 3 }), false);
   assert.equal(api.isErrorPayload({}), false);
 });
 
@@ -132,4 +138,19 @@ test('relay 路由：主持→在线 binding，玩家→主持，错房/离线�
   assert.equal(api.relayRoute(room, 'player', 'host', undefined), null);
   api.closeRoom(room);
   assert.equal(api.relayRoute(room, 'host', 'host', 'b1'), null);
+});
+
+test('坏状态防线：被污染的 playerTokens/空邀请 token 不会变成玩家路由', () => {
+  const room = api.createRoomState('R', 'host');
+  api.addInvite(room, 'i1', 'inv1');
+  api.consumeInvite(room, 'inv1', 'b1', 'pt1');
+  // 正常路径不会出现；这里模拟被污染的房间状态。
+  room.playerTokens.host = 'b1';
+  assert.equal(api.playerReconnect(room, 'host'), null);
+  assert.equal(api.relayRoute(room, 'player', 'host', undefined), null);
+  const room2 = api.createRoomState('R2', 'host2');
+  room2.inviteTokens[''] = 'i-empty';
+  room2.invites['i-empty'] = { inviteId: 'i-empty', token: '', usedBy: null };
+  assert.deepEqual(api.consumeInvite(room2, '', 'b2', 'pt2'), { ok: false, reason: 'invalid' });
+  assert.equal(room2.invites['i-empty'].usedBy, null);
 });

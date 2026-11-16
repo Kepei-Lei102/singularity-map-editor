@@ -15,17 +15,21 @@
     "preview": "vite preview",
     "build:single": "tsc --noEmit && SINGLE=1 vite build --outDir release-build",
     "start": "node scripts/open.mjs",
-    "check:secrets": "node scripts/扫涉密.mjs"
+    "check:secrets": "node scripts/扫涉密.mjs",
+    "server": "node scripts/serve.mjs"
   },
   "dependencies": {
     "immer": "10.1.1",
     "jszip": "3.10.1",
     "react": "18.3.1",
-    "react-dom": "18.3.1"
+    "react-dom": "18.3.1",
+    "ws": "^8.23.0"
   },
   "devDependencies": {
+    "@types/node": "^24.19.2",
     "@types/react": "18.3.12",
     "@types/react-dom": "18.3.1",
+    "@types/ws": "^8.5.12",
     "@vitejs/plugin-react": "4.3.4",
     "jsdom": "^26.1.0",
     "typescript": "5.6.3",

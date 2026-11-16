@@ -29,6 +29,8 @@ export interface RoomJoinedPayload { binding: string; playerToken: string }
 export interface RoomReconnectedPayload { binding: string }
 export interface PeerJoinedPayload { inviteId: string; binding: string }
 export interface PeerLeftPayload { binding: string }
+export interface RoomInvitePayload { pcId?: string }
+export interface RoomClosedPayload { reason?: string }
 export interface ErrorPayload { code: string; message?: string }
 
 export interface Envelope {
@@ -41,7 +43,7 @@ export interface Envelope {
   to?: string;
   /** 服务器下行 relay 时填来源 binding；客户端上行不填。 */
   from?: string;
-  /** 现有 SyncBody；服务器不解析。 */
+  /** 握手字段或现有 SyncBody；服务器不解析业务正文。 */
   payload?: unknown;
 }
 
@@ -94,8 +96,14 @@ export function isPeerJoinedPayload(v: unknown): v is PeerJoinedPayload {
 export function isPeerLeftPayload(v: unknown): v is PeerLeftPayload {
   return isRecord(v) && nonEmpty(v.binding);
 }
+export function isRoomInvitePayload(v: unknown): v is RoomInvitePayload {
+  return isRecord(v) && (v.pcId === undefined || typeof v.pcId === 'string');
+}
+export function isRoomClosedPayload(v: unknown): v is RoomClosedPayload {
+  return isRecord(v) && (v.reason === undefined || typeof v.reason === 'string');
+}
 export function isErrorPayload(v: unknown): v is ErrorPayload {
-  return isRecord(v) && nonEmpty(v.code);
+  return isRecord(v) && nonEmpty(v.code) && (v.message === undefined || typeof v.message === 'string');
 }
 
 export function clientCanSend(role: ClientRole, type: EnvelopeType): boolean {
