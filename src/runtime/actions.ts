@@ -12,7 +12,7 @@ import { hasFineDetail } from '../core/grid';
 import { materialAtCell } from '../scene/material';
 import { objectRect } from '../scene/architecture';
 import { applyKnowledge, type KnowledgeEffect } from '../rules/interaction';
-import type { CellGroup, Flow, GameMap, LogEntry, MapObject, MediaAttach, Room, RoomObjectSnapshot, Tier, Token, World } from '../core/types';
+import type { CellGroup, Flow, GameMap, LogEntry, MapObject, MediaAttach, Room, RoomObjectSnapshot, TextureFit, Tier, Token, World } from '../core/types';
 import { newObject } from '../core/defaults';
 import { NODE_H, NODE_W } from '../rules/flow';
 export { NODE_H, NODE_W, reachable } from '../rules/flow';
@@ -195,6 +195,7 @@ export function deleteMapObject(mapId: string, objectId: string) {
     if (!m) return;
     const removed = new Set([objectId, ...m.objects.filter(o => o.opening?.wallId === objectId).map(o => o.id)]);
     m.objects = m.objects.filter(o => !removed.has(o.id));
+    if (m.groups) m.groups = m.groups.filter((g) => !g.objectId || !removed.has(g.objectId));
     for (const f of d.flows) for (const n of f.nodes) { if (n.effect?.mapId === mapId && removed.has(n.effect.objectId)) n.effect = null; if (n.applied?.mapId === mapId && removed.has(n.applied.objectId)) delete n.applied; }
     for (const r of m.rooms) {
       if (r.reset) r.reset.objects = r.reset.objects.filter((s) => !removed.has(s.id));
@@ -702,7 +703,7 @@ export function reshapeMaps(mapIds: string[], left: number, top: number, right: 
       const shiftGroups = (groups: CellGroup[] | undefined) => groups?.map((g) => ({ ...g, cells: g.cells.flatMap((key) => {
         const x = key % (oldWidth * 3) + left * 3, y = Math.floor(key / (oldWidth * 3)) + top * 3;
         return x >= 0 && y >= 0 && x < W * 3 && y < H * 3 ? [y * W * 3 + x] : [];
-      }) }));
+      }), ...(g.bounds ? { bounds: { x0: g.bounds.x0 + left * 3, y0: g.bounds.y0 + top * 3, x1: g.bounds.x1 + left * 3, y1: g.bounds.y1 + top * 3 } } : {}) }));
       if (m.groups) m.groups = shiftGroups(m.groups);
       for (const L of [m, ...Object.values(m.views)]) {
         if (L.seen.groups) L.seen.groups = shiftGroups(L.seen.groups);
@@ -1344,6 +1345,88 @@ export function paintMaterialSubcells(mapId: string, cells3: [number, number][],
       if (materialId) m.fineMaterials[key] = materialId;
       else delete m.fineMaterials[key];
     }
+  });
+}
+
+
+// ---------- 贴图组（CellGroup）----------
+//
+// 贴图组只是画出来的外观，不参与移动、视野、迷雾、高度和 D100。
+// 一次操作只改一个组，并且放在一个 update 里，撤销/重做一步到位。
+
+/** 新建一个空组；返回 id，找不到地图返回 null。默认地面层 z=0。 */
+export function addCellGroup(mapId: string, name?: string, z = 0): string | null {
+  const map = findMap(getWorld(), mapId);
+  if (!map) return null;
+  const id = uid();
+  update((d) => {
+    const m = findMap(d, mapId); if (!m) return;
+    m.groups ??= [];
+    m.groups.push({ id, name: name?.trim() || `贴图组 ${m.groups.length + 1}`, cells: [], z, texture: undefined });
+  });
+  return id;
+}
+
+export function deleteCellGroup(mapId: string, groupId: string) {
+  update((d) => {
+    const m = findMap(d, mapId); if (!m) return;
+    m.groups = (m.groups ?? []).filter((g) => g.id !== groupId);
+  });
+  if (getUI().groupId === groupId) setUI({ groupId: null, ...(getUI().tool === 'groupPaint' ? { tool: 'select' as const } : {}) });
+}
+
+export function renameCellGroup(mapId: string, groupId: string, name: string) {
+  update((d) => {
+    const m = findMap(d, mapId); if (!m) return;
+    const g = m.groups?.find((x) => x.id === groupId); if (g) g.name = name;
+  });
+}
+
+/** 往组里涂小格；erase=true 就擦掉。重复格只留一份，按 key 排好。 */
+export function paintCellGroup(mapId: string, groupId: string, cells3: [number, number][], erase = false) {
+  update((d) => {
+    const m = findMap(d, mapId); if (!m) return;
+    const g = m.groups?.find((x) => x.id === groupId); if (!g) return;
+    const set = new Set(g.cells);
+    for (const [x3, y3] of cells3) {
+      if (x3 < 0 || y3 < 0 || x3 >= m.width * 3 || y3 >= m.height * 3) continue;
+      const key = subKey(m, x3, y3);
+      if (erase) set.delete(key); else set.add(key);
+    }
+    g.cells = [...set].sort((a, b) => a - b);
+  });
+}
+
+/** 绑一张图；null 表示解掉贴图，但组和格子保留。 */
+export function setCellGroupTexture(mapId: string, groupId: string, mediaId: string | null) {
+  update((d) => {
+    const m = findMap(d, mapId); if (!m) return;
+    const g = m.groups?.find((x) => x.id === groupId); if (!g) return;
+    if (!mediaId) delete g.texture;
+    else g.texture = { mediaId, fit: g.texture?.fit ?? 'fill', opacity: g.texture?.opacity ?? 1 };
+  });
+}
+
+export function setCellGroupFit(mapId: string, groupId: string, fit: TextureFit) {
+  update((d) => {
+    const m = findMap(d, mapId); if (!m) return;
+    const g = m.groups?.find((x) => x.id === groupId); if (!g?.texture) return;
+    g.texture.fit = fit;
+  });
+}
+
+export function setCellGroupOpacity(mapId: string, groupId: string, opacity: number) {
+  update((d) => {
+    const m = findMap(d, mapId); if (!m) return;
+    const g = m.groups?.find((x) => x.id === groupId); if (!g?.texture) return;
+    g.texture.opacity = Math.max(0, Math.min(1, Number.isFinite(opacity) ? opacity : 1));
+  });
+}
+
+export function setCellGroupZ(mapId: string, groupId: string, z: number) {
+  update((d) => {
+    const m = findMap(d, mapId); if (!m) return;
+    const g = m.groups?.find((x) => x.id === groupId); if (g) g.z = Math.max(-1000000, Math.min(1000000, Math.round(Number.isFinite(z) ? z : 0)));
   });
 }
 

@@ -71,6 +71,7 @@ export function Sidebar() {
           })}
         </div>
         {ui.tool === 'pan' && <div className="hint">直接拖动地图平移；从家具、触发区或棋子上拖动也只移动视图，不改变选择。P 切到平移，V 回到选择/移动。</div>}
+        {ui.tool === 'groupPaint' && <div className="hint">先在右侧「贴图组」里选一个组；拖动往组里涂小格，Shift 拖动擦掉。贴图只改外观。</div>}
         {ui.tool.startsWith('fog') && <Row label="迷雾目标"><select value={ui.knowledgeTarget} onChange={e => setUI({ knowledgeTarget: e.target.value })}>
           <option value="">全队</option>{w.party.map(p => <option key={p.id} value={p.id}>{p.name}{w.visionMode === 'grouped' ? ' 所在组' : ''}</option>)}
         </select></Row>}

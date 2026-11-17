@@ -44,8 +44,16 @@ export interface CellGroup {
   name: string;
   cells: number[];
   texture?: TextureSpec;
+  /** 物件自带贴图：替换物件外观，不占地面。 */
   objectId?: Id;
+  /** 地面/贴花组排序；数字越大越靠上。 */
   z?: number;
+  /** 玩家载荷里只带看得见的格子时，仍用整组的包围盒铺图（小格坐标，开区间）。 */
+  bounds?: { x0: number; y0: number; x1: number; y1: number };
+  /** 仅记忆层用：这个记忆组来自哪个实时组。 */
+  sourceId?: Id;
+  /** 仅记忆层用：这份记忆组记的是哪一版贴图（mediaId~fit~opacity）。 */
+  textureKey?: string;
 }
 
 export interface SecretTiers {
@@ -287,6 +295,8 @@ export interface Memory {
   materialCells?: Record<number, Id>;
   /** 记得的贴图组快照；灰区按当时的样子画。 */
   groups?: CellGroup[];
+  /** 每个记忆贴图组最后一次看见是哪一版；多份视野合并时用它挑最新贴图。 */
+  groupRevs?: Record<Id, number>;
   cells: string[]; // 记得的地形，'' = 不记得
   objects: SeenObject[];
 }

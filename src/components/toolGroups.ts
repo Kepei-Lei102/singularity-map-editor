@@ -3,13 +3,13 @@
 import type { Mode, Tool } from '../core/store';
 
 /** 工具按「你在改什么」分组，不是按功能分类。加新工具往对应组里塞就行。 */
-export type ToolGroup = 'view' | 'terrain' | 'arch' | 'height' | 'content' | 'fog';
+export type ToolGroup = 'view' | 'terrain' | 'texture' | 'arch' | 'height' | 'content' | 'fog';
 
 export const GROUP_LABEL: Record<ToolGroup, string> = {
-  view: '视图', terrain: '地形', arch: '建筑', height: '高度', content: '内容', fog: '迷雾',
+  view: '视图', terrain: '地形', texture: '贴图', arch: '建筑', height: '高度', content: '内容', fog: '迷雾',
 };
 
-export const GROUP_ORDER: ToolGroup[] = ['view', 'terrain', 'arch', 'height', 'content', 'fog'];
+export const GROUP_ORDER: ToolGroup[] = ['view', 'terrain', 'texture', 'arch', 'height', 'content', 'fog'];
 
 /** 每个工具的 [工具, 标签, 快捷键]。 */
 export const ALL_TOOLS: [Tool, string, string, ToolGroup][] = [
@@ -20,6 +20,7 @@ export const ALL_TOOLS: [Tool, string, string, ToolGroup][] = [
   ['erase', '橡皮', 'E', 'terrain'],
   ['room', '房间', 'M', 'terrain'],
   ['d100', 'D100 区域', 'D', 'terrain'],
+  ['groupPaint', '分组贴图', '', 'texture'],
   ['wall', '薄墙', '', 'arch'],
   ['glass', '玻璃墙', '', 'arch'],
   ['archDoor', '建筑门', '', 'arch'],
@@ -55,7 +56,7 @@ export const toolLabel = (t: Tool): string => TOOL_LABEL.get(t) ?? t;
 /** 编辑地图 = 形状；备团 = 内容；带团 = 跑。 */
 export const MODE_TOOLS: Record<Mode, Tool[]> = {
   edit: ['pan', 'wall', 'glass', 'archDoor', 'archErase', 'select',
-    'paint', 'fill', 'erase', 'object', 'zone', 'conn', 'room', 'd100', 'heightBrush', 'heightRect'],
+    'paint', 'fill', 'erase', 'object', 'zone', 'conn', 'room', 'd100', 'heightBrush', 'heightRect', 'groupPaint'],
   prep: ['select', 'pan', 'token', 'fogReveal', 'fogHide', 'fogBlack'],
   run: ['select', 'pan', 'token', 'fogReveal', 'fogHide', 'fogBlack'],
 };

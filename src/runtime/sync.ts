@@ -3,7 +3,7 @@ import { identityKnown, playerSeen, UNKNOWN_OBJECT } from '../scene/identity';
 import { objectEnabled } from '../core/objectData.js';
 import { isArchitectureObject, clipArchitecture, fogAt, tokenPosition } from '../scene/architecture';
 import { anyVisible } from '../scene/memory';
-import type { CodeRequest, CombatNotice, DiceJudgment, Endpoint, GameMap, PendingJudgment, PlayerClue, VisionLayer, World } from '../core/types';
+import type { CellGroup, CodeRequest, CombatNotice, DiceJudgment, Endpoint, GameMap, PendingJudgment, PlayerClue, VisionLayer, World } from '../core/types';
 import { say, utterancesFor } from '../rules/dialogue';
 import { visibleMarks } from '../scene/perception';
 import { viewerOf, visiblePoint } from '../scene/sight';
@@ -15,6 +15,7 @@ import { createLocalTransport } from './transportLocal';
 import { createSwitchTransport, type Transport } from './transport';
 import type { SyncBody, SyncMsg, TrialMoveSignal } from './messages';
 export type { SyncBody, SyncMsg, TrialMoveSignal } from './messages';
+import { groupBounds } from '../core/grid';
 import { effectiveLayer, emptyVision } from '../scene/vision';
 import { onProjectReplaced, projectContext } from '../core/store';
 
@@ -206,6 +207,10 @@ export function playerWorld(w: World, mapId: string | null = w.playerMapId, pcId
     ...Object.values(pm.fineMaterials ?? {}),
     ...Object.values(pm.seen.materialCells ?? {}),
   ] : []);
+  const usedTextures = new Set([
+    ...(pm?.groups ?? []).flatMap((g) => g.texture ? [g.texture.mediaId] : []),
+    ...(pm?.seen.groups ?? []).flatMap((g) => g.texture ? [g.texture.mediaId] : []),
+  ]);
   const clues: PlayerClue[] = valid ? w.maps.flatMap(m => m.objects.flatMap(o => o.secrets.flatMap(s => {
     const r = s.revealed;
     const manual = r && (r.scope === 'party' || pcId && r.recipients?.includes(pcId)) ? r : undefined;
@@ -220,7 +225,7 @@ export function playerWorld(w: World, mapId: string | null = w.playerMapId, pcId
     party: pcId ? w.party.filter(p => p.id === pcId).map(p => ({ id: p.id, name: p.name, tags: [], color: p.color, attributes: p.attributes, hp: p.hp, hpMax: p.hpMax, me: p.me, meMax: p.meMax })) : [],
     terrains: w.terrains.filter((t) => usedTerrains.has(t.id)),
     materials: (w.materials ?? []).filter((m) => usedMaterials.has(m.id)),
-    flows: [], log: [], npcs: [], media: [], events: [],
+    flows: [], log: [], npcs: [], media: w.media.filter((m) => usedTextures.has(m.id)).map((m) => ({ ...m, name: '贴图' })), events: [],
     ...(() => {
       if (!valid || !pcId) return { judgments: [] };
       const mine = (w.judgments ?? []).filter(j => j.recipients.includes(pcId));
@@ -256,6 +261,7 @@ export function playerMap(m: GameMap, L: VisionLayer, pcId?: string): GameMap {
     }).map(r => playerSeen(r, pcId, m.objects.find(o => o.id === r.id))),
     architecture: [...clipArchitecture(m, L, 1, L.seen.architecture ?? []), ...clipArchitecture(m, L, 2, L.seen.architecture ?? [])],
     materialCells: Object.fromEntries(Object.entries(L.seen.materialCells ?? {}).filter(([key]) => L.fog[+key])),
+    groups: [] as CellGroup[],
   };
   const fineRows = m.width * 3;
   const fineCells = m.fineCells.map((c, key) => {
@@ -266,6 +272,41 @@ export function playerMap(m: GameMap, L: VisionLayer, pcId?: string): GameMap {
     const k = +key, x3 = k % fineRows, y3 = Math.floor(k / fineRows);
     return L.fog[Math.floor(y3 / 3) * m.width + Math.floor(x3 / 3)] === 1;
   }));
+  // 贴图组只发看得见的格子。整组都看见时才带整组包围盒；只看见一角就用可见格的
+  // 包围盒铺图（局部拉伸），不把看不见部分的形状/范围带给玩家。
+  // 物件贴图（objectId）是物件外观，等物件外观那一步再发。
+  const fogOf = (key: number) => {
+    const x3 = key % fineRows, y3 = Math.floor(key / fineRows);
+    return L.fog[Math.floor(y3 / 3) * m.width + Math.floor(x3 / 3)] ?? 0;
+  };
+  const visibleGroup = (g: CellGroup, cells: number[], withFullBounds: boolean): CellGroup => {
+    const out: CellGroup = { ...g, name: '贴图', cells };
+    delete out.bounds;
+    if (withFullBounds) {
+      const bounds = groupBounds(m.width, cells, m.height);
+      if (bounds) out.bounds = bounds;
+    }
+    return out;
+  };
+  const groups = (m.groups ?? []).flatMap((g) => {
+    if (g.objectId) return [];
+    const cells = g.cells.filter((key) => fogOf(key) === 1);
+    return cells.length ? [visibleGroup(g, cells, cells.length === g.cells.length)] : [];
+  });
+  const seenGroups: CellGroup[] = [];
+  for (const g of L.seen.groups ?? []) {
+    if (g.objectId) continue;
+    const cells = g.cells.filter((key) => fogOf(key) === 2).sort((a, b) => a - b);
+    if (!cells.length) continue;
+    const bounds = groupBounds(m.width, cells, m.height);
+    if (!bounds) continue;
+    // 玩家侧不暴露记忆组的内部版本键（原组 id / mediaId~fit~opacity）；id 也换成不透明的序号。
+    const out: CellGroup = { id: `mg${seenGroups.length}`, name: '贴图', cells, bounds };
+    if (g.texture) out.texture = { mediaId: g.texture.mediaId, ...(g.texture.fit !== undefined ? { fit: g.texture.fit } : {}), ...(g.texture.opacity !== undefined ? { opacity: g.texture.opacity } : {}) };
+    if (g.z !== undefined) out.z = g.z;
+    seenGroups.push(out);
+  }
+  seen.groups = seenGroups;
   return {
     id: m.id, name: m.name, layer: m.layer, floor: m.floor, width: m.width, height: m.height,
     fog: [...L.fog], seen, views: {}, autoFog: false,
@@ -274,6 +315,7 @@ export function playerMap(m: GameMap, L: VisionLayer, pcId?: string): GameMap {
     fineCells,
     materialCells: Object.fromEntries(Object.entries(m.materialCells ?? {}).filter(([key]) => L.fog[+key] === 1)),
     fineMaterials,
+    groups,
     d100: m.d100.map(() => 0), rooms: [], roomCells: m.roomCells.map(() => ''), notes: '', spawn: null,
     tokens: m.tokens.filter(t => { const p = tokenPosition(t); return t.pcId === pcId || fogAt(m, L, p.x, p.y) === 1; }),
     objects: m.objects.filter(o => objectEnabled(m, o) && o.kind === 'object' && !isArchitectureObject(o) && !o.hidden && anyVisible({ ...m, ...L }, o)).map(o => ({

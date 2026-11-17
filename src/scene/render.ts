@@ -5,15 +5,16 @@ import { visibleArchitectureGeometry } from '../core/architectureData.js';
 import { isArchitectureObject, clipArchitecture, fogAt, tokenPosition } from './architecture';
 import { anyVisible } from './memory';
 import { terrainAtSubcell } from './terrain';
-import { dominantId, fineKeyOf } from '../core/grid';
+import { dominantId, fineKeyOf, groupBounds } from '../core/grid';
 import { materialAtCell, materialAtSubcell, materialMap, rememberedMaterialAtCell } from './material';
 import type { Selection, Tool, View } from '../core/store';
-import type { GameMap, MapObject, SeenObject, Token, World } from '../core/types';
+import type { CellGroup, GameMap, MapObject, SeenObject, Token, World } from '../core/types';
 import { staleMemories } from './memory';
 import { CONN_ICON, CONN_LABEL } from '../core/types';
 import { CS, colName, distToRect, gridDist } from '../core/util';
 import { CLEAR_BANDS, visibleMarks } from './perception';
 import { viewerOf, visionOf } from './sight';
+import { textureImage } from './texture';
 
 export type Mode = 'edit' | 'prep' | 'run' | 'player';
 export interface Rect { x: number; y: number; w: number; h: number }
@@ -34,6 +35,56 @@ export interface RenderOpts {
   fineEdit?: boolean; // 作者正处在小格编辑：缩小时也强制显示真实小格
 }
 
+
+/** 地面/贴花贴图组。物件组（objectId）留给物件外观那一步，这里不画。 */
+export function drawCellGroups(ctx: CanvasRenderingContext2D, map: GameMap, imageOf: (mediaId: string) => CanvasImageSource | null): void {
+  drawGroups(ctx, map, (map.groups ?? []).filter((g) => !g.objectId && g.texture), imageOf, false);
+}
+
+/** 玩家灰区里记得的贴图组：只画 fog=2 的大格，地形也按记忆判断。 */
+export function drawSeenCellGroups(ctx: CanvasRenderingContext2D, map: GameMap, imageOf: (mediaId: string) => CanvasImageSource | null): void {
+  drawGroups(ctx, map, (map.seen.groups ?? []).filter((g) => !g.objectId && g.texture), imageOf, true);
+}
+
+function drawGroups(ctx: CanvasRenderingContext2D, map: GameMap, list: CellGroup[], imageOf: (mediaId: string) => CanvasImageSource | null, memory: boolean): void {
+  const groups = [...list].sort((a, b) => (a.z ?? 0) - (b.z ?? 0));
+  const fw = map.width * 3, fh = map.height * 3;
+  for (const g of groups) {
+    const texture = g.texture!;
+    const box = g.bounds ?? groupBounds(map.width, g.cells, map.height);
+    if (!box) continue;
+    const img = imageOf(texture.mediaId);
+    if (!img) continue;
+    const path = new Path2D();
+    let drawn = 0;
+    for (const key of g.cells) {
+      if (!Number.isSafeInteger(key) || key < 0 || key >= fw * fh) continue;
+      const x3 = key % fw, y3 = Math.floor(key / fw);
+      if (memory) {
+        const parent = Math.floor(y3 / 3) * map.width + Math.floor(x3 / 3);
+        if (map.fog[parent] !== 2 || !map.seen.cells[parent]) continue;
+      } else if (!terrainAtSubcell(map, x3, y3)) continue;
+      path.rect((x3 / 3) * CS, (y3 / 3) * CS, CS / 3 + .1, CS / 3 + .1);
+      drawn++;
+    }
+    if (!drawn) continue;
+    const dx = (box.x0 / 3) * CS, dy = (box.y0 / 3) * CS;
+    const dw = ((box.x1 - box.x0) / 3) * CS, dh = ((box.y1 - box.y0) / 3) * CS;
+    if (dw <= 0 || dh <= 0) continue;
+    ctx.save();
+    ctx.beginPath();
+    ctx.clip(path);
+    ctx.globalAlpha = Math.max(0, Math.min(1, texture.opacity ?? 1));
+    if (texture.fit === 'contain') {
+      const nw = (img as HTMLImageElement).naturalWidth || 0, nh = (img as HTMLImageElement).naturalHeight || 0;
+      if (nw > 0 && nh > 0) {
+        const scale = Math.min(dw / nw, dh / nh);
+        ctx.drawImage(img, dx + (dw - nw * scale) / 2, dy + (dh - nh * scale) / 2, nw * scale, nh * scale);
+      } else ctx.drawImage(img, dx, dy, dw, dh);
+    } else ctx.drawImage(img, dx, dy, dw, dh);
+    ctx.restore();
+  }
+}
 export interface Numbered { label: string; kind: 'object' | 'zone' | 'token' | 'conn'; id: string; x: number; y: number; w: number; h: number; name: string }
 
 /** 编号规则（主编辑器、玩家窗口、给 AI 的图都用这一套）：物件和触发区按顺序 O/Z，棋子 T，连接点 C。
@@ -482,6 +533,9 @@ export function render(
         }
       }
     }
+
+  drawCellGroups(ctx, map, (id) => textureImage(id));
+  if (player) drawSeenCellGroups(ctx, map, (id) => textureImage(id));
 
   // 高度：整层平就不用画。有高度的地方叠一层暖色，越高越亮，右上角标数字。
   if (!player && map.heights && map.heights.some((v) => v)) {

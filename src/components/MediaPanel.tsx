@@ -47,7 +47,10 @@ export function MediaPanel() {
               // 文件本身先不删：撤销、试玩结束恢复时还要用到。浏览器里多留一份不碍事，导出的工程只带还在用的。
               update((d) => {
                 d.media = d.media.filter((x) => x.id !== m.id);
-                d.maps.forEach((mp) => mp.objects.forEach((o) => { o.media = o.media.filter((a) => a.mediaId !== m.id); }));
+                d.maps.forEach((mp) => {
+                  mp.objects.forEach((o) => { o.media = o.media.filter((a) => a.mediaId !== m.id); });
+                  mp.groups?.forEach((g) => { if (g.texture?.mediaId === m.id) delete g.texture; });
+                });
               });
             }}>×</button>
           </span>

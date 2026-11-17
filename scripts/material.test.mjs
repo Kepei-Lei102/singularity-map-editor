@@ -11,7 +11,7 @@ const root = fileURLToPath(new URL('..', import.meta.url));
 const temp = await mkdtemp(join(tmpdir(), 'ts-material-'));
 const bundle = join(temp, 'editor.cjs');
 await build({
-  stdin: { contents: `export * from './src/scene/material'; export * from './src/scene/terrain'; export * from './src/scene/memory'; export * from './src/core/defaults'; export * from './src/core/grid'; export * from './src/core/schema.js'; export * from './src/runtime/actions'; export * from './src/core/store'; export * from './src/runtime/sync'; export * from './src/scene/render';`, resolveDir: root },
+  stdin: { contents: `export * from './src/scene/material'; export * from './src/scene/terrain'; export * from './src/scene/memory'; export * from './src/core/defaults'; export * from './src/core/grid'; export * from './src/core/schema.js'; export * from './src/runtime/actions'; export * from './src/core/store'; export * from './src/runtime/sync'; export * from './src/scene/render'; export * from './src/scene/vision';`, resolveDir: root },
   outfile: bundle, bundle: true, platform: 'node', format: 'cjs', logLevel: 'silent',
 });
 const storage = () => { const data = new Map(); return { getItem: (k) => data.get(k) ?? null, setItem: (k, v) => data.set(k, v), removeItem: (k) => data.delete(k) }; };
@@ -155,4 +155,224 @@ test('玩家记忆材质渲染：fog=2 时画 seen.materialCells，不画实时�
   });
   const wood = api.getWorld().materials.find((x) => x.id === 'wood').color;
   assert.ok(calls.some((c) => c.style === wood && Math.round(c.args[0]) === 32 && Math.round(c.args[1]) === 32));
+});
+
+test('贴图组动作：只改外观，涂/擦一个事务，删物件清物件组', () => {
+  const { map } = fixture();
+  api.update((d) => { d.media.push({ id: 'tex', name: '木地板', mime: 'image/png', size: 10 }); });
+  const id = api.addCellGroup(map.id, '地板');
+  assert.ok(id);
+  api.paintCellGroup(map.id, id, [[0, 0], [1, 1], [0, 0], [999, 0]]);
+  let m = api.findMap(api.getWorld(), map.id);
+  let g = m.groups.find((x) => x.id === id);
+  assert.deepEqual(g.cells, [api.fineKeyOf(m, 0, 0), api.fineKeyOf(m, 1, 1)]);
+  assert.equal(m.cells[0], 'floor'); // 不碰地形
+  assert.equal(m.materialCells?.[0], undefined); // 不碰材质
+
+  // 一次拖动两次涂只占一步撤销。
+  api.beginBatch();
+  api.paintCellGroup(map.id, id, [[2, 2]]);
+  api.paintCellGroup(map.id, id, [[3, 3]]);
+  api.endBatch();
+  api.undo();
+  m = api.findMap(api.getWorld(), map.id);
+  g = m.groups.find((x) => x.id === id);
+  assert.deepEqual(g.cells, [api.fineKeyOf(m, 0, 0), api.fineKeyOf(m, 1, 1)]);
+
+  api.paintCellGroup(map.id, id, [[0, 0]], true); // Shift 擦
+  m = api.findMap(api.getWorld(), map.id);
+  assert.deepEqual(m.groups.find((x) => x.id === id).cells, [api.fineKeyOf(m, 1, 1)]);
+
+  api.setCellGroupTexture(map.id, id, 'tex');
+  api.setCellGroupFit(map.id, id, 'contain');
+  api.setCellGroupOpacity(map.id, id, 2);
+  api.setCellGroupZ(map.id, id, 12);
+  m = api.findMap(api.getWorld(), map.id);
+  g = m.groups.find((x) => x.id === id);
+  assert.deepEqual(g.texture, { mediaId: 'tex', fit: 'contain', opacity: 1 });
+  assert.equal(g.z, 12);
+  assert.doesNotThrow(() => api.checkWorld(api.getWorld()));
+
+  api.deleteCellGroup(map.id, id);
+  m = api.findMap(api.getWorld(), map.id);
+  assert.equal(m.groups.some((x) => x.id === id), false);
+
+  api.update((d) => {
+    const dm = api.findMap(d, map.id);
+    dm.objects.push({ ...api.newObject('object', 4, 4, 1, 1), id: 'og' });
+    dm.groups.push({ id: 'go', name: '物件贴图', cells: [api.fineKeyOf(dm, 12, 12)], objectId: 'og' });
+  });
+  api.deleteMapObject(map.id, 'og');
+  m = api.findMap(api.getWorld(), map.id);
+  assert.equal(m.groups.some((x) => x.id === 'go'), false);
+});
+
+test('玩家贴图组：只发看得见的格子，只看见一角不带整组包围盒，只带用到的贴图媒体', () => {
+  const pcId = 'a';
+  const { map } = fixture(pcId);
+  api.update((d) => {
+    d.media.push({ id: 'tex', name: '地板贴图', mime: 'image/png', size: 10 });
+    d.media.push({ id: 'secret-tex', name: '隐藏贴图', mime: 'image/png', size: 10 });
+    const m = api.findMap(d, map.id);
+    m.groups = [
+      { id: 'floor', name: '地板', cells: [api.fineKeyOf(m, 3, 3), api.fineKeyOf(m, 24, 24)], texture: { mediaId: 'tex' }, z: 0 },
+      { id: 'full', name: '整块可见', cells: [api.fineKeyOf(m, 0, 0), api.fineKeyOf(m, 1, 0)], texture: { mediaId: 'tex' }, z: 1 },
+      { id: 'hidden', name: '暗格', cells: [api.fineKeyOf(m, 24, 24)], texture: { mediaId: 'secret-tex' }, z: 10 },
+    ];
+    m.fog[8 * m.width + 8] = 0; // 右下看不见；floor 只看见左上那格
+  });
+  const world = api.getWorld();
+  const pm = api.playerWorld(world, map.id, pcId);
+  const pg = pm.maps[0].groups;
+  assert.equal(pg.length, 2);
+  const floor = pg.find((g) => g.id === 'floor');
+  assert.deepEqual(floor.cells, [api.fineKeyOf(map, 3, 3)]);
+  assert.equal(floor.bounds, undefined); // 只看见一角：不泄露整组范围
+  assert.equal(floor.name, '贴图');
+  const full = pg.find((g) => g.id === 'full');
+  assert.deepEqual(full.bounds, { x0: 0, y0: 0, x1: 2, y1: 1 });
+  assert.equal(pm.media.some((m) => m.id === 'tex'), true);
+  assert.equal(pm.media.some((m) => m.id === 'secret-tex'), false);
+  assert.equal(pm.media.find((m) => m.id === 'tex').name, '贴图'); // 文件名也不给玩家
+  assert.deepEqual(pm.maps[0].seen.groups, []);
+  assert.ok(!JSON.stringify(pm).includes('secret-tex'));
+  assert.ok(!JSON.stringify(pm).includes('暗格'));
+  assert.doesNotThrow(() => api.checkWorld(world));
+});
+
+test('灰区记忆贴图：转灰后贴图不消失，只带记得的格子和媒体', () => {
+  const pcId = 'a';
+  const { map } = fixture(pcId);
+  api.update((d) => {
+    d.media.push({ id: 'tex', name: '密室地板.png', mime: 'image/png', size: 10 });
+    const m = api.findMap(d, map.id);
+    m.groups = [{ id: 'g', name: '密室地板', cells: [api.fineKeyOf(m, 3, 3)], texture: { mediaId: 'tex' } }];
+  });
+  // 先看见，再转灰。
+  api.update((d) => { const m = api.findMap(d, map.id); m.fog[1 * m.width + 1] = 2; });
+  const world = api.getWorld();
+  const pm = api.playerWorld(world, map.id, pcId);
+  assert.deepEqual(pm.maps[0].groups, []); // 实时层没有
+  assert.equal(pm.maps[0].seen.groups.length, 1);
+  const mg = pm.maps[0].seen.groups[0];
+  assert.deepEqual(mg.cells, [api.fineKeyOf(map, 3, 3)]);
+  assert.deepEqual(mg.bounds, { x0: 3, y0: 3, x1: 4, y1: 4 });
+  assert.equal(mg.name, '贴图');
+  assert.equal(mg.texture.mediaId, 'tex');
+  assert.equal(pm.media.find((m) => m.id === 'tex').name, '贴图');
+  assert.doesNotThrow(() => api.checkWorld(world));
+
+  const Old = globalThis.Path2D;
+  globalThis.Path2D = class { rect() {} moveTo() {} lineTo() {} arc() {} closePath() {} };
+  const live = [], seen = [];
+  const ctx = { globalAlpha: 1, save() {}, restore() {}, beginPath() {}, clip() {}, drawImage(...args) { seen.push(args); } };
+  const ctxLive = { globalAlpha: 1, save() {}, restore() {}, beginPath() {}, clip() {}, drawImage(...args) { live.push(args); } };
+  try {
+    api.drawCellGroups(ctxLive, pm.maps[0], () => ({ naturalWidth: 10, naturalHeight: 10 }));
+    api.drawSeenCellGroups(ctx, pm.maps[0], () => ({ naturalWidth: 10, naturalHeight: 10 }));
+  } finally { globalThis.Path2D = Old; }
+  assert.equal(live.length, 0);
+  assert.equal(seen.length, 1);
+});
+
+test('drawCellGroups：按 z 铺图、只画有地形的小格、物件组留给下一步', () => {
+  const { map } = fixture();
+  api.update((d) => {
+    const m = api.findMap(d, map.id);
+    m.fineCells[api.fineKeyOf(m, 2, 0)] = ''; // 组里留一格空地，不该铺图
+    m.groups = [
+      { id: 'decal', name: '贴花', cells: [api.fineKeyOf(m, 0, 3), api.fineKeyOf(m, 2, 3)], texture: { mediaId: 'decal', fit: 'fill' }, z: 10 },
+      { id: 'ground', name: '地面', cells: [api.fineKeyOf(m, 0, 0), api.fineKeyOf(m, 1, 0), api.fineKeyOf(m, 2, 0)], texture: { mediaId: 'ground', fit: 'fill', opacity: 0.5 }, z: 0 },
+      { id: 'obj', name: '物件', cells: [api.fineKeyOf(m, 9, 9)], texture: { mediaId: 'obj' }, objectId: 'o1' },
+      { id: 'bare', name: '没图', cells: [api.fineKeyOf(m, 9, 0)] },
+    ];
+    m.objects = [{ ...api.newObject('object', 3, 3, 1, 1), id: 'o1' }];
+  });
+  const m = api.findMap(api.getWorld(), map.id);
+  const Old = globalThis.Path2D;
+  const rects = [];
+  globalThis.Path2D = class { rect(...args) { rects.push(args); } moveTo() {} lineTo() {} arc() {} closePath() {} };
+  const draws = [], imageCalls = [];
+  const ctx = {
+    globalAlpha: 1, save() {}, restore() {}, beginPath() {}, clip() {},
+    drawImage(...args) { draws.push({ alpha: this.globalAlpha, args }); },
+  };
+  try {
+    api.drawCellGroups(ctx, m, (id) => { imageCalls.push(id); return id === 'obj' || id === 'bare' ? null : { naturalWidth: 200, naturalHeight: 100 }; });
+  } finally { globalThis.Path2D = Old; }
+  assert.ok(!imageCalls.includes('obj')); // 物件组不铺地面
+  assert.deepEqual(imageCalls, ['ground', 'decal']);
+  assert.equal(rects.length, 4); // ground 3 格里 1 格空地，decal 2 格
+  assert.deepEqual(draws.map((d) => d.args[0]), [{ naturalWidth: 200, naturalHeight: 100 }, { naturalWidth: 200, naturalHeight: 100 }]);
+  assert.equal(draws[0].alpha, 0.5);
+  assert.equal(draws[1].alpha, 1);
+  assert.equal(draws[0].args[1], 0);
+  assert.equal(draws[0].args[2], 0);
+  assert.equal(Math.round(draws[0].args[3]), 32);
+  assert.equal(Math.round(draws[0].args[4]), Math.round(32 / 3));
+
+  // contain：一格的包围盒里按图片比例居中。
+  api.update((d) => { const dm = api.findMap(d, map.id); dm.groups = [{ id: 'c', name: 'contain', cells: [api.fineKeyOf(dm, 0, 6)], texture: { mediaId: 'c', fit: 'contain' } }]; });
+  const cm = api.findMap(api.getWorld(), map.id);
+  const contain = [];
+  const ctx2 = { globalAlpha: 1, save() {}, restore() {}, beginPath() {}, clip() {}, drawImage(...args) { contain.push(args); } };
+  globalThis.Path2D = class { rect() {} moveTo() {} lineTo() {} arc() {} closePath() {} };
+  try { api.drawCellGroups(ctx2, cm, () => ({ naturalWidth: 200, naturalHeight: 100 })); } finally { globalThis.Path2D = Old; }
+  assert.equal(contain.length, 1);
+  assert.equal(Math.round(contain[0][3]), Math.round(32 / 3));
+  assert.equal(Math.round(contain[0][4]), Math.round(32 / 6));
+  assert.equal(Math.round(contain[0][2]), Math.round(2 * 32 + 32 / 12)); // 格子 y=2，垂直居中
+});
+
+test('mergeLayers：多份记忆贴图按组取并集，贴图取最新一版', () => {
+  const { map } = fixture();
+  const a = api.emptyVision(100), b = api.emptyVision(100);
+  a.fog[1 * map.width + 1] = 2; b.fog[1 * map.width + 1] = 2;
+  a.seen.groups = [{ id: 'g', name: '旧', cells: [api.fineKeyOf(map, 3, 3)], texture: { mediaId: 'old' }, z: 0 }];
+  b.seen.groups = [{ id: 'g', name: '新', cells: [api.fineKeyOf(map, 4, 3)], texture: { mediaId: 'new' }, z: 2 }];
+  a.seen.groupRevs = { g: 1 }; b.seen.groupRevs = { g: 2 };
+  const out = api.mergeLayers(map, [a, b]);
+  assert.equal(out.seen.groups.length, 1);
+  assert.deepEqual(out.seen.groups[0].cells, [api.fineKeyOf(map, 3, 3), api.fineKeyOf(map, 4, 3)]);
+  assert.equal(out.seen.groups[0].name, '新');
+  assert.equal(out.seen.groups[0].texture.mediaId, 'new');
+  assert.equal(out.seen.groupRevs.g, 2);
+});
+
+test('贴图版本：部分可见时换图，灰区格子保留旧图，可见格子用新图', () => {
+  const pcId = 'a';
+  const { map } = fixture(pcId);
+  api.update((d) => {
+    d.media.push({ id: 'tex1', name: '旧图', mime: 'image/png', size: 10 });
+    d.media.push({ id: 'tex2', name: '新图', mime: 'image/png', size: 10 });
+    const m = api.findMap(d, map.id);
+    m.groups = [{ id: 'g', name: '地板', cells: [api.fineKeyOf(m, 3, 3), api.fineKeyOf(m, 24, 24)], texture: { mediaId: 'tex1' } }];
+  });
+  api.update((d) => { const m = api.findMap(d, map.id); m.fog[8 * m.width + 8] = 2; }); // B 转灰
+  api.update((d) => { const m = api.findMap(d, map.id); m.groups[0].texture.mediaId = 'tex2'; }); // A 还看着，换图
+  const world = api.getWorld();
+  const pm = api.playerWorld(world, map.id, pcId);
+  assert.equal(pm.maps[0].groups[0].texture.mediaId, 'tex2');
+  assert.deepEqual(pm.maps[0].groups[0].cells, [api.fineKeyOf(map, 3, 3)]);
+  assert.equal(pm.maps[0].seen.groups.length, 1);
+  assert.deepEqual(pm.maps[0].seen.groups[0].cells, [api.fineKeyOf(map, 24, 24)]);
+  assert.equal(pm.maps[0].seen.groups[0].texture.mediaId, 'tex1');
+  assert.equal(pm.maps[0].seen.groups[0].id, 'mg0');
+  assert.ok(!('sourceId' in pm.maps[0].seen.groups[0]));
+  assert.ok(!('textureKey' in pm.maps[0].seen.groups[0]));
+  assert.ok(!JSON.stringify(pm).includes('sourceId'));
+  assert.ok(!JSON.stringify(pm).includes('textureKey'));
+  assert.ok(!JSON.stringify(pm).includes('tex1~fill~1'));
+  assert.deepEqual(pm.media.map((m) => m.name), ['贴图', '贴图']);
+  assert.doesNotThrow(() => api.checkWorld(world));
+  // A 也转灰后，两版记忆都还在：A 用 tex2，B 用 tex1。
+  api.update((d) => { const m = api.findMap(d, map.id); m.fog[1 * m.width + 1] = 2; });
+  const pm2 = api.playerWorld(api.getWorld(), map.id, pcId);
+  assert.deepEqual(pm2.maps[0].groups, []);
+  assert.equal(pm2.maps[0].seen.groups.length, 2);
+  const byTex = Object.fromEntries(pm2.maps[0].seen.groups.map((g) => [g.texture.mediaId, g.cells]));
+  assert.deepEqual(byTex.tex1, [api.fineKeyOf(map, 24, 24)]);
+  assert.deepEqual(byTex.tex2, [api.fineKeyOf(map, 3, 3)]);
+  assert.deepEqual(pm2.maps[0].seen.groups.map((g) => g.id), ['mg0', 'mg1']);
+  for (const g of pm2.maps[0].seen.groups) assert.ok(!('sourceId' in g) && !('textureKey' in g));
 });

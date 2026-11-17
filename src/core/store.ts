@@ -139,7 +139,7 @@ function memoryDirty(a: World, b: World): boolean {
       || o.architecture !== m.architecture || o.architectureFragments !== m.architectureFragments
       || o.heights !== m.heights || o.fog !== m.fog
       || o.views !== m.views || o.autoFog !== m.autoFog
-      || o.materialCells !== m.materialCells || o.fineMaterials !== m.fineMaterials) return true;
+      || o.materialCells !== m.materialCells || o.fineMaterials !== m.fineMaterials || o.groups !== m.groups) return true;
   }
   return false;
 }
@@ -232,7 +232,9 @@ export type Tool =
   /** 高度：单格抬高。左键 +1，Shift +左键 −1，拖动连续。 */
   | 'heightBrush'
   /** 高度：拖矩形设整片高度。 */
-  | 'heightRect';
+  | 'heightRect'
+  /** 分组贴图：往当前组的任意小格上涂/擦（视觉层，不改规则）。 */
+  | 'groupPaint';
 
 export type Selection =
   | { type: 'object'; mapId: string; id: string }
@@ -262,6 +264,8 @@ export interface UIState {
   wallThickness: number;
   doorWidth: number;
   selection: Selection;
+  /** 当前要画的贴图组（编辑地图用；不跨图持久化）。 */
+  groupId: string | null;
   views: Record<string, View>;
   pendingConn: { mapId: string; x: number; y: number } | null;
   pick: { mapId: string; x: number; y: number } | null; // 最近一次点的格子（一格多物时列出来）
@@ -349,6 +353,7 @@ let ui: UIState = {
   wallThickness: 100,
   doorWidth: 3,
   selection: null,
+  groupId: null,
   views: {},
   pendingConn: null,
   pendingJudgment: null,

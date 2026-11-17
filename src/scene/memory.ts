@@ -5,7 +5,7 @@ import { clipArchitecture, isArchitectureObject, migrateArchitecture } from './a
 import { repairWorld } from '../core/schema.js';
 import { current, isDraft, type Draft } from 'immer';
 import { buildFineCells } from '../core/grid';
-import type { GameMap, Id, MapObject, SeenObject, VisionLayer, World } from '../core/types';
+import type { CellGroup, GameMap, Id, MapObject, SeenObject, VisionLayer, World } from '../core/types';
 import { linesToFlow } from '../rules/flow';
 import { DEFAULT_MATERIALS } from '../core/defaults';
 import { cloneLayer, emptyVision, mergeLayers, pruneMemory, spatialFog, visionKey } from './vision';
@@ -69,6 +69,42 @@ function syncLayer(m: Draft<GameMap>, L: Draft<VisionLayer>, rev: number) {
     if (i < 0) L.seen.objects.push(snap);
     else if (!sameSeen(L.seen.objects[i], snap)) L.seen.objects[i] = snap;
   }
+  // 贴图组记忆：同一块地按贴图版本分开记。看得见的格子跟现在的贴图，
+  // 看不见的格子留在它上次被看见时的那一版；换图只影响看得见的部分。
+  // 物件贴图（objectId）是物件外观，等物件外观那一步再接记忆；这里只记地面/贴花。
+  const textureKeyOf = (g: CellGroup) => g.texture ? `${g.texture.mediaId}~${g.texture.fit ?? 'fill'}~${g.texture.opacity ?? 1}` : 'none';
+  const memorySourceOf = (g: CellGroup) => g.sourceId ?? g.id;
+  const liveGroups = (source.groups ?? []).filter((g) => !g.objectId);
+  L.seen.groupRevs ??= {};
+  const visibleCellsOf = (g: CellGroup) => new Set(g.cells.filter((key) => spatialFog(source, layer, key) === 1));
+  const nextGroups = new Map<string, CellGroup>();
+  // 旧记忆组：可见格交给实时层；灰格保留。按原版本保留，不套当前贴图。
+  for (const old of (L.seen.groups ?? []).filter((g) => !g.objectId)) {
+    const cells = old.cells.filter((key) => {
+      const fog = spatialFog(source, layer, key);
+      return fog === 2;
+    });
+    if (!cells.length) continue;
+    const next: CellGroup = { ...old, cells: [...cells].sort((a, b) => a - b), sourceId: memorySourceOf(old), textureKey: old.textureKey ?? textureKeyOf(old) };
+    delete next.objectId;
+    delete next.bounds;
+    nextGroups.set(old.id, next);
+  }
+  // 当前可见的格子：按当前的贴图版本单独记一份；同一个版本和旧灰格并起来。
+  for (const live of liveGroups) {
+    const cells = [...new Set(visibleCellsOf(live))].sort((a, b) => a - b);
+    if (!cells.length) continue;
+    const textureKey = textureKeyOf(live);
+    if (textureKey === 'none') continue; // 没贴图的可见格不需要一份“空记忆组”
+    const id = `${live.id}~${textureKey}`;
+    const before = nextGroups.get(id);
+    const merged = before ? [...new Set([...before.cells, ...cells])].sort((a, b) => a - b) : cells;
+    const next: CellGroup = { id, name: live.name, cells: merged, z: live.z, texture: live.texture, sourceId: live.id, textureKey };
+    nextGroups.set(id, next);
+    L.seen.groupRevs[id] = rev;
+  }
+  L.seen.groups = [...nextGroups.values()];
+  for (const id of Object.keys(L.seen.groupRevs)) if (!nextGroups.has(id)) delete L.seen.groupRevs[id];
 }
 
 /** 每次修改世界后执行：全队那份和每个人自己那份，都把"看得见"的部分同步进记忆。 */
@@ -141,6 +177,7 @@ export function migrateWorld(w: World): World {
     }
     if (!m.seen) m.seen = { cells: m.cells.map((c, i) => (m.fog[i] === 1 ? c : '')), objects: [], groups: [] };
     m.seen.groups ??= [];
+    m.seen.groupRevs ??= {};
     m.groups ??= [];
     m.autoFog ??= true;
     m.rooms ??= [];
@@ -181,7 +218,7 @@ export function migrateWorld(w: World): World {
       delete (L as { subRevs?: unknown }).subRevs;
     }
     for (const L of Object.values(m.views)) delete (L as { subFog?: unknown }).subFog;
-    for (const L of Object.values(m.views)) { if (L?.seen) L.seen.groups ??= []; }
+    for (const L of Object.values(m.views)) { if (L?.seen) { L.seen.groups ??= []; L.seen.groupRevs ??= {}; } }
     for (const o of m.objects) for (const s of o.secrets) { s.kind ??= 'roll'; s.range ??= 1; }
   }
   if (v1) w.version = 2;

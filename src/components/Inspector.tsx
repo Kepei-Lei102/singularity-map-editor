@@ -4,17 +4,19 @@ import { objectEnabled } from '../core/objectData.js';
 import { toggleArchitectureDoor } from '../runtime/actions';
 import type { Draft } from 'immer';
 import { useState } from 'react';
-import { canEditMap, setUI, toast, update, useUI, useWorld, type UIState } from '../core/store';
-import type { Connection, GameMap, MapObject, Secret, Token, World } from '../core/types';
+import { canEditMap, setUI, toast, update, useUI, useWorld, worldContext, type UIState } from '../core/store';
+import type { Connection, GameMap, MapObject, Secret, TextureFit, Token, World } from '../core/types';
 import { CONN_LABEL, TIERS, TIER_LABEL } from '../core/types';
 import {
   deleteMap, duplicateMap, fillEmptyCells, findMap, giveMapKnowledge, reshapeMaps, setVisionMode, findObj, fireAttach, hideSecret, itemsAt, jumpTo, resizeMap, revealSecret,
   revealObjectIdentity, hideObjectIdentity, sameSel, setObjectEnabled, setObjectState, setObjectStates, resetRoom, applyRoomLayout, moveSlidingObject, deleteMapObject,
+  addCellGroup, deleteCellGroup, renameCellGroup, setCellGroupTexture, setCellGroupFit, setCellGroupOpacity, setCellGroupZ,
 } from '../runtime/actions';
 import { checkSlidingMove, seesSlidingObject, slidingPuzzleForObject } from '../scene/sliding';
 import { CELL_METERS, nearestPc, type Nearest } from '../scene/perception';
 import { cellName, parseCell, rangeName, uid } from '../core/util';
 import { MAX_SIDE } from '../core/schema.js';
+import { storeBlob, useBlobUrl } from '../runtime/media';
 import { blankCellCount } from '../core/grid';
 import { Area, Check, Num, Row, Section, Txt } from './fields';
 import { ObjectInteractionPanel } from './ObjectInteraction';
@@ -49,6 +51,7 @@ export function Inspector() {
         </>
       )}
       <RoomReset map={map} />
+      <CellGroups world={w} map={map} ui={ui} editable={canEditMap(ui)} />
       <Section title="建筑层">
         {map.objects.filter(o => objectEnabled(map, o) && isArchitectureObject(o) && (!ui.trial || !o.hidden && (() => {
           const t = map.tokens.find(t => t.id === ui.trial!.players[ui.trial!.current]?.tokenId), b = architectureObjectBounds(map, o);
@@ -61,6 +64,87 @@ export function Inspector() {
       <SlidingPuzzles world={w} map={map} ui={ui} />
     </>
   );
+}
+
+
+/** 贴图组：地面 / 贴花是纯外观层，不参与规则。 */
+function CellGroups({ world, map, ui, editable }: { world: World; map: GameMap; ui: UIState; editable: boolean }) {
+  const [busy, setBusy] = useState(false);
+  if (!editable || ui.trial) return null;
+  const groups = map.groups ?? [];
+  const group = groups.find((g) => g.id === ui.groupId);
+  const images = world.media.filter((m) => m.mime.startsWith('image/'));
+  const make = () => {
+    const id = addCellGroup(map.id);
+    if (id) setUI({ groupId: id, tool: 'groupPaint', selection: null, tab: 'inspect' });
+  };
+  const upload = async (file: File | null) => {
+    if (!file) return;
+    if (!file.type.startsWith('image/')) return toast('贴图要图片文件');
+    setBusy(true);
+    const ctx = worldContext(); // 上传途中换工程：传完不挂到另一个世界
+    const id = uid();
+    try {
+      const key = await storeBlob(file);
+      if (ctx !== worldContext()) return toast('上传完成时工程已经换了，没有加进去');
+      update((d) => {
+        d.media.push({ id, name: file.name, mime: file.type, size: file.size, key });
+        const g = findMap(d, map.id)?.groups?.find((x) => x.id === group!.id);
+        if (g) g.texture = { mediaId: id, fit: g.texture?.fit ?? 'fill', opacity: g.texture?.opacity ?? 1 };
+      });
+    } catch {
+      toast(`上传失败：${file.name}`);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <Section title="贴图组" extra={<button className="small" onClick={make}>＋ 新建</button>}>
+      <div className="hint">贴图只改外观，不影响移动、视野、高度。整组铺一张图，可以铺任意形状的格子。</div>
+      {!groups.length && <div className="hint">还没有贴图组。新建一个，切到「分组贴图」在地图上拖。</div>}
+      {groups.map((g) => (
+        <div key={g.id} className="list-row">
+          <button className={ui.groupId === g.id ? 'chip on' : 'chip'} onClick={() => setUI({ groupId: g.id, tool: 'groupPaint', selection: null, tab: 'inspect' })}>
+            {g.name} <span className="muted">{g.cells.length} 小格</span>
+          </button>
+          <button className="danger small" title="删除这个贴图组" onClick={() => {
+            if (!confirm(`删除贴图组「${g.name}」？`)) return;
+            deleteCellGroup(map.id, g.id);
+          }}>×</button>
+        </div>
+      ))}
+      {group && (
+        <div className="sub">
+          <div className="sub-title">正在画：{group.name}</div>
+          <Row label="名字"><Txt value={group.name} onChange={(v) => renameCellGroup(map.id, group.id, v)} /></Row>
+          <Row label="层"><span className="inline">
+            <Num value={group.z ?? 0} onChange={(v) => setCellGroupZ(map.id, group.id, v)} />
+            <span className="hint">地面 0–9，贴花 10–19</span>
+          </span></Row>
+          <Row label="贴图"><select value={group.texture?.mediaId ?? ''} onChange={(e) => setCellGroupTexture(map.id, group.id, e.target.value || null)}>
+            <option value="">不贴图</option>
+            {images.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
+          </select></Row>
+          <label className="upload" title="上传一张图片作为这张图的贴图">
+            {busy ? '上传中…' : '上传图片'}
+            <input type="file" accept="image/*" disabled={busy} onChange={(e) => { upload(e.target.files?.[0] ?? null); e.target.value = ''; }} />
+          </label>
+          {group.texture && <TexturePreview mediaId={group.texture.mediaId} />}
+          <Row label="铺法"><select value={group.texture?.fit ?? 'fill'} onChange={(e) => setCellGroupFit(map.id, group.id, e.target.value as TextureFit)}>
+            <option value="fill">铺满整组</option>
+            <option value="contain">完整放进整组</option>
+          </select></Row>
+          <Row label="不透明度"><Num value={group.texture?.opacity ?? 1} step={0.1} min={0} max={1} onChange={(v) => setCellGroupOpacity(map.id, group.id, v)} /></Row>
+          <div className="hint">用「分组贴图」拖：Shift 擦掉。一次拖动只算一步撤销。</div>
+        </div>
+      )}
+    </Section>
+  );
+}
+
+function TexturePreview({ mediaId }: { mediaId: string }) {
+  const url = useBlobUrl(mediaId);
+  return url ? <div className="texture-preview"><img src={url} alt="贴图预览" /></div> : <div className="hint">图片载入中…</div>;
 }
 
 /** 记过复位点的房间：带团、试玩时随手把家具和状态挪回去。 */

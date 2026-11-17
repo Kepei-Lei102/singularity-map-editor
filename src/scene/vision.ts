@@ -2,7 +2,7 @@ import type { GameMap, VisionLayer, World } from '../core/types';
 import { current, isDraft } from 'immer';
 import { clipArchitecture } from './architecture';
 
-export const emptyVision = (n: number): VisionLayer => ({ fog: Array(n).fill(0), seen: { cells: Array(n).fill(''), objects: [], groups: [] } });
+export const emptyVision = (n: number): VisionLayer => ({ fog: Array(n).fill(0), seen: { cells: Array(n).fill(''), objects: [], groups: [], groupRevs: {} } });
 export const cloneLayer = (L: VisionLayer): VisionLayer => JSON.parse(JSON.stringify({ fog: L.fog, seen: L.seen }));
 
 export function visionKey(w: World, pcId: string): string {
@@ -43,7 +43,7 @@ export function spatialFog(m: GameMap, L: VisionLayer, key: number): number {
 export function mergeLayers(m: GameMap, layers: VisionLayer[]): VisionLayer {
   if (layers.length === 1) return cloneLayer(layers[0]);
   const out = emptyVision(m.width * m.height);
-  out.seen.cellRevs = []; out.seen.observed = {}; out.seen.objectRevs = {}; out.seen.architectureRevs = {};
+  out.seen.cellRevs = []; out.seen.observed = {}; out.seen.objectRevs = {}; out.seen.architectureRevs = {}; out.seen.groups = []; out.seen.groupRevs = {};
   const choose = <T,>(items: { rev: number; value: T }[]) => items.sort((a, b) => b.rev - a.rev || JSON.stringify(b.value).localeCompare(JSON.stringify(a.value)))[0];
   for (let i = 0; i < out.fog.length; i++) {
     out.fog[i] = layers.some(L => L.fog[i] === 1) ? 1 : layers.some(L => L.fog[i]) ? 2 : 0;
@@ -80,6 +80,21 @@ export function mergeLayers(m: GameMap, layers: VisionLayer[]): VisionLayer {
     if (keys.some(key => (out.seen.observed?.[key] ?? 0) > best.rev)) continue;
     out.seen.objects.push({ ...best.value }); out.seen.objectRevs[id] = best.rev;
   }
+  const groupIds = new Set(layers.flatMap((L) => (L.seen.groups ?? []).filter((g) => !g.objectId).map((g) => g.id)));
+  for (const id of groupIds) {
+    const candidates = layers.flatMap((L) => (L.seen.groups ?? []).filter((g) => g.id === id && !g.objectId).map((value) => ({
+      rev: L.seen.groupRevs?.[id] ?? 0, value,
+    })));
+    if (!candidates.length) continue;
+    const cells = [...new Set(candidates.flatMap((c) => c.value.cells))].filter((key) => {
+      const x = key % (m.width * 3), y = Math.floor(key / (m.width * 3));
+      return key >= 0 && key < m.width * m.height * 9 && (out.fog[Math.floor(y / 3) * m.width + Math.floor(x / 3)] ?? 0) > 0;
+    }).sort((a, b) => a - b);
+    if (!cells.length) continue;
+    const best = choose(candidates);
+    out.seen.groups.push({ ...best.value, cells });
+    out.seen.groupRevs[id] = Math.max(...candidates.map((c) => c.rev));
+  }
   return out;
 }
 
@@ -87,6 +102,10 @@ export function pruneMemory(m: GameMap, L: VisionLayer) {
   const source = isDraft(m) ? current(m) : m;
   const layer = isDraft(L) ? current(L) : L;
   L.seen.objects = layer.seen.objects.filter(o => spatialKeys(source, o).some(key => spatialFog(source, layer, key)));
+  L.seen.groups = (layer.seen.groups ?? []).flatMap((g) => {
+    const cells = g.cells.filter((key) => spatialFog(source, layer, key) > 0);
+    return cells.length ? [{ ...g, cells }] : [];
+  });
   L.seen.architecture = [...clipArchitecture(source, layer, 1, layer.seen.architecture ?? []), ...clipArchitecture(source, layer, 2, layer.seen.architecture ?? [])];
   for (const key of Object.keys(layer.seen.observed ?? {})) if (!spatialFog(source, layer, +key)) delete L.seen.observed![+key];
 }

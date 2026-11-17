@@ -1,7 +1,7 @@
 import { effectiveLayer } from '../scene/vision';
 import { objectEnabled } from '../core/objectData.js';
 import { architectureWalls, architectureDoors, isArchitectureObject, characterPathClear, furnitureSweepBlocked, isSubdivided, tokenPosition, objectRect, anchorFromPoint } from '../scene/architecture';
-import { addArchitectureDoor, addArchitectureWall, eraseArchitecture, moveMapToken, paintFog, paintMaterialCells, paintMaterialSubcells, paintTerrainCells, paintTerrainSubcells, toggleArchitectureDoor, nudgeHeight } from '../runtime/actions';
+import { addArchitectureDoor, addArchitectureWall, eraseArchitecture, moveMapToken, paintFog, paintMaterialCells, paintMaterialSubcells, paintCellGroup, paintTerrainCells, paintTerrainSubcells, toggleArchitectureDoor, nudgeHeight } from '../runtime/actions';
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { GameMap, World } from '../core/types';
 import { CS, cellLine, uid } from '../core/util';
@@ -10,11 +10,14 @@ import { checkEnterTriggers, clearPendingFocus, findMap, itemsAt, jumpTo, moveSl
 import { checkSlidingMove, slidingPuzzleForObject } from '../scene/sliding';
 import { newObject } from '../core/defaults';
 import { brushCells, render, type Mode, type Rect } from '../scene/render';
+import { subscribeTexture } from '../scene/texture';
 
 type Drag =
   | { k: 'wall'; ax: number; ay: number; bx: number; by: number }
   | { k: 'pan'; sx: number; sy: number; px: number; py: number }
   | { k: 'paint'; lx: number; ly: number; fx: number; fy: number; value: number }
+  /** 贴图组：任意小格涂/擦；整次拖动只占一步撤销。 */
+  | { k: 'group'; groupId: string; fx: number; fy: number; erase: boolean }
   /** 高度：单格抬高。delta 是每一步加多少（Shift 时为 −1）。 */
   | { k: 'height'; lx: number; ly: number; fx: number; fy: number; delta: number }
   /** 高度：框选一片，松手后留矩形，等侧栏输入数值再应用。 */
@@ -92,6 +95,10 @@ export function MapCanvas({ world, map, mode, playerNumbers = false, follow, vie
     centeredFor.current = follow;
     centerOnToken(followToken);
   }, [follow, size.w, map.id]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // 贴图是懒加载的：图片加载完通知一次，画布重画。
+  const [, setTexTick] = useState(0);
+  useEffect(() => subscribeTexture(() => setTexTick((n) => n + 1)), []);
 
   // 有标记时，每 10 秒重画一次（标记按真实时间变淡）
   const [, setTick] = useState(0);
@@ -298,6 +305,16 @@ export function MapCanvas({ world, map, mode, playerNumbers = false, follow, vie
     }
 
     if (!inMap) return;
+    if (tool === 'groupPaint') {
+      const group = s.groupId && m.groups?.find((g) => g.id === s.groupId);
+      if (!group) return toast('先在右侧「贴图组」里选一个组');
+      beginBatch();
+      const { gx, gy } = toCell(e);
+      const fx = Math.floor(gx * 3), fy = Math.floor(gy * 3);
+      drag.current = { k: 'group', groupId: group.id, fx, fy, erase: e.shiftKey };
+      paintCellGroup(map.id, group.id, brushSubcells(fx, fy, s.brush), e.shiftKey);
+      return;
+    }
     if (PAINT_TOOLS.includes(tool)) {
       beginBatch();
       const value = tool === 'd100' ? (m.d100[cy * m.width + cx] ? 0 : 1) : 0;
@@ -376,6 +393,12 @@ export function MapCanvas({ world, map, mode, playerNumbers = false, follow, vie
       dr.x1 = clampX(cx); dr.y1 = clampY(cy);
       setPreview({ x: Math.min(dr.x0, dr.x1), y: Math.min(dr.y0, dr.y1),
         w: Math.abs(dr.x1 - dr.x0) + 1, h: Math.abs(dr.y1 - dr.y0) + 1 });
+    } else if (dr.k === 'group') {
+      const { gx, gy } = toCell(e);
+      const fx = Math.floor(gx * 3), fy = Math.floor(gy * 3);
+      if (fx === dr.fx && fy === dr.fy) return;
+      paintCellGroup(map.id, dr.groupId, cellLine(dr.fx, dr.fy, fx, fy).flatMap(([x, y]) => brushSubcells(x, y, getUI().brush)), dr.erase);
+      dr.fx = fx; dr.fy = fy;
     } else if (dr.k === 'paint') {
       const { gx, gy } = toCell(e);
       const fx = Math.floor(gx * 3), fy = Math.floor(gy * 3);
@@ -468,7 +491,7 @@ export function MapCanvas({ world, map, mode, playerNumbers = false, follow, vie
       setUI({ heightRect: { mapId: map.id, x0: Math.min(dr.x0, dr.x1), y0: Math.min(dr.y0, dr.y1),
         x1: Math.max(dr.x0, dr.x1), y1: Math.max(dr.y0, dr.y1) } });
     }
-    if (dr.k === 'paint' || dr.k === 'obj') endBatch();
+    if (dr.k === 'paint' || dr.k === 'group' || dr.k === 'obj') endBatch();
     if (dr.k === 'tok') {
       endBatch();
       if (dr.moved) checkEnterTriggers(map.id, dr.id, dr.fx, dr.fy);
