@@ -45,8 +45,14 @@ export function setMediaIndex(list: MediaMeta[]) {
   mimeOf = new Map(list.map((m) => [m.id, m.mime]));
 }
 /** 玩家窗口收到的世界也有自己的媒体表；不把这份索引换过来，贴图就会拿 mediaId 当存储名去找。 */
-export function applyMediaIndex(world: { media: MediaMeta[] } | null) {
-  setMediaIndex(world?.media ?? []);
+export function applyMediaIndex(world: { media?: MediaMeta[] } | null) {
+  // 线上载荷坏掉时宁可清空/跳过坏条目，也不要让一个非数组或 null 元素把整页 render 抛掉。
+  const list = Array.isArray(world?.media)
+    ? world!.media.filter((m): m is MediaMeta =>
+      !!m && typeof m.id === 'string' && m.id.length > 0 &&
+      typeof m.mime === 'string' && (m.key === undefined || typeof m.key === 'string'))
+    : [];
+  setMediaIndex(list);
 }
 /** 这个媒体 ID 在当前世界里存在哪。 */
 export const storageKey = (id: string) => keyOf.get(id) ?? id;

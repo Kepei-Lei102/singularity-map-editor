@@ -68,11 +68,24 @@ function resetCache() {
 test('玩家窗口收到的世界媒体表会换成内容存储名；清空后回落到 id', () => {
   api.applyMediaIndex({ media: [{ id: 'tex', name: '柜纹', mime: 'image/png', size: 1, key: 'v:abc' }] });
   assert.equal(api.storageKey('tex'), 'v:abc');
+  api.applyMediaIndex(null);
+  assert.equal(api.storageKey('tex'), 'tex', '清空会把内容存储名映射一起清掉');
   api.applyMediaIndex({ media: [{ id: 'old', name: '旧图', mime: 'image/png', size: 1 }] });
   assert.equal(api.storageKey('tex'), 'tex');
   assert.equal(api.storageKey('old'), 'old');
-  api.applyMediaIndex(null);
+  api.applyMediaIndex({});
+  assert.equal(api.storageKey('tex'), 'tex');
   assert.equal(api.storageKey('old'), 'old');
+  api.applyMediaIndex({ media: 'bad' });
+  assert.equal(api.storageKey('old'), 'old');
+  api.applyMediaIndex({ media: [null] });
+  assert.equal(api.storageKey('old'), 'old');
+  api.applyMediaIndex({ media: [{ id: 'no-mime', key: 'v:bad' }] });
+  assert.equal(api.storageKey('no-mime'), 'no-mime');
+  api.applyMediaIndex({ media: [{ id: '', mime: 'image/png', key: 'v:empty' }] });
+  assert.equal(api.storageKey(''), '');
+  api.applyMediaIndex({ media: [{ id: 'bad-key', mime: 'image/png', key: 1 }] });
+  assert.equal(api.storageKey('bad-key'), 'bad-key');
 });
 
 test('同一媒体只加载一次，成功后 revoke 临时地址', async () => {

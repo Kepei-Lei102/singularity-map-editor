@@ -111,7 +111,7 @@ test('清除贴图后回到彩色方块；ghost 状态不画贴图', () => {
   assert.ok(plain.fillRect.some((c) => c.style === '#123456'));
 
   api.setObjectTexture(map.id, 'o1', 'tex');
-  api.update((d) => { const o = api.findMap(d, map.id).objects.find((x) => x.id === 'o1'); o.states = ['关', '开']; o.state = 1; o.blocksWhen = [0]; });
+  api.update((d) => { const o = api.findMap(d, map.id).objects.find((x) => x.id === 'o1'); o.states = ['关', '开']; o.state = 1; o.blocksWhen = [0]; o.identity = { party: true }; });
   const open = renderOnce(api.getWorld(), api.findMap(api.getWorld(), map.id));
   assert.equal(open.drawImage.length, 0);
   assert.ok(open.strokeRect.length > 0);
@@ -149,7 +149,10 @@ test('玩家实时载荷只发可见物件的贴图组，媒体表带上它', ()
   assert.equal(g.name, '贴图');
   assert.deepEqual(g.cells, objectGroup(map).cells);
   assert.ok(live.media.some((m) => m.id === 'tex'));
-
+  assert.equal(pm.objects.find((x) => x.id === 'o1').textured, true);
+  api.update((d) => { const m = api.findMap(d, map.id); m.objects.push({ ...api.newObject('object', 4, 4, 1, 1), id: 'o2', name: '空柜', color: '#654321' }); });
+  const withPlain = api.playerWorld(api.getWorld(), map.id, 'a').maps[0];
+  assert.equal('textured' in withPlain.objects.find((x) => x.id === 'o2'), false);
   api.update((d) => { const o = api.findMap(d, map.id).objects.find((x) => x.id === 'o1'); o.hidden = true; });
   const hiddenWorld = api.playerWorld(api.getWorld(), map.id, 'a');
   const hidden = hiddenWorld.maps[0];
@@ -160,7 +163,7 @@ test('玩家实时载荷只发可见物件的贴图组，媒体表带上它', ()
 
 test('玩家实时层 ghost 只画虚线，不画贴图；ghost 的图不进媒体表', () => {
   const { map } = fixture('a');
-  api.update((d) => { const o = api.findMap(d, map.id).objects.find((x) => x.id === 'o1'); o.states = ['关', '开']; o.state = 1; o.blocksWhen = [0]; });
+  api.update((d) => { const o = api.findMap(d, map.id).objects.find((x) => x.id === 'o1'); o.states = ['关', '开']; o.state = 1; o.blocksWhen = [0]; o.identity = { party: true }; });
   const live = api.playerWorld(api.getWorld(), map.id, 'a');
   const po = live.maps[0].objects.find((o) => o.id === 'o1');
   assert.equal(po.ghost, true);
@@ -193,6 +196,17 @@ test('host 不信任导入的 ghost 字段：仍按当前 blocksWhen 画实心�
   const calls = renderOnce(world, map, 'edit');
   assert.equal(calls.drawImage.length, 1);
   assert.equal(calls.strokeRect.length, 0);
+});
+
+test('host 不信任玩家载荷的 textured：无图时仍画彩色方块和图标', () => {
+  const w = api.emptyWorld();
+  const m = w.maps[0];
+  m.objects = [{ ...api.newObject('object', 1, 1, 1, 1), id: 'o1', name: '柜子', icon: '★', color: '#123456', identity: { party: true }, textured: true }];
+  api.replaceWorld(w);
+  const calls = renderOnce(api.getWorld(), api.findMap(api.getWorld(), m.id), 'edit');
+  assert.ok(calls.fillRect.some((c) => c.style === '#123456'));
+  assert.ok(calls.strokeRect.length > 0);
+  assert.ok(calls.fillText.some((t) => t.text.includes('★')));
 });
 
 test('玩家渲染会画物件贴图，且不画物件底色', () => {
@@ -246,4 +260,19 @@ test('玩家看不见的物件连贴图组一起不发', () => {
   const live = api.playerWorld(api.getWorld(), map.id, 'a').maps[0];
   assert.equal(live.objects.some((x) => x.id === 'o1'), false);
   assert.equal(live.groups.some((x) => x.objectId === 'o1'), false);
+});
+
+
+test('重复物件组按第一组，保持旧的 find 语义', () => {
+  const { map } = fixture();
+  api.update((d) => {
+    d.media.push({ id: 'tex2', name: '第二张', mime: 'image/png', size: 1 });
+    const m = api.findMap(d, map.id);
+    const g = m.groups.find((x) => x.objectId === 'o1');
+    m.groups.push({ ...g, id: 'g-dup', texture: { mediaId: 'tex2' } });
+  });
+  const m = api.findMap(api.getWorld(), map.id);
+  const calls = renderOnce(api.getWorld(), m, 'edit', undefined, { tex: imgA, tex2: imgB });
+  assert.equal(calls.drawImage.length, 1);
+  assert.equal(calls.drawImage[0].args[0].tag, 'A');
 });

@@ -207,13 +207,11 @@ export function playerWorld(w: World, mapId: string | null = w.playerMapId, pcId
     ...Object.values(pm.fineMaterials ?? {}),
     ...Object.values(pm.seen.materialCells ?? {}),
   ] : []);
-  // ghost 物件不画外观图，实时组不发、记忆贴图媒体也不发；开了以后再随下一帧带上。
-  // 记忆物件按 id 判 ghost，重复 id 时宁可少发图，也不发收回状态下的外观。
-  const memoryGhost = new Set((pm?.seen.objects ?? []).filter((r) => r.ghost).map((r) => r.id));
+  // ghost 物件不画外观图：实时组在 playerMap 已经排除，记忆物件按各自 ghost 过滤，开了下一帧再带上。
   const usedTextures = new Set([
     ...(pm?.groups ?? []).flatMap((g) => g.texture ? [g.texture.mediaId] : []),
-    ...(pm?.seen.groups ?? []).filter((g) => !g.objectId || !memoryGhost.has(g.objectId)).flatMap((g) => g.texture ? [g.texture.mediaId] : []),
-    ...(pm?.seen.objects ?? []).filter((r) => !memoryGhost.has(r.id)).flatMap((r) => r.texture ? [r.texture.mediaId] : []),
+    ...(pm?.seen.groups ?? []).flatMap((g) => g.texture ? [g.texture.mediaId] : []),
+    ...(pm?.seen.objects ?? []).filter((r) => !r.ghost).flatMap((r) => r.texture ? [r.texture.mediaId] : []),
   ]);
   const clues: PlayerClue[] = valid ? w.maps.flatMap(m => m.objects.flatMap(o => o.secrets.flatMap(s => {
     const r = s.revealed;

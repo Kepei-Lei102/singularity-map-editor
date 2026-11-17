@@ -24,8 +24,9 @@ import { ObjectInteractionPanel } from './ObjectInteraction';
 /** 上传是异步的：文件存完回来时，只有仍然停在同一个工程、编辑模式、同一个物件上，才允许挂图。
  *  抽出来是为了能单独测守卫顺序；调用方负责把返回的提示 toast 出来、把文件交给孤儿清理。 */
 export function objectTextureUploadError(ctxBefore: unknown, ctxNow: unknown, now: UIState, mapId: string, objectId: string, exists: boolean): string | null {
-  if (ctxBefore !== ctxNow) return '上传完成时工程已经换了，没有加进去';
+  // 试玩开始/结束也会换 worldContext；先报“离开编辑模式”，比一律说“工程换了”准确。
   if (!canEditMap(now) || now.trial) return '上传完成时已经离开编辑模式，没有加进去';
+  if (ctxBefore !== ctxNow) return '上传完成时世界已经变了（换工程或试玩结束），没有加进去';
   if (!exists) return '上传完成时物件已经不在了';
   const sel = now.selection;
   if (!(sel?.type === 'object' && sel.mapId === mapId && sel.id === objectId)) return '上传完成时已经不在这个物件上了，没有加进去';

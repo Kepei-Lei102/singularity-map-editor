@@ -236,3 +236,17 @@ test('sameSeen/staleMemories：贴图和 ghost 变化会被发现', () => {
   api.update((d) => { const m = api.findMap(d, map.id); m.fog.fill(1); });
   assert.equal(api.staleMemories(api.findMap(api.getWorld(), map.id)).some((x) => x.id === 'o1'), false);
 });
+
+
+test('重复物件组 staleMemories 按第一组，不把后加的那组当新外观', () => {
+  const { map } = fixture('a');
+  // 先转灰，否则 staleMemories 第一行 anyVisible 就短路，根本走不到贴图比较。
+  fog(map.id, (m) => { m.fog.fill(2); });
+  const m = api.findMap(api.getWorld(), map.id);
+  const first = m.groups.find((g) => g.objectId === 'o1');
+  api.update((d) => {
+    const x = api.findMap(d, map.id);
+    x.groups.push({ ...first, id: 'g-dup', texture: { mediaId: 'texB' } });
+  });
+  assert.equal(api.staleMemories(api.findMap(api.getWorld(), map.id)).some((x) => x.id === 'o1'), false);
+});

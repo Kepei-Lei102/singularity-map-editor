@@ -567,7 +567,8 @@ export function render(
 
   const imageOf = o.imageOf ?? ((id: string) => textureImage(id));
   const objectTextures = new Map<string, TextureSpec>();
-  for (const g of map.groups ?? []) if (g.objectId && g.texture) objectTextures.set(g.objectId, g.texture);
+  // 和 memory.ts 一样：重复物件组按第一组，保持旧的 find 语义。
+  for (const g of map.groups ?? []) if (g.objectId && g.texture && !objectTextures.has(g.objectId)) objectTextures.set(g.objectId, g.texture);
   drawCellGroups(ctx, map, imageOf);
   if (player) drawSeenCellGroups(ctx, map, imageOf);
 

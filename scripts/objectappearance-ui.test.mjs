@@ -81,7 +81,8 @@ test('普通物件显示外观区，选已有图会挂上物件贴图', () => {
 
 test('上传守卫：工程/编辑模式/物件/选中变了一个都不挂', () => {
   const base = { ...api.getUI(), mode: 'edit', trial: null, selection: { type: 'object', mapId: 'map1', id: 'o1' } };
-  assert.match(api.objectTextureUploadError('a', 'b', base, 'map1', 'o1', true), /工程已经换了/);
+  assert.match(api.objectTextureUploadError('a', 'b', base, 'map1', 'o1', true), /世界已经变了/);
+  assert.match(api.objectTextureUploadError('a', 'b', { ...base, trial: {} }, 'map1', 'o1', true), /离开编辑模式/, '试玩优先报编辑模式');
   assert.match(api.objectTextureUploadError('a', 'a', { ...base, mode: 'play', unlock: false }, 'map1', 'o1', true), /离开编辑模式/);
   assert.match(api.objectTextureUploadError('a', 'a', { ...base, trial: {} }, 'map1', 'o1', true), /离开编辑模式/);
   assert.match(api.objectTextureUploadError('a', 'a', base, 'map1', 'o1', false), /物件已经不在了/);

@@ -37,7 +37,8 @@ function cloneTexture(t?: TextureSpec): TextureSpec | undefined {
 /** 物件自带贴图的实时图，来自唯一的物件贴图组；一次建表，别每个物件扫一遍组。 */
 function objectTexturesOf(m: GameMap): Map<string, TextureSpec> {
   const out = new Map<string, TextureSpec>();
-  for (const g of m.groups ?? []) if (g.objectId && g.texture) out.set(g.objectId, g.texture);
+  // schema 禁止一个物件两组；万一旧数据重复，按第一组，保持原来线性 find 的语义。
+  for (const g of m.groups ?? []) if (g.objectId && g.texture && !out.has(g.objectId)) out.set(g.objectId, g.texture);
   return out;
 }
 
