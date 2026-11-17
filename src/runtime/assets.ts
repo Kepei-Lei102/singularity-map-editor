@@ -1,0 +1,328 @@
+import { contentKey, getRaw, putRaw } from './media';
+import type { AssetBody, AssetFailReason, SyncMsg } from './messages';
+
+// 线上房间的媒体文件不能塞进 world JSON。这里只搬字节，不碰规则：
+// 玩家按 world.media 里的存储名发出请求，主持端只发这个 binding 被允许的 key；
+// 256 KiB 一块、base64 走现有 relay，服务器不解析 payload。
+export const ASSET_CHUNK_BYTES = 256 * 1024;
+export const ASSET_MAX_BYTES = 64 * 1024 * 1024;
+export const ASSET_MAX_KEYS = 32;
+export const ASSET_QUEUE_TIMEOUT_MS = 120_000;
+/** 缺文件/被拒/校验失败后先别每帧重问；15 秒后再试一次。 */
+export const ASSET_FAIL_COOLDOWN_MS = 15_000;
+/** 全场共用一个节流钟：一块 45ms，约 22 块/秒，给 world/判定/说话留出每连接 60 条/秒的余量。 */
+export const ASSET_PACE_MS = 45;
+const MAX_CHUNKS = Math.ceil(ASSET_MAX_BYTES / ASSET_CHUNK_BYTES);
+const HASHED_KEY = /^v:[0-9a-f]{40}$/;
+
+export function assetKeyOf(meta: { id: string; key?: string }): string {
+  return meta.key ?? meta.id;
+}
+
+export function isAssetRequest(m: SyncMsg): m is SyncMsg & Extract<AssetBody, { type: 'asset-request' }> {
+  return m.type === 'asset-request' && !!m && typeof m.requestId === 'string' && Array.isArray(m.keys);
+}
+export function isAssetChunk(m: SyncMsg): m is SyncMsg & Extract<AssetBody, { type: 'asset-chunk' }> {
+  return m.type === 'asset-chunk';
+}
+export function isAssetEnd(m: SyncMsg): m is SyncMsg & Extract<AssetBody, { type: 'asset-end' }> {
+  return m.type === 'asset-end';
+}
+export function isAssetFail(m: SyncMsg): m is SyncMsg & Extract<AssetBody, { type: 'asset-fail' }> {
+  return m.type === 'asset-fail';
+}
+export function isAssetMessage(m: SyncMsg): m is SyncMsg & AssetBody {
+  return m.type === 'asset-start' || m.type === 'asset-chunk' || m.type === 'asset-end' || m.type === 'asset-fail';
+}
+export function isAssetCancel(m: SyncMsg): m is SyncMsg & Extract<AssetBody, { type: 'asset-cancel' }> {
+  return m.type === 'asset-cancel';
+}
+
+export function bytesToBase64(bytes: Uint8Array): string {
+  let s = '';
+  // 一次只展开 32 KiB，避免 String.fromCharCode 参数过多把调用栈撑爆。
+  for (let i = 0; i < bytes.length; i += 0x8000) {
+    s += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  }
+  return btoa(s);
+}
+
+export function base64ToBytes(data: string): Uint8Array {
+  const bin = atob(data);
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
+}
+
+/** 主持端的发送端：约 22 块/秒的全局节流，给 world/判定/说话留出同一个连接的余量。 */
+let nextAssetAt = 0;
+async function paced<T>(fn: () => T, paceMs: number): Promise<T> {
+  const now = Date.now();
+  const at = Math.max(now, nextAssetAt);
+  nextAssetAt = at + Math.max(0, paceMs);
+  if (at > now) await new Promise<void>((resolve) => setTimeout(resolve, at - now));
+  return fn();
+}
+
+export interface ServeAssetOptions {
+  send: (body: AssetBody) => boolean;
+  load: (key: string) => Promise<Blob | undefined>;
+  /** 只有当前 binding 的玩家世界允许的 key 才返回 meta；返回 undefined 就是 forbidden。 */
+  meta: (key: string) => { mime: string; size?: number } | undefined;
+  paceMs?: number;
+  maxBytes?: number;
+  /** 玩家发来 asset-cancel / 世界换掉 allow 时，下一块前停下。 */
+  isCancelled?: (key?: string) => boolean;
+}
+
+/** 主持端把一个请求逐块发完。失败只发 asset-fail，不把主机路径、文件名或错误栈带出去。 */
+export async function serveAssetRequest(
+  request: Extract<AssetBody, { type: 'asset-request' }>,
+  opts: ServeAssetOptions,
+): Promise<void> {
+  const keys = [...new Set((Array.isArray(request.keys) ? request.keys : []).filter((k) => typeof k === 'string' && k.length > 0))].slice(0, ASSET_MAX_KEYS);
+  const maxBytes = opts.maxBytes ?? ASSET_MAX_BYTES;
+  const paceMs = opts.paceMs ?? ASSET_PACE_MS;
+  const fail = async (key: string, reason: AssetFailReason): Promise<boolean> => {
+    // allow 被撤走时不能再说 missing/too-large/read-failed，统一按 forbidden 回。
+    const liveReason = opts.meta(key) ? reason : 'forbidden';
+    return paced(() => opts.send({ type: 'asset-fail', requestId: request.requestId, key, reason: liveReason }), paceMs);
+  };
+  for (const key of keys) {
+    if (opts.isCancelled?.(key)) continue;
+    const candidate = opts.meta(key);
+    if (!candidate) { await fail(key, 'forbidden'); continue; }
+    if (typeof candidate.size === 'number' && candidate.size > maxBytes) { await fail(key, 'too-large'); continue; }
+    let blob: Blob | undefined;
+    try { blob = await opts.load(key); } catch { await fail(key, 'read-failed'); continue; }
+    if (!blob) { await fail(key, 'missing'); continue; }
+    if (blob.size > maxBytes) { await fail(key, 'too-large'); continue; }
+    // 文件确实存在、要开始发了，才让玩家把“排队 watchdog”换成这个 key 的 inactivity timer。
+    const started = await paced(() => opts.send({ type: 'asset-start', requestId: request.requestId, key }), paceMs);
+    if (!started) return;
+    const mime = candidate.mime || 'application/octet-stream';
+    const count = Math.max(1, Math.ceil(blob.size / ASSET_CHUNK_BYTES));
+    let completed = true;
+    for (let index = 0; index < count; index++) {
+      // world 更新可能把 key 收走；发到一半权限没了/玩家取消就停，剩下的不发。
+      if (opts.isCancelled?.(key)) { completed = false; break; }
+      const live = opts.meta(key);
+      if (!live) { await fail(key, 'forbidden'); completed = false; break; }
+      const start = index * ASSET_CHUNK_BYTES;
+      let chunk: Uint8Array;
+      try {
+        chunk = new Uint8Array(await blob.slice(start, Math.min(start + ASSET_CHUNK_BYTES, blob.size)).arrayBuffer());
+      } catch { await fail(key, 'read-failed'); completed = false; break; }
+      const ok = await paced(() => opts.send({
+        type: 'asset-chunk', requestId: request.requestId, key, mime, index, count, data: bytesToBase64(chunk),
+      }), paceMs);
+      if (!ok) return;
+    }
+    if (!completed) continue;
+    // 最后一块之后 allow 也可能刚被撤；end 前再查一次，避免把已无权文件标完。
+    if (!opts.meta(key)) { await fail(key, 'forbidden'); continue; }
+    if (opts.isCancelled?.(key)) continue;
+    const ok = await paced(() => opts.send({ type: 'asset-end', requestId: request.requestId, key, bytes: blob.size }), paceMs);
+    if (!ok) return;
+  }
+}
+
+export interface AssetReceiverOptions {
+  send: (body: AssetBody) => void;
+  /** 不传就按本地媒体库查/写；测试可以注入。 */
+  load?: (key: string) => Promise<Blob | undefined>;
+  save?: (key: string, blob: Blob) => Promise<void>;
+  onReady?: (key: string) => void;
+  onFail?: (key: string, reason: AssetFailReason) => void;
+  maxBytes?: number;
+  /** 0 表示不设超时；默认 30 秒 inactivity。 */
+  timeoutMs?: number;
+  /** 从请求发出到收到 asset-start 的排队上限，默认 120 秒。 */
+  queueTimeoutMs?: number;
+}
+
+interface Incoming {
+  requestId: string;
+  count: number;
+  mime: string;
+  parts: Uint8Array[];
+  bytes: number;
+  finishing: boolean;
+}
+
+/** 玩家端收文件：按 key 拼块，v: 哈希能校验就校验，失败最多重试一次。 */
+export interface AssetReceiver {
+  request(keys: string[]): Promise<void>;
+  handle(body: AssetBody): void;
+  reset(): void;
+}
+
+export function createAssetReceiver(opts: AssetReceiverOptions): AssetReceiver {
+  const load = opts.load ?? getRaw;
+  const save = opts.save ?? putRaw;
+  const maxBytes = opts.maxBytes ?? ASSET_MAX_BYTES;
+  const timeoutMs = opts.timeoutMs ?? 30_000;
+  const queueTimeoutMs = opts.queueTimeoutMs ?? (timeoutMs ? ASSET_QUEUE_TIMEOUT_MS : 0);
+  const pending = new Map<string, Incoming>();
+  const requests = new Map<string, Set<string>>();
+  const timers = new Map<string, ReturnType<typeof setTimeout>>();
+  const known = new Set<string>();
+  const failed = new Map<string, number>();
+  const retried = new Set<string>();
+  let n = 0;
+  const newRequestId = () => `ar-${Date.now().toString(36)}-${(++n).toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
+
+  const forget = (requestId: string, key: string) => {
+    const set = requests.get(requestId);
+    if (!set) return;
+    set.delete(key);
+    if (!set.size) requests.delete(requestId);
+  };
+
+  const clearKeyTimer = (key: string) => {
+    const timer = timers.get(key);
+    if (timer !== undefined) { clearTimeout(timer); timers.delete(key); }
+  };
+
+  /** 每个 key 自己的 inactivity timer：收到一块就续，不是整批 32 个 key 共用一个死线。 */
+  const armKeyTimeout = (key: string, requestId: string, ms: number) => {
+    clearKeyTimer(key);
+    if (!ms) return;
+    const timer = setTimeout(() => {
+      const p = pending.get(key);
+      if (!p || p.requestId !== requestId) return;
+      pending.delete(key);
+      timers.delete(key);
+      forget(requestId, key);
+      failed.set(key, Date.now());
+      // 只取消这一个 key：同批其他文件还在传，别一起砍。
+      opts.send({ type: 'asset-cancel', requestId, key });
+      opts.onFail?.(key, 'read-failed');
+    }, ms);
+    // Node 测试里未完成请求不该把进程吊住；浏览器没有 unref。
+    (timer as unknown as { unref?: () => void }).unref?.();
+    timers.set(key, timer);
+  };
+
+  async function finish(key: string, p: Incoming): Promise<void> {
+    if (p.finishing) return;
+    p.finishing = true;
+    const blob = new Blob(p.parts, { type: p.mime || 'application/octet-stream' });
+    if (HASHED_KEY.test(key)) {
+      let got = '';
+      try { got = await contentKey(blob); } catch { /* 没有 crypto 时 contentKey 会回随机名，下面当校验失败 */ }
+      if (got !== key) {
+        pending.delete(key);
+        forget(p.requestId, key);
+        if (!retried.has(key)) {
+          retried.add(key);
+          await request([key]);
+        } else {
+          failed.set(key, Date.now());
+          opts.onFail?.(key, 'read-failed');
+        }
+        return;
+      }
+    }
+    try {
+      await save(key, blob);
+      known.add(key);
+      failed.delete(key);
+    } catch {
+      pending.delete(key);
+      failed.set(key, Date.now());
+      opts.onFail?.(key, 'read-failed');
+      return;
+    }
+    pending.delete(key);
+    opts.onReady?.(key);
+  }
+
+  async function request(keys: string[]): Promise<void> {
+    const unique = [...new Set((Array.isArray(keys) ? keys : []).filter((k) => typeof k === 'string' && k.length > 0))];
+    const missing: string[] = [];
+    for (const key of unique) {
+      if (pending.has(key) || known.has(key)) continue;
+      const failedAt = failed.get(key);
+      if (failedAt && Date.now() - failedAt < ASSET_FAIL_COOLDOWN_MS) continue;
+      failed.delete(key);
+      let cached: Blob | undefined;
+      try { cached = await load(key); } catch { cached = undefined; }
+      if (cached) known.add(key);
+      else missing.push(key);
+    }
+    for (let i = 0; i < missing.length; i += ASSET_MAX_KEYS) {
+      const batch = missing.slice(i, i + ASSET_MAX_KEYS);
+      const requestId = newRequestId();
+      requests.set(requestId, new Set(batch));
+      for (const key of batch) { pending.set(key, { requestId, count: 0, mime: '', parts: [], bytes: 0, finishing: false }); armKeyTimeout(key, requestId, queueTimeoutMs); }
+      opts.send({ type: 'asset-request', requestId, keys: batch });
+    }
+  }
+
+  function handle(body: AssetBody): void {
+    if (body.type === 'asset-start') {
+      const p = pending.get(body.key);
+      if (!p || p.requestId !== body.requestId) return;
+      // host 真开始发这个 key 了，排队 watchdog 换成 inactivity timer。
+      armKeyTimeout(body.key, body.requestId, timeoutMs);
+      return;
+    }
+    if (body.type === 'asset-fail') {
+      const p = pending.get(body.key);
+      if (!p || p.requestId !== body.requestId) return;
+      pending.delete(body.key);
+      clearKeyTimer(body.key);
+      forget(body.requestId, body.key);
+      failed.set(body.key, Date.now());
+      opts.onFail?.(body.key, body.reason);
+      return;
+    }
+    if (body.type === 'asset-chunk') {
+      const p = pending.get(body.key);
+      if (!p || p.requestId !== body.requestId) return;
+      if (typeof body.data !== 'string' || !Number.isInteger(body.index) || !Number.isInteger(body.count)) return;
+      if (body.count < 1 || body.count > MAX_CHUNKS || body.index < 0 || body.index >= body.count) return;
+      if (p.count && p.count !== body.count) { pending.delete(body.key); clearKeyTimer(body.key); forget(body.requestId, body.key); failed.set(body.key, Date.now()); opts.onFail?.(body.key, 'read-failed'); return; }
+      if (p.count === 0) p.count = body.count;
+      if (!p.mime && typeof body.mime === 'string') p.mime = body.mime;
+      if (p.parts[body.index]) return;
+      let chunk: Uint8Array;
+      try { chunk = base64ToBytes(body.data); } catch { pending.delete(body.key); clearKeyTimer(body.key); forget(body.requestId, body.key); failed.set(body.key, Date.now()); opts.onFail?.(body.key, 'read-failed'); return; }
+      if (chunk.length > ASSET_CHUNK_BYTES) { pending.delete(body.key); clearKeyTimer(body.key); forget(body.requestId, body.key); failed.set(body.key, Date.now()); opts.onFail?.(body.key, 'too-large'); return; }
+      if (p.bytes + chunk.length > maxBytes) { pending.delete(body.key); clearKeyTimer(body.key); forget(body.requestId, body.key); failed.set(body.key, Date.now()); opts.onFail?.(body.key, 'too-large'); return; }
+      p.parts[body.index] = chunk;
+      p.bytes += chunk.length;
+      armKeyTimeout(body.key, body.requestId, timeoutMs);
+      return;
+    }
+    if (body.type === 'asset-end') {
+      const p = pending.get(body.key);
+      if (!p || p.requestId !== body.requestId) return;
+      if (!p.count || p.parts.filter(Boolean).length !== p.count || p.bytes !== body.bytes) {
+        pending.delete(body.key);
+        clearKeyTimer(body.key);
+        forget(body.requestId, body.key);
+        failed.set(body.key, Date.now());
+        opts.onFail?.(body.key, 'read-failed');
+        return;
+      }
+      clearKeyTimer(body.key);
+      forget(body.requestId, body.key);
+      void finish(body.key, p);
+    }
+  }
+
+  function reset(): void {
+    for (const requestId of [...requests.keys()]) opts.send({ type: 'asset-cancel', requestId });
+    timers.forEach((timer) => clearTimeout(timer));
+    timers.clear();
+    pending.clear();
+    requests.clear();
+    known.clear();
+    failed.clear();
+    retried.clear();
+  }
+
+  return { request, handle, reset };
+}

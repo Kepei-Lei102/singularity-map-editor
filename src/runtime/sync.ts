@@ -13,7 +13,9 @@ import { getRealWorld, getWorld, getUI, setUI, saveNow, worldContext, toast } fr
 import { SESSION, rand, renewSession } from '../core/session';
 import { createLocalTransport } from './transportLocal';
 import { createSwitchTransport, type Transport } from './transport';
-import type { SyncBody, SyncMsg, TrialMoveSignal } from './messages';
+import type { AssetBody, SyncBody, SyncMsg, TrialMoveSignal } from './messages';
+import { serveAssetRequest, assetKeyOf } from './assets';
+import { getRaw } from './media';
 export type { SyncBody, SyncMsg, TrialMoveSignal } from './messages';
 import { groupBounds } from '../core/grid';
 import { effectiveLayer, emptyVision } from '../scene/vision';
@@ -29,6 +31,13 @@ const transport = createSwitchTransport(createLocalTransport(isPlayerEntry() ? '
 
 // Binding is held only by the host; the URL carries an opaque reconnect capability, never a selectable pcId.
 const players = new Map<string, { pcId: string; context: number; trialContext?: string }>();
+// 每个玩家窗口只允许拉它自己那份 world 里用到的媒体存储名；请求别的一律 forbidden。
+// 世界一推就换一份，玩家换视角/换图后旧 key 也跟着收走。
+const assetAllow = new Map<string, Map<string, { mime: string; size: number }>>();
+interface AssetCancelEntry { all: boolean; keys: Set<string> }
+const assetCancels = new Map<string, Map<string, AssetCancelEntry>>();
+const assetActive = new Map<string, Map<string, number>>();
+const assetRequestLog = new Map<string, number[]>();
 const bindingsKey = () => `ts-player-bindings-${SESSION}`;
 try {
   const saved = JSON.parse(sessionStorage.getItem(bindingsKey()) ?? '{}') as Record<string, string>;
@@ -56,13 +65,28 @@ export function resetPlayerBindings(): void {
     transport.dropPeer(binding);
   }
   players.clear();
+  assetAllow.clear();
+  assetCancels.clear();
+  assetActive.clear();
+  assetRequestLog.clear();
   saveBindings();
 }
 /** 线上邀请被加入时，主持端先把 binding 对到角色；服务器只知道 inviteId，不知道 pcId。 */
 export function registerOnlinePlayer(binding: string, pcId: string): void {
   if (!binding || !pcId) return;
   players.set(binding, { pcId, context: projectContext() });
+  assetAllow.delete(binding);
+  assetCancels.delete(binding);
+  assetActive.delete(binding);
+  assetRequestLog.delete(binding);
   saveBindings();
+}
+/** 服务器告诉主持端这个 binding 断了：别留下能继续请求媒体的僵尸入口。 */
+export function unregisterOnlinePlayer(binding: string): void {
+  if (!binding) return;
+  players.delete(binding);
+  saveBindings();
+  dropPlayerAssets(binding);
 }
 /**
  * 试玩里刚发生的攻击，推给跟他有关的玩家。
@@ -151,6 +175,7 @@ export function clearTrialWindows() {
     transport.sendToPeer(id, { type: 'clear', __ts: 'ts-map', seq: rand(), from: SESSION, inst: INST, born: BORN });
     transport.dropPeer(id);
     players.delete(id);
+    dropPlayerAssets(id);
   }
 }
 /**
@@ -374,7 +399,7 @@ onProjectReplaced(() => {
     transport.sendToPeer(binding, { type: 'clear', __ts: 'ts-map', seq: rand(), from: SESSION, inst: INST, born: BORN });
     transport.dropPeer(binding);
   }
-  players.clear(); saveBindings();
+  players.clear(); saveBindings(); assetAllow.clear(); assetCancels.clear(); assetActive.clear(); assetRequestLog.clear();
 });
 
 let quietUntil = 0; // 编辑器刚启动、还在确认会话标识没撞车时，先不往外推
@@ -392,7 +417,7 @@ export function send(body: SyncBody, to?: string) {
       const w = p.trialContext ? getWorld() : getRealWorld();
       if (!transport.hasPeer(binding)) {
         if (transport.peerClosed(binding) || p.context !== projectContext() || !w.party.some(pc => pc.id === p.pcId)) {
-          players.delete(binding); saveBindings(); transport.dropPeer(binding);
+          players.delete(binding); saveBindings(); dropPlayerAssets(binding); transport.dropPeer(binding);
         }
         continue;
       }
@@ -400,15 +425,18 @@ export function send(body: SyncBody, to?: string) {
       const context = projectContext();
       const valid = p.context === context && (!p.trialContext || !!getUI().trial && p.trialContext === worldContext()) && w.party.some(pc => pc.id === p.pcId);
       const mapId = p.trialContext ? getUI().trial?.mapId ?? null : w.playerMapId;
-      const out: SyncBody = !valid
-        ? { type: 'clear' }
-        : body.type === 'world'
-          ? { type: 'world', world: { ...playerWorld(w, mapId, p.pcId), pendingJudgment: pendingForPlayer(p.pcId, p.trialContext), pendingCode: codeForPlayer(p.pcId), combatNotice: combatNoticeFor(p.pcId), utterances: utterancesFor(p.pcId), trialFlags: trialFlagsFor(p.pcId) } as World, focus: getUI().focus ?? null, cast: getUI().cast ?? null, you: p.pcId, skills: publicSkillsOf(w.party.find((pc) => pc.id === p.pcId)?.skills ?? []),
-            pathway: currentPathwayOf(w.party.find((pc) => pc.id === p.pcId) ?? { skills: [] }),
-            avatar: w.party.find((pc) => pc.id === p.pcId)?.avatar ?? null }
-          : body;
+      let out: SyncBody;
+      if (!valid) out = { type: 'clear' };
+      else if (body.type === 'world') {
+        const projected = playerWorld(w, mapId, p.pcId);
+        const pw = { ...projected, pendingJudgment: pendingForPlayer(p.pcId, p.trialContext), pendingCode: codeForPlayer(p.pcId), combatNotice: combatNoticeFor(p.pcId), utterances: utterancesFor(p.pcId), trialFlags: trialFlagsFor(p.pcId) } as World;
+        setPlayerAssets(binding, pw);
+        out = { type: 'world', world: pw, focus: getUI().focus ?? null, cast: getUI().cast ?? null, you: p.pcId, skills: publicSkillsOf(w.party.find((pc) => pc.id === p.pcId)?.skills ?? []),
+          pathway: currentPathwayOf(w.party.find((pc) => pc.id === p.pcId) ?? { skills: [] }),
+          avatar: w.party.find((pc) => pc.id === p.pcId)?.avatar ?? null };
+      } else out = body;
       transport.sendToPeer(binding, msg(out));
-      if (!valid) { players.delete(binding); saveBindings(); transport.dropPeer(binding); }
+      if (!valid) { players.delete(binding); saveBindings(); dropPlayerAssets(binding); transport.dropPeer(binding); }
     }
     return;
   }
@@ -419,6 +447,11 @@ export function send(body: SyncBody, to?: string) {
   }
   if (body.type === 'alive') for (const binding of players.keys()) {
     if (transport.hasPeer(binding)) transport.sendToPeer(binding, out);
+  }
+  // 玩家端回传媒体请求：和判定/说话一样，只回给打开它的主持人窗口。
+  if (body.type === 'asset-request' || body.type === 'asset-cancel') {
+    transport.sendToHost(out);
+    return;
   }
   // 玩家端回传判定的掷骰结果：直接回给打开它的那个主持人窗口。
   if (body.type === 'judge-roll' || body.type === 'say' || body.type === 'move' || body.type === 'code-submit' || body.type === 'skill-decision') {
@@ -442,6 +475,90 @@ export function pcIdForBinding(binding: string): string | null {
 /** 这条消息该发到哪一类窗口：试玩里的判定只发给试玩窗口，真实世界的判定只发给真实窗口。 */
 function sameContextWindow(entry: { trialContext?: string }): boolean {
   return (entry.trialContext ?? null) === (getUI().trial ? worldContext() : null);
+}
+
+function setPlayerAssets(binding: string, w: World): void {
+  const media = new Map<string, { mime: string; size: number }>();
+  for (const m of w.media ?? []) {
+    if (!m || typeof m.id !== 'string') continue;
+    const key = assetKeyOf(m);
+    if (!key) continue;
+    media.set(key, { mime: typeof m.mime === 'string' ? m.mime : 'application/octet-stream', size: typeof m.size === 'number' ? m.size : 0 });
+  }
+  assetAllow.set(binding, media);
+}
+function dropPlayerAssets(binding: string): void { assetAllow.delete(binding); assetCancels.delete(binding); assetActive.delete(binding); assetRequestLog.delete(binding); }
+
+function assetMsg(binding: string, body: AssetBody): boolean {
+  return transport.sendToPeer(binding, { ...body, __ts: 'ts-map', seq: rand(), from: SESSION, inst: INST, born: BORN });
+}
+
+/** 玩家窗口按 world.media 的存储名来要文件；主持端只发这个 binding 被允许的 key。 */
+export function onAssetRequest(m: Extract<AssetBody, { type: 'asset-request' }>, ref: PeerRef): void {
+  if (transport.kind !== 'ws') return;
+  const binding = bindingOf(ref);
+  if (!binding) return;
+  if (!players.has(binding)) return;
+  const now = Date.now();
+  const log = (assetRequestLog.get(binding) ?? []).filter((t) => now - t < 10_000);
+  if (log.length >= 30) {
+    // 配额拒绝要回 forbidden，不然玩家 30 秒后才超时失败。
+    void serveAssetRequest(m, {
+      send: (body) => (players.has(binding) ? assetMsg(binding, body) : false),
+      load: async () => undefined,
+      meta: () => undefined,
+    });
+    return;
+  }
+  log.push(now);
+  assetRequestLog.set(binding, log);
+  const active = assetActive.get(binding) ?? new Map<string, number>();
+  if (!active.has(m.requestId) && active.size >= 64) {
+    void serveAssetRequest(m, {
+      send: (body) => (players.has(binding) ? assetMsg(binding, body) : false),
+      load: async () => undefined,
+      meta: () => undefined,
+    });
+    return;
+  }
+  active.set(m.requestId, (active.get(m.requestId) ?? 0) + 1);
+  assetActive.set(binding, active);
+  void serveAssetRequest(m, {
+    send: (body) => (players.has(binding) ? assetMsg(binding, body) : false),
+    load: (key) => getRaw(key),
+    // 不缓存 allow 表：world 一换，正在传的旧 key 下一块就停。
+    meta: (key) => assetAllow.get(binding)?.get(key),
+    isCancelled: (key) => {
+      const entry = assetCancels.get(binding)?.get(m.requestId);
+      return !!entry && (entry.all || (!!key && entry.keys.has(key)));
+    },
+  }).finally(() => {
+    const act = assetActive.get(binding);
+    if (act) {
+      const left = (act.get(m.requestId) ?? 1) - 1;
+      if (left <= 0) act.delete(m.requestId); else act.set(m.requestId, left);
+      if (!act.size) assetActive.delete(binding);
+    }
+    const byReq = assetCancels.get(binding);
+    if (byReq) { byReq.delete(m.requestId); if (!byReq.size) assetCancels.delete(binding); }
+  });
+}
+
+/** 玩家 clear/unmount / 单个 key 超时时，别让主持端把几十 MB 发完。 */
+export function onAssetCancel(m: Extract<AssetBody, { type: 'asset-cancel' }>, ref: PeerRef): void {
+  if (transport.kind !== 'ws') return;
+  const binding = bindingOf(ref);
+  if (!binding) return;
+  if (!players.has(binding)) return;
+  if (!(assetActive.get(binding)?.get(m.requestId) ?? 0)) return; // 迟到/木马 cancel 不留垃圾
+  const byReq = assetCancels.get(binding) ?? new Map<string, AssetCancelEntry>();
+  if (!byReq.has(m.requestId) && byReq.size >= 64) return;
+  const entry = byReq.get(m.requestId) ?? { all: false, keys: new Set<string>() };
+  if (typeof m.key === 'string' && m.key) {
+    if (entry.keys.size < 64) entry.keys.add(m.key);
+  } else entry.all = true;
+  byReq.set(m.requestId, entry);
+  assetCancels.set(binding, byReq);
 }
 
 /** 玩家载荷里的密码请求：只给门名和谁在输，不带作者密码、不带已输入原文。 */
@@ -640,9 +757,10 @@ export function listenAsEditor(onHello: () => void) {
   const off = transport.onMessage((m, meta) => {
     // 另一个编辑器实例在用同一个会话标识（复制了标签页）：不管消息来得多晚，都按"后打开的让"处理
     // 玩家窗口的 judge-roll 也带同一个 SESSION，但那是绑定窗口发的，不是复制出来的编辑器，得放行。
-    // skill-decision 也要放行：玩家点「同意/不同意」时同源部署下玩家窗口的 sessionStorage 是主持人的副本，
+    // skill-decision / asset 也要放行：玩家点「同意/不同意」或要媒体时同源部署下玩家窗口的 sessionStorage 是主持人的副本，
     // 不排除它就会命中这个分支去 renewSession()，所有玩家窗口会永久掉线。
-    if (m.type !== 'hello' && m.type !== 'judge-roll' && m.type !== 'say' && m.type !== 'move'
+    const playerAsset = m.type === 'asset-request' || m.type === 'asset-cancel';
+    if (!playerAsset && m.type !== 'hello' && m.type !== 'judge-roll' && m.type !== 'say' && m.type !== 'move'
       && m.type !== 'code-submit' && m.type !== 'skill-decision' && m.from === SESSION && m.inst !== INST) {
       const iAmNewer = m.born < BORN || (m.born === BORN && m.inst < INST);
       if (iAmNewer) renewSession();
@@ -654,6 +772,8 @@ export function listenAsEditor(onHello: () => void) {
     if (m.type === 'code-submit') { onCodeSubmit(m, meta.from ?? meta.source); return; }
     if (m.type === 'say') { onSay(m, meta.from ?? meta.source); return; }
     if (m.type === 'move') { onMove(m, meta.from ?? meta.source); return; }
+    if (m.type === 'asset-request') { onAssetRequest(m, meta.from ?? meta.source); return; }
+    if (m.type === 'asset-cancel') { onAssetCancel(m, meta.from ?? meta.source); return; }
     if (m.type !== 'hello' || (m.to && m.to !== SESSION)) return;
     const p = m.binding && players.get(m.binding);
     if (!p) return;
@@ -684,7 +804,7 @@ export function listenAsPlayer(fn: (m: SyncMsg) => void, opts: PlayerListenOptio
   const QUIET = 5000;
   if (!binding) return () => {};
   const off = transport.onMessage((m, meta) => {
-    if (m.type !== 'world' && m.type !== 'play' && m.type !== 'stop' && m.type !== 'clear' && m.type !== 'alive' && m.type !== 'judge-request' && m.type !== 'judge-cancel' && m.type !== 'code-request' && m.type !== 'code-result' && m.type !== 'move-result') return;
+    if (m.type !== 'world' && m.type !== 'play' && m.type !== 'stop' && m.type !== 'clear' && m.type !== 'alive' && m.type !== 'judge-request' && m.type !== 'judge-cancel' && m.type !== 'code-request' && m.type !== 'code-result' && m.type !== 'move-result' && m.type !== 'asset-start' && m.type !== 'asset-chunk' && m.type !== 'asset-end' && m.type !== 'asset-fail') return;
     if (m.type !== 'alive' && meta.from !== 'host') return;
     // 线上第一份 world 到了才知道主持人的 SESSION；本地 URL 里已经钉死。
     if (bound && m.from !== bound) return;

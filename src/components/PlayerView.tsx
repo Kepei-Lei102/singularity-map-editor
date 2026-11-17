@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { listenAsPlayer, playerDiceMode, reportJudgmentRoll, send, type SyncMsg } from '../runtime/sync';
 import { ensureOnlinePlayer, onlinePlayerInfo, onOnlinePlayerClosed } from '../runtime/onlineRoom';
 import type { CodeRequest, CombatNotice, Focus, PendingJudgment, PublicSkill, SkillCast, Utterance, World } from '../core/types';
@@ -6,7 +6,8 @@ import { TIER_LABEL } from '../core/types';
 import { MapCanvas } from './MapCanvas';
 import { UTTERANCE_MAX } from '../rules/dialogue';
 import { MediaView } from './MediaPanel';
-import { applyMediaIndex } from '../runtime/media';
+import { applyMediaIndex, mediaChanged } from '../runtime/media';
+import { assetKeyOf, createAssetReceiver, isAssetMessage, type AssetReceiver } from '../runtime/assets';
 import { DiceTray, type DiceTrayRecord } from './DiceTray';
 import { hpOf } from '../rules/combat';
 import { damageLanded, damageLost } from '../runtime/trial';
@@ -41,6 +42,8 @@ export function PlayerView() {
   /** 线上房间：连上了等主持人推地图；连不上就把原因显示出来。 */
   const [online, setOnline] = useState(false);
   const [joinError, setJoinError] = useState<string | null>(null);
+  /** 线上房间按需收媒体文件；本地窗口同源，不需要走这一层。 */
+  const assets = useRef<AssetReceiver | null>(null);
   /** 笔记只存在这个浏览器里，不发给主持人。 */
   const [notes, setNotes] = useState(() => { try { return localStorage.getItem('ts-player-notes') ?? ''; } catch { return ''; } });
   /** 对话抽屉里正在打的那句话，和说给谁。 */
@@ -71,6 +74,7 @@ export function PlayerView() {
   const saveNotes = (v: string) => { setNotes(v); try { localStorage.setItem('ts-player-notes', v); } catch { /* 存不了也不影响看 */ } };
 
   useEffect(() => onOnlinePlayerClosed((reason) => {
+    assets.current?.reset();
     applyMediaIndex(null);
     setWorld(null); setMedia(null); setPending(null); setRolled(null);
     setJoinError(`房间已关闭：${reason}`);
@@ -78,7 +82,9 @@ export function PlayerView() {
   useEffect(() => {
     let off: (() => void) | undefined;
     let cancelled = false;
+    let onlineNow = false;
     const handle = (m: SyncMsg) => {
+      if (isAssetMessage(m)) { assets.current?.handle(m); return; }
       if (m.type === 'world') {
         applyMediaIndex(m.world);
         setWorld(m.world);
@@ -95,6 +101,8 @@ export function PlayerView() {
         if (pending) setPending((cur) => (cur?.id === pending.id ? cur : pending));
         else { setPending(null); setRolled(null); }
         setCodeRequest(m.world.pendingCode ?? null);
+        // 线上房间：贴图/物件媒体不在 world JSON 里，按存储名向主持人要；本地窗口直接读同源库。
+        if (onlineNow && assets.current) void assets.current.request((m.world.media ?? []).map(assetKeyOf));
       } else if (m.type === 'judge-request') { setPending(m.judgment); setRolled(null); }
       else if (m.type === 'judge-cancel') { setPending(null); setRolled(null); }
       else if (m.type === 'code-request') { setCodeRequest(m.request); }
@@ -102,7 +110,7 @@ export function PlayerView() {
         setCodeRequest((cur) => cur?.id === m.id ? null : cur);
         if (m.text) setCodeFeedback(m.text);
       }
-      else if (m.type === 'clear') { applyMediaIndex(null); setWorld(null); setMedia(null); setFocus(null); setCast(null); setPending(null); setRolled(null); setCodeRequest(null); setCodeSent(false); setCodeText(''); setCodeFeedback(null); }
+      else if (m.type === 'clear') { assets.current?.reset(); applyMediaIndex(null); setWorld(null); setMedia(null); setFocus(null); setCast(null); setPending(null); setRolled(null); setCodeRequest(null); setCodeSent(false); setCodeText(''); setCodeFeedback(null); }
       else if (m.type === 'move-result') setMoveNote(m.ok ? (m.kind === 'prompt' ? { ok: true, msg: m.msg } : null) : { ok: false, msg: m.msg });
       else if (m.type === 'play') setMedia({ mediaId: m.mediaId, label: m.label, mime: m.mime, blob: m.blob });
       else if (m.type === 'stop') setMedia(null);
@@ -111,11 +119,14 @@ export function PlayerView() {
     ensureOnlinePlayer()
       .then((isOnline) => {
         if (cancelled) return;
+        onlineNow = isOnline;
+        const receiver = createAssetReceiver({ send, onReady: () => mediaChanged() });
+        assets.current = receiver;
         setOnline(isOnline);
         off = listenAsPlayer(handle, isOnline ? { online: true, binding: onlinePlayerInfo()?.binding } : {});
       })
       .catch((e) => { if (!cancelled) setJoinError(e instanceof Error ? e.message : '线上房间连不上'); });
-    return () => { cancelled = true; off?.(); applyMediaIndex(null); };
+    return () => { cancelled = true; off?.(); assets.current?.reset(); assets.current = null; applyMediaIndex(null); };
   }, []);
 
   // 方向键走一格，发给见证者那边执行。焦点在输入框里就不抢。

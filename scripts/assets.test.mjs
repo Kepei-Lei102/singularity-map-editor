@@ -1,0 +1,310 @@
+import assert from 'node:assert/strict';
+import { after, test } from 'node:test';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { createRequire } from 'node:module';
+import { build } from 'esbuild';
+
+const root = fileURLToPath(new URL('..', import.meta.url));
+const temp = await mkdtemp(join(tmpdir(), 'ts-assets-'));
+const bundle = join(temp, 'assets.cjs');
+await build({
+  stdin: { contents: `export * from './src/runtime/assets'; export { contentKey } from './src/runtime/media';`, resolveDir: root },
+  outfile: bundle, bundle: true, platform: 'node', format: 'cjs', logLevel: 'silent',
+});
+globalThis.crypto ??= (await import('node:crypto')).webcrypto;
+const api = createRequire(import.meta.url)(bundle);
+after(() => rm(temp, { recursive: true, force: true }));
+
+const tick = () => new Promise((r) => setTimeout(r, 30));
+const pattern = (n) => Uint8Array.from({ length: n }, (_, i) => (i * 31 + 7) & 255);
+
+test('base64 往返不丢字节，跨 256 KiB 边界也对', () => {
+  const bytes = pattern(api.ASSET_CHUNK_BYTES + 137);
+  const text = api.bytesToBase64(bytes);
+  assert.deepEqual(api.base64ToBytes(text), bytes);
+});
+
+test('主持端按 key 分块发，玩家拼回并校验内容哈希', async () => {
+  const bytes = pattern(api.ASSET_CHUNK_BYTES + 137);
+  const blob = new Blob([bytes], { type: 'image/png' });
+  const key = await api.contentKey(blob);
+  const saved = [];
+  const ready = [];
+  const requests = [];
+  const rec = api.createAssetReceiver({
+    send: (body) => requests.push(body),
+    load: async () => undefined,
+    save: async (k, b) => { saved.push({ key: k, bytes: new Uint8Array(await b.arrayBuffer()), mime: b.type }); },
+    onReady: (k) => ready.push(k),
+  });
+  await rec.request([key]);
+  const req = requests[0];
+  assert.equal(req.type, 'asset-request');
+  const sent = [];
+  await api.serveAssetRequest(req, {
+    send: (body) => { sent.push(body); return true; },
+    load: async () => blob,
+    meta: (k) => k === key ? { mime: 'image/png' } : undefined,
+    paceMs: 0,
+  });
+  const chunks = sent.filter((m) => m.type === 'asset-chunk');
+  assert.equal(chunks.length, 2);
+  assert.equal(chunks[0].index, 0);
+  assert.equal(chunks[0].count, 2);
+  assert.ok(sent.some((m) => m.type === 'asset-start' && m.key === key));
+  assert.ok(sent.some((m) => m.type === 'asset-end' && m.key === key && m.bytes === blob.size));
+
+  for (const m of sent) rec.handle(m);
+  await tick();
+  assert.equal(saved.length, 1);
+  assert.equal(saved[0].key, key);
+  assert.deepEqual(saved[0].bytes, bytes);
+  assert.equal(saved[0].mime, 'image/png');
+  assert.deepEqual(ready, [key]);
+});
+
+test('已缓存的 key 不再请求；超过 32 个 key 分批', async () => {
+  const requests = [];
+  const rec = api.createAssetReceiver({ send: (body) => requests.push(body), load: async (k) => k === 'cached' ? new Blob(['x']) : undefined, save: async () => {} });
+  const keys = ['cached', ...Array.from({ length: 40 }, (_, i) => `k${i}`)];
+  await rec.request(keys);
+  assert.equal(requests.length, 2);
+  assert.deepEqual(requests.map((m) => m.keys.length), [32, 8]);
+});
+
+test('主持端拒绝不在允许集合里的 key，缺文件/超大/读失败各有 fail', async () => {
+  const cases = [
+    ['forbidden', undefined, new Blob(['x']), undefined, {}],
+    ['missing', { mime: 'image/png' }, undefined, undefined, {}],
+    ['too-large', { mime: 'image/png' }, new Blob([pattern(10)]), undefined, { maxBytes: 4 }],
+    ['read-failed', { mime: 'image/png' }, undefined, new Error('read'), {}],
+  ];
+  for (const [reason, meta, blob, error, extra] of cases) {
+    const sent = [];
+    let loads = 0;
+    await api.serveAssetRequest({ type: 'asset-request', requestId: 'r' + reason, keys: ['k'] }, {
+      send: (body) => { sent.push(body); return true; },
+      load: async () => { loads++; if (error) throw error; return blob; },
+      meta: () => meta,
+      paceMs: 0,
+      ...extra,
+    });
+    assert.equal(sent.length, 1, reason);
+    assert.equal(sent[0].type, 'asset-fail');
+    assert.equal(sent[0].reason, reason);
+    if (reason === 'forbidden') assert.equal(loads, 0, '没允许的 key 不读本机文件');
+  }
+});
+
+test('玩家收到 asset-fail 会清掉 pending 并回调', async () => {
+  const requests = [];
+  const fails = [];
+  const rec = api.createAssetReceiver({ send: (body) => requests.push(body), load: async () => undefined, save: async () => {}, onFail: (k, r) => fails.push([k, r]) });
+  await rec.request(['k']);
+  const req = requests[0];
+  rec.handle({ type: 'asset-fail', requestId: req.requestId, key: 'k', reason: 'missing' });
+  assert.deepEqual(fails, [['k', 'missing']]);
+  await rec.request(['k']);
+  assert.equal(requests.length, 1, '失败后冷却期内不重问');
+  rec.reset();
+  await rec.request(['k']);
+  assert.equal(requests.length, 2);
+});
+
+test('坏 chunk / 不完整的 end 不写文件也不抛', async () => {
+  const requests = [];
+  const saved = [];
+  const rec = api.createAssetReceiver({ send: (body) => requests.push(body), load: async () => undefined, save: async (k, b) => saved.push(k) });
+  await rec.request(['k']);
+  const req = requests[0];
+  assert.doesNotThrow(() => {
+    rec.handle({ type: 'asset-chunk', requestId: req.requestId, key: 'k', mime: 'image/png', index: 0, count: 2, data: 'not base64!!' });
+    rec.handle({ type: 'asset-end', requestId: req.requestId, key: 'k', bytes: 1 });
+  });
+  assert.equal(saved.length, 0);
+});
+
+test('哈希不符会重试一次，第二次还错才失败', async () => {
+  const wrong = new Blob([pattern(16)], { type: 'image/png' });
+  const wrongKey = await api.contentKey(new Blob([pattern(15)]));
+  const requests = [];
+  const fails = [];
+  const saved = [];
+  const rec = api.createAssetReceiver({ send: (body) => requests.push(body), load: async () => undefined, save: async (k) => saved.push(k), onFail: (k, r) => fails.push([k, r]) });
+  await rec.request([wrongKey]);
+  const first = requests[0];
+  const sent = [];
+  await api.serveAssetRequest(first, {
+    send: (body) => { sent.push(body); return true; },
+    load: async () => wrong,
+    meta: () => ({ mime: 'image/png' }),
+    paceMs: 0,
+  });
+  for (const m of sent) rec.handle(m);
+  await tick();
+  assert.equal(saved.length, 0);
+  assert.equal(requests.length, 2, '第一次哈希错后要再请求一次');
+  assert.equal(requests[1].type, 'asset-request');
+  assert.deepEqual(requests[1].keys, [wrongKey]);
+
+  const sent2 = [];
+  await api.serveAssetRequest(requests[1], {
+    send: (body) => { sent2.push(body); return true; },
+    load: async () => wrong,
+    meta: () => ({ mime: 'image/png' }),
+    paceMs: 0,
+  });
+  for (const m of sent2) rec.handle(m);
+  await tick();
+  assert.equal(saved.length, 0);
+  assert.deepEqual(fails, [[wrongKey, 'read-failed']]);
+});
+
+
+test('主持端被取消后不再发后面的块，也不发 end', async () => {
+  const blob = new Blob([pattern(api.ASSET_CHUNK_BYTES + 1)]);
+  let cancelled = false;
+  const sent = [];
+  await api.serveAssetRequest({ type: 'asset-request', requestId: 'r-cancel', keys: ['k'] }, {
+    send: (body) => { sent.push(body); if (body.type === 'asset-chunk' && body.index === 0) cancelled = true; return true; },
+    load: async () => blob,
+    meta: () => ({ mime: 'image/png' }),
+    paceMs: 0,
+    isCancelled: () => cancelled,
+  });
+  assert.equal(sent.filter((m) => m.type === 'asset-chunk').length, 1);
+  assert.equal(sent.some((m) => m.type === 'asset-end'), false);
+});
+
+test('玩家 reset 会给在途请求发 cancel，之后可以重新请求', async () => {
+  const requests = [];
+  const rec = api.createAssetReceiver({ send: (body) => requests.push(body), load: async () => undefined, save: async () => {}, timeoutMs: 0 });
+  await rec.request(['k']);
+  const first = requests[0];
+  rec.reset();
+  assert.equal(requests[1]?.type, 'asset-cancel');
+  assert.equal(requests[1]?.requestId, first.requestId);
+  await rec.request(['k']);
+  assert.equal(requests[2]?.type, 'asset-request');
+});
+
+test('排队 watchdog：没等到 asset-start 会 fail 并清 pending', async () => {
+  const requests = [];
+  const fails = [];
+  const rec = api.createAssetReceiver({ send: (body) => requests.push(body), load: async () => undefined, save: async () => {}, onFail: (k, r) => fails.push([k, r]), timeoutMs: 5, queueTimeoutMs: 5 });
+  await rec.request(['k']);
+  await new Promise((r) => setTimeout(r, 20));
+  assert.deepEqual(fails, [['k', 'read-failed']]);
+  assert.ok(requests.some((m) => m.type === 'asset-cancel' && m.key === 'k'), '超时要让主持端别再发这个 key');
+  const before = requests.length;
+  await rec.request(['k']);
+  assert.equal(requests.length, before, '冷却期内不重问');
+});
+
+test('块超过 256 KiB、end bytes 不符都会 fail，不写文件', async () => {
+  const mk = () => {
+    const requests = [];
+    const fails = [];
+    const saved = [];
+    const rec = api.createAssetReceiver({ send: (body) => requests.push(body), load: async () => undefined, save: async (k) => saved.push(k), onFail: (k, r) => fails.push([k, r]), timeoutMs: 0 });
+    return { rec, requests, fails, saved };
+  };
+  {
+    const { rec, requests, fails, saved } = mk();
+    await rec.request(['big']);
+    const req = requests[0];
+    rec.handle({ type: 'asset-chunk', requestId: req.requestId, key: 'big', mime: 'image/png', index: 0, count: 1, data: api.bytesToBase64(pattern(api.ASSET_CHUNK_BYTES + 1)) });
+    assert.deepEqual(fails, [['big', 'too-large']]);
+    assert.equal(saved.length, 0);
+  }
+  {
+    const { rec, requests, fails, saved } = mk();
+    await rec.request(['k']);
+    const req = requests[0];
+    rec.handle({ type: 'asset-chunk', requestId: req.requestId, key: 'k', mime: 'image/png', index: 0, count: 1, data: api.bytesToBase64(pattern(3)) });
+    rec.handle({ type: 'asset-end', requestId: req.requestId, key: 'k', bytes: 99 });
+    assert.deepEqual(fails, [['k', 'read-failed']]);
+    assert.equal(saved.length, 0);
+  }
+});
+
+
+test('world 换 allow 后不再读文件/不再发下一块，发 forbidden', async () => {
+  let allowed = true;
+  let loads = 0;
+  const sent = [];
+  await api.serveAssetRequest({ type: 'asset-request', requestId: 'r-live', keys: ['k'] }, {
+    send: (body) => { sent.push(body); if (body.type === 'asset-chunk' && body.index === 0) allowed = false; return true; },
+    load: async () => { loads++; return new Blob([pattern(api.ASSET_CHUNK_BYTES + 1)]); },
+    meta: () => allowed ? { mime: 'image/png' } : undefined,
+    paceMs: 0,
+  });
+  assert.equal(loads, 1);
+  assert.equal(sent.filter((m) => m.type === 'asset-chunk').length, 1);
+  assert.equal(sent.some((m) => m.type === 'asset-end'), false);
+  assert.ok(sent.some((m) => m.type === 'asset-fail' && m.reason === 'forbidden'));
+});
+
+test('meta 说文件超大时不先读整份 Blob', async () => {
+  let loads = 0;
+  const sent = [];
+  await api.serveAssetRequest({ type: 'asset-request', requestId: 'r-big', keys: ['k'] }, {
+    send: (body) => { sent.push(body); return true; },
+    load: async () => { loads++; return new Blob([pattern(100)]); },
+    meta: () => ({ mime: 'image/png', size: 100 }),
+    maxBytes: 50,
+    paceMs: 0,
+  });
+  assert.equal(loads, 0);
+  assert.deepEqual(sent.map((m) => [m.type, m.reason]), [['asset-fail', 'too-large']]);
+});
+
+
+test('同批多 key：一个 key 的 timer 不影响另一个；收到 chunk 会续期', async () => {
+  const requests = [];
+  const fails = [];
+  const rec = api.createAssetReceiver({ send: (body) => requests.push(body), load: async () => undefined, save: async () => {}, onFail: (k, r) => fails.push([k, r]), timeoutMs: 20 });
+  await rec.request(['a', 'b']);
+  const req = requests[0];
+  rec.handle({ type: 'asset-start', requestId: req.requestId, key: 'a' });
+  rec.handle({ type: 'asset-start', requestId: req.requestId, key: 'b' });
+  await new Promise((r) => setTimeout(r, 10));
+  rec.handle({ type: 'asset-chunk', requestId: req.requestId, key: 'b', mime: 'image/png', index: 0, count: 2, data: api.bytesToBase64(pattern(1)) });
+  await new Promise((r) => setTimeout(r, 12));
+  assert.deepEqual(fails, [['a', 'read-failed']], 'a 到点，b 因为收到块被续期');
+  await new Promise((r) => setTimeout(r, 12));
+  assert.deepEqual(fails, [['a', 'read-failed'], ['b', 'read-failed']]);
+  assert.ok(requests.some((m) => m.type === 'asset-cancel' && m.key === 'b'));
+});
+
+test('最后一块之后 allow 被撤，不再发 end，改发 forbidden', async () => {
+  let allowed = true;
+  const sent = [];
+  await api.serveAssetRequest({ type: 'asset-request', requestId: 'r-end', keys: ['k'] }, {
+    send: (body) => { sent.push(body); if (body.type === 'asset-chunk' && body.index === 1) allowed = false; return true; },
+    load: async () => new Blob([pattern(api.ASSET_CHUNK_BYTES + 1)]),
+    meta: () => allowed ? { mime: 'image/png' } : undefined,
+    paceMs: 0,
+  });
+  assert.equal(sent.filter((m) => m.type === 'asset-chunk').length, 2);
+  assert.equal(sent.some((m) => m.type === 'asset-end'), false);
+  assert.ok(sent.some((m) => m.type === 'asset-fail' && m.reason === 'forbidden'));
+});
+
+
+test('asset-start 到达会把排队 watchdog 换成这个 key 的 inactivity timer', async () => {
+  const requests = [];
+  const fails = [];
+  const rec = api.createAssetReceiver({ send: (body) => requests.push(body), load: async () => undefined, save: async () => {}, onFail: (k, r) => fails.push([k, r]), timeoutMs: 10, queueTimeoutMs: 20 });
+  await rec.request(['k']);
+  const req = requests[0];
+  await new Promise((r) => setTimeout(r, 15));
+  rec.handle({ type: 'asset-start', requestId: req.requestId, key: 'k' });
+  await new Promise((r) => setTimeout(r, 8));
+  assert.deepEqual(fails, [], '排队 watchdog 已被 start 清掉，inactivity 还没到');
+  await new Promise((r) => setTimeout(r, 8));
+  assert.deepEqual(fails, [['k', 'read-failed']], 'start 后 10ms 没有块才超时');
+});

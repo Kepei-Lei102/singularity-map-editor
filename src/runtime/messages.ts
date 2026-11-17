@@ -3,6 +3,16 @@ import type { CodeRequest, PendingJudgment, World, Focus, SkillCast, PublicSkill
 
 export type TrialMoveSignal = 'turn' | 'move' | 'prompt' | 'failed';
 
+export type AssetFailReason = 'missing' | 'forbidden' | 'too-large' | 'read-failed';
+/** 线上房间按需搬媒体：请求只带存储名，分块走现有 relay，服务器不解析。 */
+export type AssetBody =
+  | { type: 'asset-request'; requestId: string; keys: string[] }
+  | { type: 'asset-start'; requestId: string; key: string }
+  | { type: 'asset-chunk'; requestId: string; key: string; mime: string; index: number; count: number; data: string }
+  | { type: 'asset-end'; requestId: string; key: string; bytes: number }
+  | { type: 'asset-fail'; requestId: string; key: string; reason: AssetFailReason }
+  | { type: 'asset-cancel'; requestId: string; key?: string };
+
 export type SyncBody =
   | { type: 'world'; world: World; focus?: Focus | null; cast?: SkillCast | null; you?: string; skills?: PublicSkill[]; pathway?: string | null; avatar?: string | null }
   | { type: 'skill-decision'; castId: string; ok: boolean } // 玩家窗口回传：同不同意发动
@@ -21,7 +31,8 @@ export type SyncBody =
   | { type: 'stop' }
   | { type: 'claim' } // 编辑器启动时：这个会话标识有人在用吗？
   | { type: 'taken' } // 回答：在用（复制标签页时会碰上），换一个
-  | { type: 'alive' }; // 编辑器每两秒报一声"我还在"：玩家窗口靠它判断原来那个编辑器是不是已经关了 / 刷新了
+  | { type: 'alive' } // 编辑器每两秒报一声"我还在"：玩家窗口靠它判断原来那个编辑器是不是已经关了 / 刷新了
+  | AssetBody;
 /** from：发送方的会话；to：只给某个会话（玩家窗口打招呼时用）。 */
 /** inst / born：发送的是哪个页面实例、什么时候打开的（同一个会话标识出现在两个实例上时，后打开的让）。 */
 export type SyncMsg = SyncBody & { __ts: 'ts-map'; seq: string; from: string; to?: string; inst: string; born: number };

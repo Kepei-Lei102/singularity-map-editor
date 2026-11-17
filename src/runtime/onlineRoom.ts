@@ -3,7 +3,7 @@
 import { isRoomCreatedPayload, isRoomInvitedPayload, isRoomJoinedPayload, isRoomReconnectedPayload } from '../protocol';
 import { connectRelay, type RelaySocket } from './wsSocket';
 import { createWsTransport } from './transportWs';
-import { registerOnlinePlayer, resetPlayerBindings, setTransport, useLocalTransport } from './sync';
+import { registerOnlinePlayer, resetPlayerBindings, setTransport, unregisterOnlinePlayer, useLocalTransport } from './sync';
 
 export const relayUrl = (): string => {
   const env = import.meta.env;
@@ -79,6 +79,7 @@ export async function createOnlineHostRoom(url = relayUrl()): Promise<{ roomId: 
         const pcId = invites.get(inviteId);
         if (pcId) registerOnlinePlayer(binding, pcId);
       },
+      onPeerLeft: (binding) => unregisterOnlinePlayer(binding),
       onClosed: (reason) => {
         // 主持端自己关房时 host 已经置空；只有意外掉线/过期才走这里。
         if (!host || host.socket !== socket) return;

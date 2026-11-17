@@ -12,6 +12,8 @@ export interface WsTransportOptions {
   token: string;
   /** 主持端：peer.joined 时把 inviteId 交回 onlineRoom，用来认 pcId。 */
   onPeerJoined?: (binding: string, inviteId: string) => void;
+  /** 主持端：玩家连接断了，把 players/asset allow 一起清掉。 */
+  onPeerLeft?: (binding: string) => void;
   onClosed?: (reason: string) => void;
 }
 
@@ -27,6 +29,7 @@ export class WsTransport implements Transport {
   private readonly offEnvelope: () => void;
   private readonly offClose: () => void;
   private readonly onPeerJoined?: (binding: string, inviteId: string) => void;
+  private readonly onPeerLeft?: (binding: string) => void;
   private readonly onClosed?: (reason: string) => void;
   private closedNotified = false;
 
@@ -36,6 +39,7 @@ export class WsTransport implements Transport {
     this.roomId = o.roomId;
     this.token = o.token;
     this.onPeerJoined = o.onPeerJoined;
+    this.onPeerLeft = o.onPeerLeft;
     this.onClosed = o.onClosed;
     this.offEnvelope = this.socket.onEnvelope((e) => this.handle(e));
     this.offClose = this.socket.onClose((reason) => this.notifyClosed(reason));
@@ -95,6 +99,7 @@ export class WsTransport implements Transport {
     if (e.type === 'peer.left' && isPeerLeftPayload(e.payload)) {
       if (this.role !== 'host') return;
       this.peers.delete(e.payload.binding);
+      this.onPeerLeft?.(e.payload.binding);
       return;
     }
     if (e.type === 'room.closed') {
