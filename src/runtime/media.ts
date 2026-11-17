@@ -58,12 +58,14 @@ export async function contentKey(blob: Blob): Promise<string> {
   }
 }
 
-/** 存一份新文件，返回存储名。已经有同样内容的就不再写。 */
-export async function storeBlob(blob: Blob): Promise<string> {
+/** 存一份新文件，返回存储名和这次是否真的新写了一份。已经有同样内容的就不再写。 */
+export async function storeBlobStatus(blob: Blob): Promise<{ key: string; created: boolean }> {
   const key = await contentKey(blob);
-  if (!(await getRaw(key))) await putRaw(key, blob);
-  return key;
+  const existing = await getRaw(key);
+  if (!existing) await putRaw(key, blob);
+  return { key, created: !existing };
 }
+
 
 /** 浏览器里存着的全部文件的存储名，和每个的大小。 */
 export async function listStored(): Promise<{ key: string; size: number }[]> {
@@ -114,6 +116,11 @@ export function mediaChanged() {
   urlCache.clear();
   version++;
   versionListeners.forEach((l) => l());
+}
+/** 媒体文件变化（导入/恢复/清理）时通知，和 React 的 useMediaVersion 共用同一批监听者。 */
+export function onMediaChanged(fn: () => void): () => void {
+  versionListeners.add(fn);
+  return () => versionListeners.delete(fn);
 }
 export async function blobUrl(id: string): Promise<string | null> {
   // 按存储名 + 类型缓存：同一个 ID 换了内容就是另一个存储名；同样的字节可能被当成不同类型导入过（比如先是未知类型、后来是 PDF），按当前的类型重新包一下

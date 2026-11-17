@@ -10,13 +10,13 @@ import { CONN_LABEL, TIERS, TIER_LABEL } from '../core/types';
 import {
   deleteMap, duplicateMap, fillEmptyCells, findMap, giveMapKnowledge, reshapeMaps, setVisionMode, findObj, fireAttach, hideSecret, itemsAt, jumpTo, resizeMap, revealSecret,
   revealObjectIdentity, hideObjectIdentity, sameSel, setObjectEnabled, setObjectState, setObjectStates, resetRoom, applyRoomLayout, moveSlidingObject, deleteMapObject,
-  addCellGroup, deleteCellGroup, renameCellGroup, setCellGroupTexture, setCellGroupFit, setCellGroupOpacity, setCellGroupZ,
+  addCellGroup, deleteCellGroup, renameCellGroup, setCellGroupTexture, setCellGroupFit, setCellGroupOpacity, setCellGroupZ, offerDeleteOrphanBlob,
 } from '../runtime/actions';
 import { checkSlidingMove, seesSlidingObject, slidingPuzzleForObject } from '../scene/sliding';
 import { CELL_METERS, nearestPc, type Nearest } from '../scene/perception';
 import { cellName, parseCell, rangeName, uid } from '../core/util';
 import { MAX_SIDE } from '../core/schema.js';
-import { storeBlob, useBlobUrl } from '../runtime/media';
+import { storeBlobStatus, useBlobUrl } from '../runtime/media';
 import { blankCellCount } from '../core/grid';
 import { Area, Check, Num, Row, Section, Txt } from './fields';
 import { ObjectInteractionPanel } from './ObjectInteraction';
@@ -84,15 +84,21 @@ function CellGroups({ world, map, ui, editable }: { world: World; map: GameMap; 
     setBusy(true);
     const ctx = worldContext(); // 上传途中换工程：传完不挂到另一个世界
     const id = uid();
+    let stored: { key: string; created: boolean } | null = null;
     try {
-      const key = await storeBlob(file);
-      if (ctx !== worldContext()) return toast('上传完成时工程已经换了，没有加进去');
+      stored = await storeBlobStatus(file);
+      if (ctx !== worldContext()) {
+        toast('上传完成时工程已经换了，没有加进去');
+        await offerDeleteOrphanBlob(file.name, stored);
+        return;
+      }
       update((d) => {
-        d.media.push({ id, name: file.name, mime: file.type, size: file.size, key });
+        d.media.push({ id, name: file.name, mime: file.type, size: file.size, key: stored!.key });
         const g = findMap(d, map.id)?.groups?.find((x) => x.id === group!.id);
         if (g) g.texture = { mediaId: id, fit: g.texture?.fit ?? 'fill', opacity: g.texture?.opacity ?? 1 };
       });
     } catch {
+      if (stored) await offerDeleteOrphanBlob(file.name, stored);
       toast(`上传失败：${file.name}`);
     } finally {
       setBusy(false);

@@ -540,3 +540,81 @@ test('playerMap 记忆组 id 稳定、碰撞加后缀、同源同版本并组', 
   assert.notEqual(pm2.seen.groups[0].id, collision);
   assert.equal(pm2.seen.groups[0].id.startsWith(collision), true);
 });
+
+test('删媒体会清掉独立视野记忆里的贴图', () => {
+  const pcId = 'a';
+  const { map } = fixture(pcId);
+  api.update((d) => {
+    d.media.push({ id: 'tex', name: '旧地板', mime: 'image/png', size: 10 });
+    d.visionMode = 'individual';
+  });
+  api.update((d) => {
+    const m = api.findMap(d, map.id);
+    m.views.a.fog.fill(2);
+    m.views.a.seen.groups = [{ id: 'old', name: '旧', cells: [api.fineKeyOf(m, 3, 3)], texture: { mediaId: 'tex' }, sourceId: 'g', textureKey: ['tex', 'fill', '1'].join('~') }];
+  });
+  assert.equal(api.findMap(api.getWorld(), map.id).views.a.seen.groups[0].texture.mediaId, 'tex');
+  api.deleteMedia('tex');
+  const m = api.findMap(api.getWorld(), map.id);
+  assert.equal(m.views.a.seen.groups.every((g) => g.texture === undefined), true);
+  assert.doesNotThrow(() => api.checkWorld(api.getWorld()));
+});
+
+test('删正在播放的媒体会停掉 nowPlaying', () => {
+  const { map } = fixture();
+  api.update((d) => { d.media.push({ id: 'tex', name: '音频', mime: 'audio/mpeg', size: 10 }); });
+  api.setUI({ nowPlaying: { mediaId: 'tex', label: '音频', broadcast: false } });
+  api.deleteMedia('tex');
+  assert.equal(api.getUI().nowPlaying, null);
+});
+
+test('上传孤儿只有这次真的新写文件时才问用户', async () => {
+  const oldConfirm = globalThis.confirm;
+  let asked = 0;
+  globalThis.confirm = () => { asked++; return false; };
+  try {
+    await api.offerDeleteOrphanBlob('x', { key: 'k', created: false });
+    assert.equal(asked, 0);
+    await api.offerDeleteOrphanBlob('x', { key: 'k', created: true });
+    assert.equal(asked, 1);
+  } finally {
+    globalThis.confirm = oldConfirm;
+  }
+});
+
+test('上传孤儿删除前检查同一标签页的引用', async () => {
+  const { map } = fixture();
+  const deleted = [];
+  const oldIdb = globalThis.indexedDB;
+  const oldConfirm = globalThis.confirm;
+  globalThis.confirm = () => true;
+  globalThis.indexedDB = {
+    open() {
+      const req = {};
+      const db = {
+        transaction() {
+          const tx = { objectStore: () => ({ delete(key) { deleted.push(key); return {}; } }) };
+          queueMicrotask(() => tx.oncomplete?.());
+          return tx;
+        },
+        close() {},
+      };
+      queueMicrotask(() => { req.result = db; req.onsuccess?.(); });
+      return req;
+    },
+  };
+  try {
+    api.update((d) => { d.media.push({ id: 'm', name: '在用', mime: 'image/png', size: 1, key: 'kept-key' }); });
+    await api.offerDeleteOrphanBlob('在用', { key: 'kept-key', created: true });
+    assert.deepEqual(deleted, []);
+
+    await api.offerDeleteOrphanBlob('孤儿', { key: 'orphan-key', created: true });
+    assert.deepEqual(deleted, ['orphan-key']);
+
+    await api.offerDeleteOrphanBlob('已有', { key: 'shared-key', created: false });
+    assert.deepEqual(deleted, ['orphan-key']);
+  } finally {
+    globalThis.indexedDB = oldIdb;
+    globalThis.confirm = oldConfirm;
+  }
+});

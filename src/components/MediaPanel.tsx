@@ -1,7 +1,7 @@
 import { useSyncExternalStore } from 'react';
-import { cleanupMedia, deleteMedia, stopMedia, playMedia } from '../runtime/actions';
+import { cleanupMedia, deleteMedia, offerDeleteOrphanBlob, stopMedia, playMedia } from '../runtime/actions';
 import { isOnlineTransport, subscribeTransportKind } from '../runtime/sync';
-import { storeBlob, useBlobUrl } from '../runtime/media';
+import { storeBlobStatus, useBlobUrl } from '../runtime/media';
 import { toast, update, useUI, useWorld, worldContext } from '../core/store';
 import { uid } from '../core/util';
 import { Section } from './fields';
@@ -17,13 +17,19 @@ export function MediaPanel() {
     const ctx = worldContext(); // 上传途中换了工程、进出了试玩：传完的文件不挂到那时恰好打开的世界上
     for (const f of Array.from(files)) {
       const id = uid();
+      let stored: { key: string; created: boolean } | null = null;
       try {
         // 有的系统给 PDF 的类型是空的，按扩展名补上
         const mime = f.type || (/\.pdf$/i.test(f.name) ? 'application/pdf' : 'application/octet-stream');
-        const key = await storeBlob(mime === f.type ? f : new Blob([f], { type: mime })); // 存成新文件（不覆盖任何已有的）
-        if (ctx !== worldContext()) { toast(`「${f.name}」传完时工程已经换了（或试玩开始 / 结束了），没有加进去`); return; }
-        update((d) => { d.media.push({ id, name: f.name, mime, size: f.size, key }); });
+        stored = await storeBlobStatus(mime === f.type ? f : new Blob([f], { type: mime })); // 存成新文件（不覆盖任何已有的）
+        if (ctx !== worldContext()) {
+          toast(`「${f.name}」传完时工程已经换了（或试玩开始 / 结束了），没有加进去`);
+          await offerDeleteOrphanBlob(f.name, stored);
+          return;
+        }
+        update((d) => { d.media.push({ id, name: f.name, mime, size: f.size, key: stored!.key }); });
       } catch (e) {
+        if (stored) await offerDeleteOrphanBlob(f.name, stored);
         toast(`上传失败：${f.name}`);
       }
     }

@@ -19,7 +19,7 @@ export { NODE_H, NODE_W, reachable } from '../rules/flow';
 import { CONN_LABEL, TIERS } from '../core/types';
 import { TIER_LABEL } from '../core/types';
 import { download, uid } from '../core/util';
-import { contentKey, getRaw, listStored, mediaChanged, putBlobs, storageKey } from './media';
+import { contentKey, delBlob, getRaw, listStored, mediaChanged, putBlobs, storageKey } from './media';
 import { checkRoomObjects, checkWorld, repairDoorOpenStates, repairWorld } from '../core/schema.js';
 import { allSlots, dropSlot, loadSlot, saveSlot } from '../core/persist';
 import { isOnlineTransport, send } from './sync';
@@ -1031,8 +1031,19 @@ export function hasBackup() {
   return !!loadSlot('backup');
 }
 
+/** 上传途中换了工程/更新失败：只有这次真的新写了一份文件，才问用户要不要删；已有同内容文件不动。 */
+export async function offerDeleteOrphanBlob(name: string, stored: { key: string; created: boolean }) {
+  if (!stored.created) return;
+  if (!confirm(`工程已经换了，「${name}」没有挂到任何工程。要把这次刚存进浏览器的文件删掉吗？\n\n如果别的标签页可能还在用这张图，选「取消」。不删的话，之后可以用「清理用不到的文件」清掉。`)) return;
+  // 同一标签页现在/撤销/备份里还有引用就不删；别的标签页无法看见，只能靠上面的提示让用户决定。
+  if (reachableWorlds().some((w) => w.media.some((m) => m.key === stored.key))) { toast(`「${name}」的文件现在还有工程在用，没有删`); return; }
+  try { await delBlob(stored.key); toast(`已删掉「${name}」的孤儿文件`); }
+  catch { toast(`删不掉「${name}」的文件；可以之后用「清理用不到的文件」清掉`); }
+}
+
 /** 删一张媒体：物件引用、实时贴图组、以及各层记忆里的贴图一起解掉；文件本身留给撤销。 */
 export function deleteMedia(mediaId: string) {
+  if (getUI().nowPlaying?.mediaId === mediaId) stopMedia();
   update((d) => {
     d.media = d.media.filter((x) => x.id !== mediaId);
     for (const m of d.maps) {
