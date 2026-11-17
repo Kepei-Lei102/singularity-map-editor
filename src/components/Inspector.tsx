@@ -15,7 +15,7 @@ import { checkSlidingMove, seesSlidingObject, slidingPuzzleForObject } from '../
 import { CELL_METERS, nearestPc, type Nearest } from '../scene/perception';
 import { cellName, parseCell, rangeName, uid } from '../core/util';
 import { MAX_SIDE } from '../core/schema.js';
-import { hasFineDetail } from '../core/grid';
+import { blankCellCount } from '../core/grid';
 import { Area, Check, Num, Row, Section, Txt } from './fields';
 import { ObjectInteractionPanel } from './ObjectInteraction';
 
@@ -658,7 +658,7 @@ function ReshapeRow({ world, map }: { world: World; map: GameMap }) {
   const [n, setN] = useState(1);
   const [all, setAll] = useState(true);
   const [terrain, setTerrain] = useState(world.terrains.find((t) => !t.blocksMove)?.id ?? 'floor');
-  const empty = map.cells.filter((c, i) => !c && !hasFineDetail(map, i % map.width, Math.floor(i / map.width))).length;
+  const empty = blankCellCount(map);
   return (
     <>
       <Row label="四周扩展">

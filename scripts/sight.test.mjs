@@ -205,11 +205,81 @@ test('base floor + 9 小格全墙时整格按挡死算', () => {
 });
 
 
-test('部分小格墙、其余空格：整格不按挡死，墙只精确挡那 1/3', () => {
+test('部分小格墙、其余空白：整格不按 99，但空白小格也挡视线', () => {
   const map = mkMap(20, 3);
   setFine(map, 4, 1, '');
-  map.fineCells[(1 * 3 + 0) * map.width * 3 + 4 * 3] = 'wall'; // 上排左 1/3 墙，中间射线走 floor 空格
+  map.fineCells[(1 * 3 + 0) * map.width * 3 + 4 * 3] = 'wall'; // 上排左 1/3 墙
   const cost = cellSightCost(world, map, 1.6);
-  assert.ok(Math.abs(cost[1 * map.width + 4] - 0.1) < 1e-6);
-  assert.equal(visiblePoint(world, map, { x: 1, y: 1, sex: '男' }, { x: 7.5, y: 1.5 }), true);
+  assert.ok(Math.abs(cost[1 * map.width + 4] - 0.1) < 1e-6, '没有整格 99');
+  // 中间那条是空白小格；按“空白=墙”的新口径，射线不能穿过。
+  assert.equal(visiblePoint(world, map, { x: 1, y: 1, sex: '男' }, { x: 7.5, y: 1.5 }), false);
+});
+
+test('空白/未登记的大格和 9 个空小格都挡视线', () => {
+  const map = mkMap(20, 3);
+  map.cells[1 * map.width + 4] = '';
+  for (let sy = 0; sy < 3; sy++) for (let sx = 0; sx < 3; sx++) map.fineCells[(1 * 3 + sy) * map.width * 3 + 4 * 3 + sx] = '';
+  const cost = cellSightCost(world, map, 1.6);
+  assert.ok(cost[1 * map.width + 4] >= 99);
+  assert.equal(visiblePoint(world, map, { x: 1, y: 1, sex: '男' }, { x: 7.5, y: 1.5 }), false);
+
+  map.cells[1 * map.width + 4] = 'void'; // 未登记 id
+  for (let sy = 0; sy < 3; sy++) for (let sx = 0; sx < 3; sx++) map.fineCells[(1 * 3 + sy) * map.width * 3 + 4 * 3 + sx] = 'void';
+  assert.ok(cellSightCost(world, map, 1.6)[1 * map.width + 4] >= 99);
+  assert.equal(visiblePoint(world, map, { x: 1, y: 1, sex: '男' }, { x: 7.5, y: 1.5 }), false);
+});
+
+
+test('混合小格仍按整格多数派（整格一个系数，不做 1/3 累加）', () => {
+  const grassFloor = mkMap(20, 3);
+  setTerrain(grassFloor, 4, 1, 'floor');
+  grassFloor.fineCells[(1 * 3 + 0) * grassFloor.width * 3 + 4 * 3] = 'grass';
+  assert.ok(Math.abs(cellSightCost(world, grassFloor, 1.6)[1 * grassFloor.width + 4] - 0.1) < 1e-6);
+
+  const floorGrass = mkMap(20, 3);
+  setTerrain(floorGrass, 4, 1, 'grass');
+  floorGrass.fineCells[(1 * 3 + 0) * floorGrass.width * 3 + 4 * 3] = 'floor';
+  assert.ok(Math.abs(cellSightCost(world, floorGrass, 1.6)[1 * floorGrass.width + 4] - 0.8) < 1e-6);
+
+  const windowFloor = mkMap(20, 3);
+  setTerrain(windowFloor, 4, 1, 'floor');
+  windowFloor.fineCells[(1 * 3 + 0) * windowFloor.width * 3 + 4 * 3] = 'window';
+  assert.ok(Math.abs(cellSightCost(world, windowFloor, 1.6)[1 * windowFloor.width + 4] - 0.1) < 1e-6);
+});
+
+test('8 小墙 + 1 空 / 1 未登记，墙和空格分别精确挡', () => {
+  for (const tail of ['', 'void']) {
+    const map = mkMap(20, 3);
+    // 大格 (4,1) 中间一排全空，上下两排各 3 + 2 个墙；共 8 墙 + 1 空/未登记。
+    for (let sx = 0; sx < 3; sx++) map.fineCells[(1 * 3 + 0) * map.width * 3 + 4 * 3 + sx] = 'wall';
+    for (let sx = 0; sx < 3; sx++) map.fineCells[(1 * 3 + 2) * map.width * 3 + 4 * 3 + sx] = 'wall';
+    for (let sx = 0; sx < 2; sx++) map.fineCells[(1 * 3 + 1) * map.width * 3 + 4 * 3 + sx] = 'wall';
+    map.fineCells[(1 * 3 + 1) * map.width * 3 + 4 * 3 + 2] = tail;
+    assert.ok(Math.abs(cellSightCost(world, map, 1.6)[1 * map.width + 4] - 0.1) < 1e-6);
+    assert.equal(visiblePoint(world, map, { x: 1, y: 1, sex: '男' }, { x: 7.5, y: 1.5 }), false, tail || '空');
+  }
+
+  const wallBase = mkMap(20, 3);
+  setTerrain(wallBase, 4, 1, 'wall');
+  wallBase.fineCells[(1 * 3 + 1) * wallBase.width * 3 + 4 * 3] = '';
+  assert.ok(cellSightCost(world, wallBase, 1.6)[1 * wallBase.width + 4] >= 99);
+});
+
+
+test('floor 大格 9 小格全擦空：整格按墙算', () => {
+  const map = mkMap(20, 3);
+  setFine(map, 4, 1, '');
+  const cost = cellSightCost(world, map, 1.6);
+  assert.ok(cost[1 * map.width + 4] >= 99);
+  assert.equal(visiblePoint(world, map, { x: 1, y: 1, sex: '男' }, { x: 7.5, y: 1.5 }), false);
+});
+
+test('目标点落在空白子格：不可见；空白不在射线上的 floor 子格仍可见', () => {
+  const targetBlank = mkMap(20, 3);
+  targetBlank.fineCells[(1 * 3 + 1) * targetBlank.width * 3 + 4 * 3] = '';
+  assert.equal(visiblePoint(world, targetBlank, { x: 1, y: 1, sex: '男' }, { x: 4.1, y: 1.5 }), false);
+
+  const offRay = mkMap(20, 3);
+  offRay.fineCells[(1 * 3 + 0) * offRay.width * 3 + 4 * 3] = ''; // 上排空白，射线走中间 floor
+  assert.equal(visiblePoint(world, offRay, { x: 1, y: 1, sex: '男' }, { x: 4.1, y: 1.5 }), true);
 });

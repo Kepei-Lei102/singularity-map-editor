@@ -148,14 +148,14 @@ export function migrateWorld(w: World): World {
     // 旧版的 observed / architectureRevs 也按小格 key 记；父格已取消细分的孤儿键
     // 要跟地形/材质一起清掉，否则历史墙裁剪还会读到。
     const legacySubs = (m as { subdivisions?: number[] }).subdivisions;
-    if (v1 || Array.isArray(legacySubs)) {
+    if (v1 || legacySubs !== undefined) {
       const subs = new Set(legacySubs);
       const fw = m.width * 3, limit = fw * m.height * 3;
       const dropOrphans = (data?: Record<number, number>) => {
         if (!data || typeof data !== 'object') return;
         for (const rawKey of Object.keys(data)) {
           const key = +rawKey;
-          if (!Number.isInteger(key) || key < 0 || key >= limit) {
+          if (!Number.isInteger(key) || key < 0 || key >= limit || String(key) !== rawKey) {
             delete (data as Record<string, unknown>)[rawKey];
             continue;
           }

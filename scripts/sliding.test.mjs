@@ -815,7 +815,10 @@ test('interactive destination occupancy rejects the whole batch and allows edge 
             map.objects.push({...api.newObject('object',3,4,1,1),id:'thin',geometry:{kind:'wall',a:{x:10,y:12},b:{x:10,y:15},thickness:100,material:'wall'}});
     }
     install(world);api.setUI({mode:'run'});const before=api.getWorld();
-    assert.ok(api.applyRoomLayout(map.id,'games','game-separated'));assert.equal(api.getWorld(),before,obstacle+' must not partially move tables/chairs');
+    const error=api.applyRoomLayout(map.id,'games','game-separated');
+    assert.ok(error);
+    if(obstacle.includes('terrain'))assert.match(error,/地形/);
+    assert.equal(api.getWorld(),before,obstacle+' must not partially move tables/chairs');
   }
   const {world,map}=interactiveFixture();
   map.objects.push(api.newObject('zone',3,4,2,2),{...api.newObject('object',3,4,1,1),height:0},
@@ -860,4 +863,21 @@ test('room reset reconciles the active interactive layout with restored position
   api.redo();assert.equal(api.getWorld().maps[0].rooms[0].activeLayoutId,'game-joined');
   api.update(d=>{d.maps[0].rooms[0].reset.objects[0].x=1;});
   api.resetRoom(map.id,'games');m=api.getWorld().maps[0];assert.equal(m.objects[0].x,1);assert.equal(m.rooms[0].activeLayoutId,undefined);
+});
+
+
+test('canHear：实心整墙挡声音，窗和小格墙不挡', () => {
+  const { world, map } = fixture();
+  setBaseTerrain(map, 2, 1, 'window');
+  assert.equal(api.canHear(world, map, { x: 1, y: 1 }, { x: 3, y: 1 }), true);
+  setBaseTerrain(map, 2, 1, 'wall');
+  assert.equal(api.canHear(world, map, { x: 1, y: 1 }, { x: 3, y: 1 }), false);
+  // 声音墙还要 blocksMove：只看视线 99 的“黑幕”不挡声。
+  world.terrains.push({ id: 'silence-veil', name: '黑幕', color: '#000', blocksMove: false, visionCoef: 99 });
+  setBaseTerrain(map, 2, 1, 'silence-veil');
+  assert.equal(api.canHear(world, map, { x: 1, y: 1 }, { x: 3, y: 1 }), true);
+  // 声音只按大格：floor 大格里画一个 1/3 小墙，不挡声音。
+  setBaseTerrain(map, 2, 1, 'floor');
+  map.fineCells[(1 * 3) * map.width * 3 + 2 * 3] = 'wall';
+  assert.equal(api.canHear(world, map, { x: 1, y: 1 }, { x: 3, y: 1 }), true);
 });

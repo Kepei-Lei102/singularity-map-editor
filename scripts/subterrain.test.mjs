@@ -164,6 +164,7 @@ test('v1 存档（粗格 + 稀疏子格）迁移成完整 fineCells，并丢掉�
   assert.equal(mm.fineMaterials[api.fineKeyOf(mm, 21, 21)], undefined);
   assert.equal(mm.seen.observed[api.fineKeyOf(mm, 6, 6)], 7);
   assert.equal(mm.seen.observed[api.fineKeyOf(mm, 21, 21)], undefined);
+  assert.equal(mm.seen.architectureRevs[api.fineKeyOf(mm, 6, 6)], 7);
   assert.equal(mm.seen.architectureRevs[api.fineKeyOf(mm, 21, 21)], undefined);
   assert.equal(mm.seen.observed['nope'], undefined);
   assert.equal(mm.subCells, undefined);
@@ -205,8 +206,10 @@ test('铺空白格会同步 3×3 小格，但不抹掉已有小格细节', () =>
   map.objects = [];
   world.maps = [map];
   api.replaceWorld(world);
+  assert.equal(api.blankCellCount(map), 16);
   // 大格底为空、但 (1,1) 已有一格草：这不算空白格。
   api.paintTerrainSubcells(map.id, [[3, 3]], 'grass');
+  assert.equal(api.blankCellCount(api.findMap(api.getWorld(), map.id)), 15);
   api.fillEmptyCells(map.id, 'floor');
   const m = api.findMap(api.getWorld(), map.id);
   assert.equal(m.cells[1 * m.width + 1], '');
@@ -214,6 +217,7 @@ test('铺空白格会同步 3×3 小格，但不抹掉已有小格细节', () =>
   assert.equal(m.cells[0], 'floor');
   assert.equal(api.terrainAtSubcell(m, 0, 0), 'floor');
   assert.equal(m.cells.every((c, i) => c === 'floor' || (i === 1 * m.width + 1 && c === '')), true);
+  assert.equal(api.blankCellCount(m), 0);
   assert.equal(m.fineCells.every((c) => c === 'floor' || c === 'grass' || c === ''), true);
 });
 
@@ -242,13 +246,33 @@ test('9 个小格全被擦空时，LOD 不再回退大格底', () => {
 });
 
 
-test('parseWorld 拒绝非 1/2 版本、坏 maps 条目和非数组 party', () => {
+test('parseWorld 拒绝未知/缺失版本、坏 maps 条目和缺 party', () => {
   const v3 = api.emptyWorld(); v3.version = 3;
   assert.throws(() => api.parseWorld(JSON.stringify(v3)), /工程版本/);
+  const noVersion = api.emptyWorld(); delete noVersion.version;
+  assert.throws(() => api.parseWorld(JSON.stringify(noVersion)), /工程版本/);
   const badMaps = api.emptyWorld(); badMaps.maps = [null];
   assert.throws(() => api.parseWorld(JSON.stringify(badMaps)), /maps 列表/);
-  const badParty = api.emptyWorld(); badParty.party = {};
-  assert.throws(() => api.parseWorld(JSON.stringify(badParty)), /party 不是数组/);
+  const arrayMap = api.emptyWorld(); arrayMap.maps = [[]];
+  assert.throws(() => api.parseWorld(JSON.stringify(arrayMap)), /maps 列表/);
+  const missingFields = api.emptyWorld(); missingFields.maps = [{ name: '坏图' }];
+  assert.throws(() => api.parseWorld(JSON.stringify(missingFields)), /width \/ height/);
+  const badCells = api.emptyWorld(); badCells.maps[0].cells = [];
+  assert.throws(() => api.parseWorld(JSON.stringify(badCells)), /cells 数量/);
+  const badObjects = api.emptyWorld(); badObjects.maps[0].objects = [null];
+  assert.throws(() => api.parseWorld(JSON.stringify(badObjects)), /objects 列表/);
+  const noParty = api.emptyWorld(); delete noParty.party;
+  assert.throws(() => api.parseWorld(JSON.stringify(noParty)), /party 不是数组/);
+  const emptyParty = api.emptyWorld(); emptyParty.party = {};
+  assert.throws(() => api.parseWorld(JSON.stringify(emptyParty)), /party 不是数组/);
+});
+
+test('parseWorld 仍能读有效 v1：迁移出完整 fineCells', () => {
+  const v1 = api.emptyWorld(); v1.version = 1;
+  delete v1.maps[0].fineCells;
+  const w = api.parseWorld(JSON.stringify(v1));
+  assert.equal(w.version, 2);
+  assert.equal(w.maps[0].fineCells.length, w.maps[0].width * w.maps[0].height * 9);
 });
 
 
@@ -261,4 +285,50 @@ test('v1 没有 subdivisions 时，observed 孤儿键也不会留下', () => {
   w.maps = [m];
   const mm = api.migrateWorld(w).maps[0];
   assert.equal(mm.seen.observed[api.fineKeyOf(mm, 3, 3)], undefined);
+});
+
+
+test('v1 迁移清理 views 里的孤儿键，并处理非数组 subdivisions', () => {
+  const w = api.emptyWorld();
+  w.version = 1;
+  const m = api.newMap('旧图', '测试', 0, 4, 4, 'floor', false);
+  delete m.fineCells;
+  m.subdivisions = 'oops';
+  m.seen.observed = { [api.fineKeyOf(m, 3, 3)]: 1 };
+  m.seen.architectureRevs = { [api.fineKeyOf(m, 3, 3)]: 1 };
+  m.views = { a: { fog: m.fog.slice(), seen: {
+    cells: m.cells.slice(), objects: [],
+    observed: { [api.fineKeyOf(m, 3, 3)]: 1 }, architectureRevs: { [api.fineKeyOf(m, 3, 3)]: 1 },
+  } } };
+  w.party = [{ id: 'a', name: '甲', color: '#fff', tags: [] }];
+  w.maps = [m];
+  const mm = api.migrateWorld(w).maps[0];
+  assert.equal(mm.seen.observed[api.fineKeyOf(mm, 3, 3)], undefined);
+  assert.equal(mm.seen.architectureRevs[api.fineKeyOf(mm, 3, 3)], undefined);
+  assert.equal(mm.views.a.seen.observed[api.fineKeyOf(mm, 3, 3)], undefined);
+  assert.equal(mm.views.a.seen.architectureRevs[api.fineKeyOf(mm, 3, 3)], undefined);
+});
+
+test('v1 迁移删掉非规范数字 key（如带空格的 " 1"）', () => {
+  const w = api.emptyWorld();
+  w.version = 1;
+  const m = api.newMap('旧图', '测试', 0, 4, 4, 'floor', false);
+  delete m.fineCells;
+  m.subdivisions = [0];
+  m.seen.observed = { ' 1': 7 };
+  w.maps = [m];
+  const mm = api.migrateWorld(w).maps[0];
+  assert.equal(mm.seen.observed[' 1'], undefined);
+});
+
+
+test('v2 带非数组 subdivisions 时也清掉孤儿 observed', () => {
+  const w = api.emptyWorld();
+  const m = api.newMap('新图', '测试', 0, 4, 4, 'floor', false);
+  m.subdivisions = 'oops';
+  m.seen.observed = { [api.fineKeyOf(m, 3, 3)]: 1 };
+  w.maps = [m];
+  const mm = api.migrateWorld(w).maps[0];
+  assert.equal(mm.seen.observed[api.fineKeyOf(mm, 3, 3)], undefined);
+  assert.equal(mm.subdivisions, undefined);
 });

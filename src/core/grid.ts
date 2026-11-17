@@ -36,6 +36,15 @@ export function dominantId(ids: readonly string[]): string {
   return best;
 }
 
+/** 「铺满空白格」真正会处理的格数：大格底为空且没有小格细节。 */
+export function blankCellCount(m: { width: number; height: number; cells: string[]; fineCells?: string[] }): number {
+  let n = 0;
+  for (let i = 0; i < m.cells.length; i++) {
+    if (!m.cells[i] && !hasFineDetail(m, i % m.width, Math.floor(i / m.width))) n++;
+  }
+  return n;
+}
+
 /** 这一大格里的 9 个小格是否和粗格底不同（有细格细节）。 */
 export function hasFineDetail(m: { width: number; height: number; cells: string[]; fineCells?: string[] }, x: number, y: number): boolean {
   if (!m.fineCells) return false;

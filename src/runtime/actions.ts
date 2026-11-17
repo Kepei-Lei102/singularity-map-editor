@@ -106,7 +106,7 @@ function interactiveLayoutError(world: World, map: GameMap, objects: RoomObjectS
   const overlap = (a: { x: number; y: number; w: number; h: number }, b: { x: number; y: number; w: number; h: number }) =>
     a.x < b.x + b.w - 1e-8 && a.x + a.w > b.x + 1e-8 && a.y < b.y + b.h - 1e-8 && a.y + a.h > b.y + 1e-8;
   for (const o of projected.filter(o => snapshots.has(o.id) && o.kind === 'object' && !isArchitectureObject(o) && blocksMovement(o) && (!activationOnly || map.objects.find(old => old.id === o.id)?.enabled === false))) {
-    if (terrainBlocksRect(world, map, o)) return `「${o.name}」的目标排布被地形挡住了`;
+    if (terrainBlocksRect(world, map, o)) return `「${o.name}」的目标排布被地形挡住了（空白或未登记地形也算挡路）`;
     if (projected.some(other => other.id !== o.id && other.kind === 'object' && !isArchitectureObject(other) && blocksMovement(other) && overlap(o, other)))
       return `「${o.name}」的目标排布与挡路物件相交`;
     if (map.tokens.some(t => { const p = tokenPosition(t); return overlap(o, { x: p.x - 1 / 3, y: p.y - 1 / 3, w: 2 / 3, h: 2 / 3 }); }))
@@ -939,10 +939,19 @@ export function parseWorld(text: string, autoOpen = false): World {
   try { w = JSON.parse(text); } catch { throw new Error('world.json 不是有效的 JSON'); }
   if (!w || typeof w !== 'object' || !Array.isArray((w as { maps?: unknown }).maps)) throw new Error('工程文件里没有 maps 列表');
   const rawVersion = (w as { version?: unknown }).version;
-  if (rawVersion !== undefined && rawVersion !== 1 && rawVersion !== 2) throw new Error(`工程版本是 ${JSON.stringify(rawVersion)}，这个编辑器只认 1 / 2`);
-  if ((w as { maps: unknown[] }).maps.some((m) => !m || typeof m !== 'object')) throw new Error('工程文件的 maps 列表里有不是对象的条目');
-  const rawParty = (w as { party?: unknown }).party;
-  if (rawParty !== undefined && !Array.isArray(rawParty)) throw new Error('工程文件的 party 不是数组');
+  if (rawVersion !== 1 && rawVersion !== 2) throw new Error(`工程版本是 ${JSON.stringify(rawVersion)}，这个编辑器只认 1 / 2`);
+  const rawMaps = (w as { maps: unknown[] }).maps;
+  if (rawMaps.some((m) => !m || typeof m !== 'object' || Array.isArray(m))) throw new Error('工程文件的 maps 列表里有不是对象的条目');
+  for (const m of rawMaps as { name?: unknown; width?: unknown; height?: unknown; cells?: unknown; objects?: unknown }[]) {
+    if (!Number.isInteger(m.width) || !Number.isInteger(m.height) || !Array.isArray(m.cells) || !Array.isArray(m.objects)) {
+      throw new Error(`地图「${typeof m.name === 'string' ? m.name : '未命名'}」缺少 width / height / cells / objects`);
+    }
+    const width = m.width as number, height = m.height as number, cells = m.cells as unknown[], objects = m.objects as unknown[];
+    const name = typeof m.name === 'string' ? m.name : '未命名';
+    if (cells.length !== width * height) throw new Error(`地图「${name}」的 cells 数量不是 width × height`);
+    if (objects.some((o) => !o || typeof o !== 'object' || Array.isArray(o))) throw new Error(`地图「${name}」的 objects 列表里有不是对象的条目`);
+  }
+  if (!Array.isArray((w as { party?: unknown }).party)) throw new Error('工程文件的 party 不是数组');
   repairWorld(w); // 旧版允许过的超范围数值先夹回来
   const doorHints = repairDoorOpenStates(w, autoOpen ? { guess: true } : undefined);
   const unresolved = doorHints.filter((h) => h.includes('请手工'));

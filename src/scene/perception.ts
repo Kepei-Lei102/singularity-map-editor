@@ -147,7 +147,11 @@ export function pcWithin(world: World, map: GameMap, o: MapObject, range: number
 
 export const HEAR_RANGE = 10; // 格（7.5 米）：大声说话还能听清
 
-/** 两个人能不能大声说话交流：距离在 HEAR_RANGE 以内，而且中间没隔着墙（门、家具不挡声音）。 */
+/**
+ * 两个人能不能大声说话交流：距离在 HEAR_RANGE 以内，中间没隔着"实心整墙"。
+ * 声音墙的口径是“整格地形既挡路（blocksMove）又挡视线（visionCoef ≥ 99）”：
+ * 窗（挡路 0.5）、门、家具不挡声音；小格墙不单独细化，声音从 1/3 缝里过。
+ */
 export function canHear(world: World, map: GameMap, a: { x: number; y: number }, b: { x: number; y: number }) {
   const ap = tokenPosition(a), bp = tokenPosition(b);
   if (gridDist(ap.x - bp.x, ap.y - bp.y) > HEAR_RANGE || architectureBlocksSight(map, ap, bp)) return false;

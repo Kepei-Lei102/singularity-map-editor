@@ -11,7 +11,7 @@ import type { Facing, GameMap, MapObject, Point, Sex, Stance, Token, World } fro
 export type { Facing, Sex, Stance } from '../core/types';
 import { objectEnabled } from '../core/objectData.js';
 import { architectureGeometry, isArchitectureObject, segmentHitsRect } from './architecture';
-import { SUB } from './terrain';
+import { SUB, terrainAtPoint } from './terrain';
 import { dominantId, fineKey, hasFineDetail } from '../core/grid';
 import { cellLine, gridDist } from '../core/util';
 
@@ -65,7 +65,9 @@ export function cellSightCost(
   const cost = new Float32Array(map.width * map.height);
   for (let i = 0; i < cost.length; i++) {
     const base = map.cells[i] ?? '';
-    let c = coef.get(base) ?? BASE_CELL_COST;
+    // 空白/未登记地形既是墙（走不过去），也挡视线；地图边界不再能看穿。
+    const baseTerrain = terrainById.get(base);
+    let c = baseTerrain ? coef.get(base) ?? BASE_CELL_COST : FULL_BLOCK;
     // 有小格细节时，整格衰减只在“非完全挡死”的小格里取多数派：
     // - base 是墙、9 格全 floor / window → 降回 floor / window 的系数；
     // - base 是草地、8 草 1 floor → 仍是草地的 2，不会因一个 floor 小格变 0.1；
@@ -86,9 +88,9 @@ export function cellSightCost(
       if (visible.length) {
         const rep = dominantId(visible);
         c = coef.get(rep) ?? BASE_CELL_COST;
-      } else if (known === SUB * SUB) {
-        // 9 个小格都有地形且全是完全挡死：整格按挡死算。
-        // 若只是“部分小格墙 + 其余空格”，整格仍用 base 系数，墙交给精确遮挡。
+      } else if (known === SUB * SUB || known === 0) {
+        // 9 个小格都有地形且全是完全挡死，或 9 个小格全是空白/未登记：整格按挡死算。
+        // 若只是“部分小格墙 + 其余空格”，整格仍用 base 系数，墙/空格交给精确遮挡。
         c = FULL_BLOCK;
       }
     }
@@ -203,7 +205,7 @@ export function eyePoint(v: Viewer): Point {
 export function sightSubcellBlockers(world: World, map: GameMap): Uint8Array | null {
   // 只有存在小格细节的格子才需要挡死表；整格同地形时交给 cellSightCost。
   const w3 = map.width * SUB;
-  const coef = new Map(world.terrains.map((t) => [t.id, t.visionCoef]));
+  const terrainById = new Map(world.terrains.map((t) => [t.id, t]));
   const out = new Uint8Array(w3 * map.height * SUB);
   let any = false;
   for (let cy = 0; cy < map.height; cy++) for (let cx = 0; cx < map.width; cx++) {
@@ -211,7 +213,9 @@ export function sightSubcellBlockers(world: World, map: GameMap): Uint8Array | n
     any = true;
     for (let sy = 0; sy < SUB; sy++) for (let sx = 0; sx < SUB; sx++) {
       const id = map.fineCells?.[fineKey(map.width, cx * SUB + sx, cy * SUB + sy)] ?? map.cells[cy * map.width + cx] ?? '';
-      if ((coef.get(id) ?? 0) >= FULL_BLOCK) out[fineKey(map.width, cx * SUB + sx, cy * SUB + sy)] = 1;
+      const t = terrainById.get(id);
+      // 空白/未登记的小格也是墙：以前只在 visionCoef ≥ 99 时挡，导致“走不过去但看得见”。
+      if (!t || (t.visionCoef ?? 0) >= FULL_BLOCK) out[fineKey(map.width, cx * SUB + sx, cy * SUB + sy)] = 1;
     }
   }
   return any ? out : null;
@@ -314,6 +318,8 @@ export function visiblePoint(
   const p = eyePoint(eye);
   // 用 >= 而不是 >：越界点以前会读到下一行第一格（甚至算出 NaN），现在一律不可见。
   if (p.x < 0 || p.y < 0 || p.x >= map.width || p.y >= map.height || target.x < 0 || target.y < 0 || target.x >= map.width || target.y >= map.height) return false;
+  // 目标点本身落在空白/未登记子格上：它是墙，不是“看得见的墙”那种可观察点。
+  if (!world.terrains.some((t) => t.id === terrainAtPoint(map, target.x, target.y))) return false;
   const x0 = Math.floor(p.x), y0 = Math.floor(p.y), x1 = Math.floor(target.x), y1 = Math.floor(target.y);
   const cost = cache ? cache.cost : cellSightCost(world, map, eyeHeight(eye));
   // 这条线只算一次：以前 canSee 算一遍、下面加墙又算一遍。
