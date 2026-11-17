@@ -26,6 +26,8 @@ after(() => rm(temp, { recursive: true, force: true }));
 
 const tex = { id: 'tex', name: '柜纹', mime: 'image/png', size: 10 };
 const image = { naturalWidth: 100, naturalHeight: 50 };
+const imgA = { ...image, tag: 'A' };
+const imgB = { ...image, tag: 'B' };
 
 function fixture(pcId) {
   const w = api.emptyWorld();
@@ -64,11 +66,11 @@ function ctxRecorder() {
   return { ctx, calls };
 }
 
-function renderOnce(world, map, mode = 'edit', viewer) {
+function renderOnce(world, map, mode = 'edit', viewer, images = { tex: image }) {
   const rec = ctxRecorder();
   api.render(rec.ctx, 640, 480, 1, world, map, { zoom: mode === 'edit' ? 4 : 1, panX: 0, panY: 0 }, {
     mode, selection: null, preview: null, hover: null, brush: 1, tool: 'select', pending: null, showFog: false,
-    numbers: false, rulers: false, viewer, imageOf: () => image,
+    numbers: false, rulers: false, viewer, imageOf: (id) => images[id],
   });
   return rec.calls;
 }
@@ -176,7 +178,7 @@ test('玩家渲染会画物件贴图，且不画物件底色', () => {
   assert.equal(calls.fillRect.some((c) => c.style === '#123456'), false);
 });
 
-test('灰区记忆物件不借当前贴图：部分可见时只在实时层画一次', () => {
+test('灰区记忆物件用自己的快照贴图，不借当前实时图', () => {
   const w = api.emptyWorld();
   const m = w.maps[0];
   w.media = [tex];
@@ -188,10 +190,19 @@ test('灰区记忆物件不借当前贴图：部分可见时只在实时层画�
   api.setObjectTexture(m.id, 'o1', 'tex');
   api.update((d) => { const x = api.findMap(d, m.id); x.fog[2 * x.width + 2] = 1; });
   const live = api.playerWorld(api.getWorld(), m.id, 'a');
-  assert.ok(live.maps[0].seen.objects.some((o) => o.id === 'o1'));
-  const calls = renderOnce(live, live.maps[0], 'player');
-  assert.equal(calls.drawImage.length, 1); // 实时层那张；灰区记忆不能拿当前贴图
-  assert.ok(calls.fillText.some((t) => t.text.includes('★'))); // 记忆标签仍有图标
+  assert.equal(live.maps[0].seen.objects.find((o) => o.id === 'o1').texture.mediaId, 'tex');
+  const calls = renderOnce(live, live.maps[0], 'player', undefined, { tex: imgA });
+  assert.deepEqual(calls.drawImage.map((c) => c.args[0].tag), ['A', 'A']); // 实时 + 记忆，都是当时那张
+  assert.equal(calls.fillText.some((t) => t.text.includes('★')), false); // 有图不叠图标
+
+  api.update((d) => { d.media.push({ id: 'tex2', name: '新图', mime: 'image/png', size: 1 }); });
+  api.update((d) => { const x = api.findMap(d, m.id); x.fog.fill(2); }); // 整件转灰
+  api.setObjectTexture(m.id, 'o1', 'tex2');
+  const gray = api.playerWorld(api.getWorld(), m.id, 'a');
+  assert.equal(gray.maps[0].seen.objects.find((o) => o.id === 'o1').texture.mediaId, 'tex');
+  assert.deepEqual(gray.media.map((x) => x.id), ['tex']);
+  const grayCalls = renderOnce(gray, gray.maps[0], 'player', undefined, { tex: imgA, tex2: imgB });
+  assert.deepEqual(grayCalls.drawImage.map((c) => c.args[0].tag), ['A']); // 不追当前 tex2
 });
 
 test('删媒体会清掉物件贴图，物件回退彩色方块', () => {

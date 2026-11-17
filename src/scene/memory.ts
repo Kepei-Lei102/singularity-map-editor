@@ -5,7 +5,7 @@ import { clipArchitecture, isArchitectureObject, migrateArchitecture } from './a
 import { repairWorld } from '../core/schema.js';
 import { current, isDraft, type Draft } from 'immer';
 import { buildFineCells, groupBounds, objectFootprintCells } from '../core/grid';
-import type { CellGroup, GameMap, Id, MapObject, SeenObject, VisionLayer, World } from '../core/types';
+import type { CellGroup, GameMap, Id, MapObject, SeenObject, TextureSpec, VisionLayer, World } from '../core/types';
 import { linesToFlow } from '../rules/flow';
 import { DEFAULT_MATERIALS } from '../core/defaults';
 import { cloneLayer, emptyVision, mergeLayers, pruneMemory, spatialFog, visionKey } from './vision';
@@ -25,18 +25,37 @@ export function anyVisible(m: { width: number; height: number; fog: number[] }, 
 
 export const emptyLayer = emptyVision;
 
-export function snapshot(o: MapObject | Draft<MapObject>): SeenObject {
+/** 记忆里物件的外观版本：没有图就是 none；fit/opacity 归一后再比，避免 1 和 0.999999 算两版。 */
+export function textureKeyOf(t?: TextureSpec) {
+  return t ? `${t.mediaId}~${t.fit ?? 'fill'}~${Math.round((t.opacity ?? 1) * 1000) / 1000}` : 'none';
+}
+
+function cloneTexture(t?: TextureSpec): TextureSpec | undefined {
+  return t ? { mediaId: t.mediaId, fit: t.fit, opacity: t.opacity } : undefined;
+}
+
+/** 物件自带贴图的实时图，来自唯一的物件贴图组。 */
+export function objectTextureOf(m: GameMap, o: MapObject): TextureSpec | undefined {
+  return m.groups?.find((g) => g.objectId === o.id)?.texture;
+}
+
+export function snapshot(o: MapObject | Draft<MapObject>, texture?: TextureSpec): SeenObject {
+  const ghost = !!o.blocksWhen && !o.blocksWhen.includes(o.state);
+  const tex = cloneTexture(texture);
   return {
     id: o.id, name: o.name, icon: o.icon, color: o.color, x: o.x, y: o.y, w: o.w, h: o.h, anchor: o.anchor, height: o.height,
     identity: identityKnowledge(o),
     stateLabel: o.states.length > 1 ? o.states[o.state] ?? '' : null,
+    ...(tex ? { texture: tex } : {}),
+    ...(ghost ? { ghost: true } : {}),
   };
 }
 
 export function sameSeen(a: SeenObject, b: SeenObject) {
   return a.name === b.name && a.icon === b.icon && a.color === b.color && a.x === b.x && a.y === b.y &&
     (a.anchor?.x ?? 0) === (b.anchor?.x ?? 0) && (a.anchor?.y ?? 0) === (b.anchor?.y ?? 0) &&
-    a.w === b.w && a.h === b.h && a.height === b.height && a.stateLabel === b.stateLabel && JSON.stringify(a.identity) === JSON.stringify(b.identity);
+    a.w === b.w && a.h === b.h && a.height === b.height && a.stateLabel === b.stateLabel && JSON.stringify(a.identity) === JSON.stringify(b.identity) &&
+    textureKeyOf(a.texture) === textureKeyOf(b.texture) && !!a.ghost === !!b.ghost;
 }
 
 /** 物件贴图组是物件外观的派生数据：格子永远等于物件当前脚印。放在 syncMemory 里统一校正，
@@ -81,7 +100,7 @@ function syncLayer(m: Draft<GameMap>, L: Draft<VisionLayer>, rev: number) {
   const kept = L.seen.objects.filter((r) => liveIds.has(r.id) || !anyVisible(box, r));
   if (kept.length !== L.seen.objects.length) L.seen.objects = kept;
   for (const o of live) {
-    const snap = snapshot(o);
+    const snap = snapshot(o, objectTextureOf(source, o));
     L.seen.objectRevs[o.id] = rev;
     const i = L.seen.objects.findIndex((r) => r.id === o.id);
     if (i < 0) L.seen.objects.push(snap);
@@ -281,6 +300,6 @@ export function staleMemories(m: GameMap) {
   return m.seen.objects.filter((r) => {
     if (anyVisible(m, r)) return false;
     const o = m.objects.find((x) => x.id === r.id);
-    return !o || !objectEnabled(m, o) || o.hidden || !sameSeen(r, snapshot(o));
+    return !o || !objectEnabled(m, o) || o.hidden || !sameSeen(r, snapshot(o, objectTextureOf(m, o)));
   });
 }

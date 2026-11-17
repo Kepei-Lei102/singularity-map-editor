@@ -378,11 +378,12 @@ function drawTag(ctx: CanvasRenderingContext2D, o: MapObject, zoom: number, text
   ctx.fillText(text, bx + pad, by + pad + fs * 0.85);
 }
 
-/** 记忆里的物件，借用普通物件的画法。 */
+/** 记忆里的物件，借用普通物件的画法。贴图不从 MapObject 走：灰区用自己的快照 resolver。 */
 function fromMemory(r: SeenObject): MapObject {
+  const { texture: _texture, ...rest } = r;
   return {
-    ...r, kind: 'object', states: r.stateLabel === null ? ['默认'] : ['', r.stateLabel], state: r.stateLabel === null ? 0 : 1,
-    notes: '', hidden: false, secrets: [], media: [],
+    ...rest, kind: 'object', states: r.stateLabel === null ? ['默认'] : ['', r.stateLabel], state: r.stateLabel === null ? 0 : 1,
+    ghost: r.ghost, notes: '', hidden: false, secrets: [], media: [],
   };
 }
 
@@ -679,12 +680,15 @@ export function render(
   else {
     const presented = playerPresentation(world, map, o.viewer ?? undefined);
     drawObjects(map.objects.filter(ob => objectEnabled(map, ob) && ob.kind === 'object' && !isArchitectureObject(ob) && !ob.hidden && anyVisible(map, ob)).map(ob => presented.objects.find(x => x.id === ob.id)!), 1, liveTextureOf);
-    // 灰区记忆还没有自己的物件外观（3-C）；不能借当前实时物件的贴图，否则换图立刻影响灰区。
+    // 灰区用自己的 SeenObject 快照：最后一版贴图 + 当时的 ghost；不查当前 map.groups。
+    const seenTextures = new Map<string, TextureSpec>();
+    for (const r of presented.seen.objects) if (r.texture) seenTextures.set(r.id, r.texture);
+    const memoryTextureOf = (ob: MapObject) => seenTextures.get(ob.id);
     drawObjects(presented.seen.objects.map(fromMemory).filter(ob => {
       for (let y = ob.y; y < ob.y + ob.h; y++) for (let x = ob.x; x < ob.x + ob.w; x++)
         if (fogAt(map, map, x + .5, y + .5) === 2) return true;
       return false;
-    }), 2, () => undefined);
+    }), 2, memoryTextureOf);
   }
   if (!player) map.objects.filter(ob => objectEnabled(map, ob) && ob.kind === 'zone').forEach(ob => drawZone(ctx, ob,
     o.selection?.type === 'object' && o.selection.id === ob.id || o.tool === 'zone', view.zoom));

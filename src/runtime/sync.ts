@@ -210,6 +210,7 @@ export function playerWorld(w: World, mapId: string | null = w.playerMapId, pcId
   const usedTextures = new Set([
     ...(pm?.groups ?? []).flatMap((g) => g.texture ? [g.texture.mediaId] : []),
     ...(pm?.seen.groups ?? []).flatMap((g) => g.texture ? [g.texture.mediaId] : []),
+    ...(pm?.seen.objects ?? []).flatMap((r) => r.texture ? [r.texture.mediaId] : []),
   ]);
   const clues: PlayerClue[] = valid ? w.maps.flatMap(m => m.objects.flatMap(o => o.secrets.flatMap(s => {
     const r = s.revealed;

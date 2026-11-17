@@ -371,6 +371,12 @@ export function checkWorld(w, migrated = false) {
   const fogs = (v, where, len) => arr(v, where, len).forEach((f, i) => { if (f !== 0 && f !== 1 && f !== 2) fail(`${where}[${i}]`, `迷雾只能是 0/1/2，现在是 ${JSON.stringify(f)}`); });
   const endpoint = (e, where) => { obj(e, where); str(e.mapId, `${where}.mapId`); int(e.x, `${where}.x`); int(e.y, `${where}.y`); };
   const identity = (v, where) => { if (v === undefined) return; obj(v, where); optBool(v.party, `${where}.party`); if (v.recipients !== undefined) strings(v.recipients, `${where}.recipients`); };
+  const textureSpec = (v, where) => {
+    obj(v, where);
+    if (!safeId(v.mediaId)) fail(`${where}.mediaId`, `不合法：${JSON.stringify(v.mediaId)}`);
+    if (v.fit !== undefined) oneOf(v.fit, ['fill', 'contain'], `${where}.fit`);
+    if (v.opacity !== undefined) num(v.opacity, `${where}.opacity`, 0, 1);
+  };
   const seenObjects = (v, where) => arr(v, where).forEach((o, i) => {
     const at = `${where}[${i}]`;
     obj(o, at); id(o.id, `${at}.id`); str(o.name, `${at}.name`); str(o.icon, `${at}.icon`); str(o.color, `${at}.color`);
@@ -378,6 +384,8 @@ export function checkWorld(w, migrated = false) {
     if (o.anchor !== undefined) { obj(o.anchor, `${at}.anchor`); int(o.anchor.x, `${at}.anchor.x`, 0, 2); int(o.anchor.y, `${at}.anchor.y`, 0, 2); }
     if (o.stateLabel !== null) str(o.stateLabel, `${at}.stateLabel`);
     identity(o.identity, `${at}.identity`);
+    if (o.texture !== undefined) textureSpec(o.texture, `${at}.texture`);
+    if (o.ghost !== undefined) bool(o.ghost, `${at}.ghost`);
   });
   const fragments = (v, where) => arr(v, where).forEach(r => { obj(r, where); for (const k of ['x', 'y', 'w', 'h']) num(r[k], `${where}.${k}`, k === 'w' || k === 'h' ? .0000001 : -MAX_COORD, MAX_COORD); oneOf(r.material, ['wall', 'glass', 'door', 'opening'], where); });
   const cellGroup = (g, where, n, width, height, memory = false) => {
@@ -389,12 +397,7 @@ export function checkWorld(w, migrated = false) {
       if (seenCells.has(v)) fail(`${where}.cells[${i}]`, `重复的小格 ${v}`);
       seenCells.add(v);
     });
-    if (g.texture !== undefined) {
-      obj(g.texture, `${where}.texture`);
-      if (!safeId(g.texture.mediaId)) fail(`${where}.texture.mediaId`, `不合法：${JSON.stringify(g.texture.mediaId)}`);
-      if (g.texture.fit !== undefined) oneOf(g.texture.fit, ['fill', 'contain'], `${where}.texture.fit`);
-      if (g.texture.opacity !== undefined) num(g.texture.opacity, `${where}.texture.opacity`, 0, 1);
-    }
+    if (g.texture !== undefined) textureSpec(g.texture, `${where}.texture`);
     if (g.objectId !== undefined) id(g.objectId, `${where}.objectId`);
     if (g.z !== undefined) num(g.z, `${where}.z`, -1000000, 1000000);
     if (g.bounds !== undefined) {

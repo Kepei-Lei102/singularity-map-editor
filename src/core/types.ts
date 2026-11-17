@@ -280,6 +280,10 @@ export interface SeenObject {
   height: number;
   identity?: { party?: boolean; recipients?: Id[] };
   stateLabel: string | null; // 只有一个状态的物件不显示状态
+  /** 最后一次看见整件物件时的外观；完全转灰后保持这一版。 */
+  texture?: TextureSpec;
+  /** 最后一次看见时是否不挡路（开着的门/帘子）。 */
+  ghost?: boolean;
 }
 
 /** 一份迷雾 + 记忆。全队共享时就是地图上的 fog / seen；各自独立时每个人一份。 */

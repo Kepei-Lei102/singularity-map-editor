@@ -1049,9 +1049,11 @@ export function deleteMedia(mediaId: string) {
     for (const m of d.maps) {
       m.objects.forEach((o) => { o.media = o.media.filter((a) => a.mediaId !== mediaId); });
       const clear = (groups?: CellGroup[]) => groups?.forEach((g) => { if (g.texture?.mediaId === mediaId) { delete g.texture; delete g.textureKey; } });
+      const clearSeenObjects = (memory?: GameMap['seen']) => memory?.objects.forEach((r) => { if (r.texture?.mediaId === mediaId) delete r.texture; });
       clear(m.groups);
       clear(m.seen.groups);
-      for (const L of Object.values(m.views)) clear(L.seen.groups);
+      clearSeenObjects(m.seen);
+      for (const L of Object.values(m.views)) { clear(L.seen.groups); clearSeenObjects(L.seen); }
     }
   });
 }
