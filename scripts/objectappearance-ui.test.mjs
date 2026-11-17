@@ -13,7 +13,7 @@ const root = fileURLToPath(new URL('..', import.meta.url));
 const temp = await mkdtemp(join(tmpdir(), 'ts-objectappearance-ui-'));
 const bundle = join(temp, 'panel.cjs');
 await build({
-  stdin: { contents: `export { ObjectInspector } from './src/components/Inspector';
+  stdin: { contents: `export { ObjectInspector, objectTextureUploadError } from './src/components/Inspector';
 export * as React from 'react';
 export { createRoot } from 'react-dom/client';
 export { act } from 'react';
@@ -75,6 +75,35 @@ test('普通物件显示外观区，选已有图会挂上物件贴图', () => {
   assert.ok(clear);
   api.act(() => clear.click());
   assert.equal(api.findMap(api.getWorld(), map.id).groups.some((x) => x.objectId === 'o1'), false);
+  api.act(() => root.unmount());
+  container.remove();
+});
+
+test('上传守卫：工程/编辑模式/物件/选中变了一个都不挂', () => {
+  const base = { ...api.getUI(), mode: 'edit', trial: null, selection: { type: 'object', mapId: 'map1', id: 'o1' } };
+  assert.match(api.objectTextureUploadError('a', 'b', base, 'map1', 'o1', true), /工程已经换了/);
+  assert.match(api.objectTextureUploadError('a', 'a', { ...base, mode: 'play', unlock: false }, 'map1', 'o1', true), /离开编辑模式/);
+  assert.match(api.objectTextureUploadError('a', 'a', { ...base, trial: {} }, 'map1', 'o1', true), /离开编辑模式/);
+  assert.match(api.objectTextureUploadError('a', 'a', base, 'map1', 'o1', false), /物件已经不在了/);
+  assert.match(api.objectTextureUploadError('a', 'a', { ...base, selection: { type: 'object', mapId: 'map1', id: 'o2' } }, 'map1', 'o1', true), /不在这个物件上/);
+  assert.equal(api.objectTextureUploadError('a', 'a', base, 'map1', 'o1', true), null);
+});
+
+test('空物件组也能从检查器清掉', () => {
+  const { map } = fixture();
+  api.update((d) => {
+    const m = api.findMap(d, map.id);
+    m.groups.push({ id: 'g-empty', name: '外观', cells: [0], objectId: 'o1' });
+  });
+  const world = api.getWorld();
+  const m = api.findMap(world, map.id);
+  const o = m.objects.find((x) => x.id === 'o1');
+  assert.ok(m.groups.some((g) => g.objectId === 'o1' && !g.texture));
+  const { root, container } = mount(world, m, o);
+  const clear = [...container.querySelectorAll('button')].find((b) => b.textContent?.trim() === '清除贴图');
+  assert.ok(clear);
+  api.act(() => clear.click());
+  assert.equal(api.findMap(api.getWorld(), map.id).groups.some((g) => g.objectId === 'o1'), false);
   api.act(() => root.unmount());
   container.remove();
 });

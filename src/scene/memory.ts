@@ -34,9 +34,11 @@ function cloneTexture(t?: TextureSpec): TextureSpec | undefined {
   return t ? { mediaId: t.mediaId, fit: t.fit, opacity: t.opacity } : undefined;
 }
 
-/** 物件自带贴图的实时图，来自唯一的物件贴图组。 */
-export function objectTextureOf(m: GameMap, o: MapObject): TextureSpec | undefined {
-  return m.groups?.find((g) => g.objectId === o.id)?.texture;
+/** 物件自带贴图的实时图，来自唯一的物件贴图组；一次建表，别每个物件扫一遍组。 */
+function objectTexturesOf(m: GameMap): Map<string, TextureSpec> {
+  const out = new Map<string, TextureSpec>();
+  for (const g of m.groups ?? []) if (g.objectId && g.texture) out.set(g.objectId, g.texture);
+  return out;
 }
 
 export function snapshot(o: MapObject | Draft<MapObject>, texture?: TextureSpec): SeenObject {
@@ -96,11 +98,12 @@ function syncLayer(m: Draft<GameMap>, L: Draft<VisionLayer>, rev: number) {
   const box = { ...source, fog: layer.fog };
   const live = source.objects.filter((o) => objectEnabled(source, o) && o.kind === 'object' && !isArchitectureObject(o) && !o.hidden && anyVisible(box, o));
   const liveIds = new Set(live.map((o) => o.id));
+  const textures = objectTexturesOf(source);
   // 记忆里的东西，原地方现在看得见了、但它已经不在那（被搬走/删掉/藏起来）→ 忘掉
   const kept = L.seen.objects.filter((r) => liveIds.has(r.id) || !anyVisible(box, r));
   if (kept.length !== L.seen.objects.length) L.seen.objects = kept;
   for (const o of live) {
-    const snap = snapshot(o, objectTextureOf(source, o));
+    const snap = snapshot(o, textures.get(o.id));
     L.seen.objectRevs[o.id] = rev;
     const i = L.seen.objects.findIndex((r) => r.id === o.id);
     if (i < 0) L.seen.objects.push(snap);
@@ -297,9 +300,10 @@ export function migrateWorld(w: World): World {
 
 /** 主持人用：玩家记得的样子和现在不一样的物件。 */
 export function staleMemories(m: GameMap) {
+  const textures = objectTexturesOf(m);
   return m.seen.objects.filter((r) => {
     if (anyVisible(m, r)) return false;
     const o = m.objects.find((x) => x.id === r.id);
-    return !o || !objectEnabled(m, o) || o.hidden || !sameSeen(r, snapshot(o, objectTextureOf(m, o)));
+    return !o || !objectEnabled(m, o) || o.hidden || !sameSeen(r, snapshot(o, textures.get(o.id)));
   });
 }

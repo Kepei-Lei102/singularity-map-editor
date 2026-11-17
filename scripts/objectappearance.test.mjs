@@ -158,16 +158,41 @@ test('玩家实时载荷只发可见物件的贴图组，媒体表带上它', ()
   assert.equal(hiddenWorld.media.some((m) => m.id === 'tex'), false);
 });
 
-test('玩家实时层 ghost 只画虚线，不画贴图', () => {
+test('玩家实时层 ghost 只画虚线，不画贴图；ghost 的图不进媒体表', () => {
   const { map } = fixture('a');
   api.update((d) => { const o = api.findMap(d, map.id).objects.find((x) => x.id === 'o1'); o.states = ['关', '开']; o.state = 1; o.blocksWhen = [0]; });
   const live = api.playerWorld(api.getWorld(), map.id, 'a');
   const po = live.maps[0].objects.find((o) => o.id === 'o1');
   assert.equal(po.ghost, true);
+  assert.equal(po.textured, true);
+  assert.equal(live.maps[0].groups.some((g) => g.objectId === 'o1'), false);
+  assert.equal(live.media.some((m) => m.id === 'tex'), false);
+  assert.doesNotThrow(() => api.checkWorld(live));
   const calls = renderOnce(live, live.maps[0], 'player');
   assert.equal(calls.drawImage.length, 0);
   assert.ok(calls.strokeRect.length > 0);
   assert.equal(calls.fillRect.some((c) => c.style === '#123456'), false);
+  assert.equal(calls.fillText.some((t) => t.text.includes('★')), false); // 标签仍按有图
+
+  api.update((d) => { const o = api.findMap(d, map.id).objects.find((x) => x.id === 'o1'); o.state = 0; });
+  const closed = api.playerWorld(api.getWorld(), map.id, 'a');
+  assert.equal(closed.maps[0].objects.find((o) => o.id === 'o1').textured, true);
+  assert.equal(closed.media.some((m) => m.id === 'tex'), true);
+  assert.equal(renderOnce(closed, closed.maps[0], 'player').drawImage.length, 1);
+});
+
+test('host 不信任导入的 ghost 字段：仍按当前 blocksWhen 画实心图', () => {
+  const w = api.emptyWorld();
+  const m = w.maps[0];
+  w.media = [tex];
+  m.objects = [{ ...api.newObject('object', 1, 1, 1, 1), id: 'o1', name: '柜子', color: '#123456', height: 1, states: ['关', '开'], state: 0, blocksWhen: [0], ghost: true }];
+  api.replaceWorld(w);
+  api.setObjectTexture(m.id, 'o1', 'tex');
+  const world = api.getWorld();
+  const map = api.findMap(world, m.id);
+  const calls = renderOnce(world, map, 'edit');
+  assert.equal(calls.drawImage.length, 1);
+  assert.equal(calls.strokeRect.length, 0);
 });
 
 test('玩家渲染会画物件贴图，且不画物件底色', () => {

@@ -129,10 +129,19 @@ test('灰区 ghost：记当时的开态，灰区画虚线不画贴图', () => {
   fog(map.id, (m) => { m.fog.fill(2); });
   const live = api.playerWorld(api.getWorld(), map.id, 'a');
   assert.equal(seenObject(live.maps[0]).ghost, true);
+  assert.equal(live.media.some((x) => x.id === 'texA'), false);
+  assert.doesNotThrow(() => api.checkWorld(live));
   const calls = renderOnce(live, live.maps[0]);
   assert.equal(calls.drawImage.length, 0);
   assert.ok(calls.strokeRect.length > 0);
   assert.equal(calls.fillRect.some((c) => c.style === '#123456'), false);
+
+  fog(map.id, (m) => { m.fog.fill(1); });
+  api.update((d) => { const x = api.findMap(d, map.id).objects.find((o) => o.id === 'o1'); x.state = 0; });
+  const closed = api.playerWorld(api.getWorld(), map.id, 'a');
+  assert.equal(seenObject(closed.maps[0]).ghost, undefined);
+  assert.ok(closed.media.some((x) => x.id === 'texA'));
+  assert.equal(renderOnce(closed, closed.maps[0]).drawImage.length, 1);
 });
 
 test('删媒体清掉记忆贴图，玩家媒体表和灰区一起回退颜色', () => {

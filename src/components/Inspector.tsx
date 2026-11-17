@@ -4,7 +4,7 @@ import { objectEnabled } from '../core/objectData.js';
 import { toggleArchitectureDoor } from '../runtime/actions';
 import type { Draft } from 'immer';
 import { useState } from 'react';
-import { canEditMap, getWorld, setUI, toast, update, useUI, useWorld, worldContext, type UIState } from '../core/store';
+import { canEditMap, getUI, getWorld, setUI, toast, update, useUI, useWorld, worldContext, type UIState } from '../core/store';
 import type { Connection, GameMap, MapObject, Secret, TextureFit, Token, World } from '../core/types';
 import { CONN_LABEL, TIERS, TIER_LABEL } from '../core/types';
 import {
@@ -20,6 +20,17 @@ import { storeBlobStatus, useBlobUrl } from '../runtime/media';
 import { blankCellCount } from '../core/grid';
 import { Area, Check, Num, Row, Section, Txt } from './fields';
 import { ObjectInteractionPanel } from './ObjectInteraction';
+
+/** 上传是异步的：文件存完回来时，只有仍然停在同一个工程、编辑模式、同一个物件上，才允许挂图。
+ *  抽出来是为了能单独测守卫顺序；调用方负责把返回的提示 toast 出来、把文件交给孤儿清理。 */
+export function objectTextureUploadError(ctxBefore: unknown, ctxNow: unknown, now: UIState, mapId: string, objectId: string, exists: boolean): string | null {
+  if (ctxBefore !== ctxNow) return '上传完成时工程已经换了，没有加进去';
+  if (!canEditMap(now) || now.trial) return '上传完成时已经离开编辑模式，没有加进去';
+  if (!exists) return '上传完成时物件已经不在了';
+  const sel = now.selection;
+  if (!(sel?.type === 'object' && sel.mapId === mapId && sel.id === objectId)) return '上传完成时已经不在这个物件上了，没有加进去';
+  return null;
+}
 
 export function Inspector() {
   const w = useWorld();
@@ -429,13 +440,9 @@ export function ObjectInspector({ world, mapId, o, ui }: { world: World; mapId: 
     let stored: { key: string; created: boolean } | null = null;
     try {
       stored = await storeBlobStatus(file);
-      if (ctx !== worldContext()) {
-        toast('上传完成时工程已经换了，没有加进去');
-        await offerDeleteOrphanBlob(file.name, stored);
-        return;
-      }
-      if (!o || !findObj(getWorld(), mapId, o.id)) {
-        toast('上传完成时物件已经不在了');
+      const error = objectTextureUploadError(ctx, worldContext(), getUI(), mapId, o.id, !!o && !!findObj(getWorld(), mapId, o.id));
+      if (error) {
+        toast(error);
         await offerDeleteOrphanBlob(file.name, stored);
         return;
       }
@@ -522,13 +529,15 @@ export function ObjectInspector({ world, mapId, o, ui }: { world: World; mapId: 
           {texBusy ? '上传中…' : '上传图片'}
           <input type="file" accept="image/*" disabled={texBusy} onChange={(e) => { uploadTexture(e.target.files?.[0] ?? null); e.target.value = ''; }} />
         </label>
-        {objectTexture && textureGroup && <>
-          <TexturePreview mediaId={objectTexture.mediaId} />
-          <Row label="铺法"><select value={objectTexture.fit ?? 'fill'} onChange={(e) => setCellGroupFit(mapId, textureGroup.id, e.target.value as TextureFit)}>
-            <option value="fill">铺满物件</option>
-            <option value="contain">完整放进物件</option>
-          </select></Row>
-          <Row label="不透明度"><Num value={objectTexture.opacity ?? 1} step={0.1} min={0} max={1} onChange={(v) => setCellGroupOpacity(mapId, textureGroup.id, v)} /></Row>
+        {textureGroup && <>
+          {objectTexture && <>
+            <TexturePreview mediaId={objectTexture.mediaId} />
+            <Row label="铺法"><select value={objectTexture.fit ?? 'fill'} onChange={(e) => setCellGroupFit(mapId, textureGroup.id, e.target.value as TextureFit)}>
+              <option value="fill">铺满物件</option>
+              <option value="contain">完整放进物件</option>
+            </select></Row>
+            <Row label="不透明度"><Num value={objectTexture.opacity ?? 1} step={0.1} min={0} max={1} onChange={(v) => setCellGroupOpacity(mapId, textureGroup.id, v)} /></Row>
+          </>}
           <button className="danger small" onClick={() => clearObjectTexture(mapId, o.id)}>清除贴图</button>
         </>}
         {!images.length && <div className="hint">媒体库里还没有图片；先上传一张，或去「媒体库」加图。</div>}

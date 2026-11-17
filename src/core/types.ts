@@ -149,6 +149,8 @@ export interface MapObject {
   hidden: boolean; // 对玩家隐藏
   /** 仅玩家载荷/渲染派生：当前状态是否不挡路（open/ghost）。 */
   ghost?: boolean;
+  /** 仅玩家载荷/渲染派生：当前物件有外观贴图。ghost 时贴图组不发，标签仍按“有图”处理。 */
+  textured?: boolean;
   secrets: Secret[];
   media: MediaAttach[];
 }

@@ -228,9 +228,10 @@ function drawObject(ctx: CanvasRenderingContext2D, o: MapObject, player: boolean
   const ax = (o.anchor?.x ?? 0) / 3, ay = (o.anchor?.y ?? 0) / 3;
   const X = (o.x + ax) * CS, Y = (o.y + ay) * CS, W = o.w * CS, H = o.h * CS;
   // 靠状态开合的物件（隔断、门）：此刻不挡路时只画虚线轮廓，表示板片收起了、人可以从这里过去。
-  const ghost = o.ghost ?? (!!o.blocksWhen && !o.blocksWhen.includes(o.state));
-  const textured = !!texture;
-  const img = textured && imageOf ? imageOf(texture.mediaId) : null;
+  const ghost = player ? (o.ghost ?? (!!o.blocksWhen && !o.blocksWhen.includes(o.state))) : (!!o.blocksWhen && !o.blocksWhen.includes(o.state));
+  // ghost 时实时组不发贴图，但玩家标签仍按“有图”处理；图只认 resolver，不认这个标记。
+  const textured = !!texture || (player && !!o.textured);
+  const img = texture && imageOf ? imageOf(texture.mediaId) : null;
   if (!labelOnly) {
     if (ghost) {
       ctx.save();

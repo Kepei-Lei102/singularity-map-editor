@@ -207,10 +207,13 @@ export function playerWorld(w: World, mapId: string | null = w.playerMapId, pcId
     ...Object.values(pm.fineMaterials ?? {}),
     ...Object.values(pm.seen.materialCells ?? {}),
   ] : []);
+  // ghost 物件不画外观图，实时组不发、记忆贴图媒体也不发；开了以后再随下一帧带上。
+  // 记忆物件按 id 判 ghost，重复 id 时宁可少发图，也不发收回状态下的外观。
+  const memoryGhost = new Set((pm?.seen.objects ?? []).filter((r) => r.ghost).map((r) => r.id));
   const usedTextures = new Set([
     ...(pm?.groups ?? []).flatMap((g) => g.texture ? [g.texture.mediaId] : []),
-    ...(pm?.seen.groups ?? []).flatMap((g) => g.texture ? [g.texture.mediaId] : []),
-    ...(pm?.seen.objects ?? []).flatMap((r) => r.texture ? [r.texture.mediaId] : []),
+    ...(pm?.seen.groups ?? []).filter((g) => !g.objectId || !memoryGhost.has(g.objectId)).flatMap((g) => g.texture ? [g.texture.mediaId] : []),
+    ...(pm?.seen.objects ?? []).filter((r) => !memoryGhost.has(r.id)).flatMap((r) => r.texture ? [r.texture.mediaId] : []),
   ]);
   const clues: PlayerClue[] = valid ? w.maps.flatMap(m => m.objects.flatMap(o => o.secrets.flatMap(s => {
     const r = s.revealed;
@@ -302,9 +305,12 @@ export function playerMap(m: GameMap, L: VisionLayer, pcId?: string): GameMap {
   };
   const visibleObjects = m.objects.filter(o => objectEnabled(m, o) && o.kind === 'object' && !isArchitectureObject(o) && !o.hidden && anyVisible({ ...m, ...L }, o));
   const visibleObjectIds = new Set(visibleObjects.map((o) => o.id));
+  const ghostObjectIds = new Set(visibleObjects.filter((o) => !!o.blocksWhen && !o.blocksWhen.includes(o.state)).map((o) => o.id));
+  const texturedObjectIds = new Set((m.groups ?? []).filter((g) => g.objectId && g.texture && visibleObjectIds.has(g.objectId)).map((g) => g.objectId!));
   const groups = (m.groups ?? []).flatMap((g) => {
     if (g.objectId) {
-      if (!visibleObjectIds.has(g.objectId)) return [];
+      // ghost 物件只画虚线，外观图不发；标签靠 objects.textured 维持“有图”口径。
+      if (!visibleObjectIds.has(g.objectId) || ghostObjectIds.has(g.objectId)) return [];
       const cells = g.cells.filter((key) => fogOf(key) === 1);
       if (!cells.length) return [];
       const out = visibleGroup(g, cells, cells.length === g.cells.length);
@@ -358,7 +364,7 @@ export function playerMap(m: GameMap, L: VisionLayer, pcId?: string): GameMap {
     tokens: m.tokens.filter(t => { const p = tokenPosition(t); return t.pcId === pcId || fogAt(m, L, p.x, p.y) === 1; }),
     objects: visibleObjects.map(o => ({
       id: o.id, kind: o.kind, name: identityKnown(o, pcId) ? o.name : UNKNOWN_OBJECT, x: o.x, y: o.y, w: o.w, h: o.h, anchor: o.anchor, height: o.height, color: o.color, icon: identityKnown(o, pcId) ? o.icon : '',
-      state: identityKnown(o, pcId) ? o.state : 0, states: identityKnown(o, pcId) ? o.states.map((s, k) => k === o.state ? s : '') : [''], ghost: !!o.blocksWhen && !o.blocksWhen.includes(o.state), notes: '', hidden: false, media: [], secrets: [],
+      state: identityKnown(o, pcId) ? o.state : 0, states: identityKnown(o, pcId) ? o.states.map((s, k) => k === o.state ? s : '') : [''], ghost: !!o.blocksWhen && !o.blocksWhen.includes(o.state), ...(texturedObjectIds.has(o.id) ? { textured: true } : {}), notes: '', hidden: false, media: [], secrets: [],
     })),
   };
 }
