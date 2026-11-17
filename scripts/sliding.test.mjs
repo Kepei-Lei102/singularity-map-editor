@@ -189,9 +189,14 @@ test('existing room reset restores gate state and block position together', () =
 });
 
 test('copy remaps puzzle references and resets; reshape shifts board, goal and reset', () => {
-  const { world, map } = fixture(); install(world);
+  const { world, map } = fixture();
+  map.groups = [{ id: 'group', name: '贴图', cells: [api.fineKeyOf(map, 9, 9)], objectId: 'target' }];
+  install(world);
   api.duplicateMap(map.id);
   let copy = api.getWorld().maps[1], p = copy.slidingPuzzles[0];
+  assert.equal(copy.groups.length, 1);
+  assert.notEqual(copy.groups[0].id, 'group');
+  assert.equal(copy.groups[0].objectId, copy.objects[0].id);
   assert.notEqual(p.id, 'puzzle');
   assert.ok(p.objectIds.every((id) => copy.objects.some((o) => o.id === id)));
   assert.equal(p.targetId, copy.objects[0].id); assert.equal(p.gateId, copy.objects[2].id);
@@ -199,6 +204,7 @@ test('copy remaps puzzle references and resets; reshape shifts board, goal and r
   api.reshapeMaps([copy.id], 1, 1, 0, 0);
   copy = api.getWorld().maps[1]; p = copy.slidingPuzzles[0];
   assert.deepEqual([p.x, p.y, p.goal.x, p.goal.y], [2, 2, 4, 3]);
+  assert.deepEqual(copy.groups[0].cells, [api.fineKey(copy.width, 12, 12)]);
   api.checkWorld(api.getWorld(), true);
   const before = api.getWorld(); api.reshapeMaps([copy.id], -3, 0, 0, 0);
   assert.equal(api.getWorld(), before);
@@ -880,4 +886,19 @@ test('canHear：实心整墙挡声音，窗和小格墙不挡', () => {
   setBaseTerrain(map, 2, 1, 'floor');
   map.fineCells[(1 * 3) * map.width * 3 + 2 * 3] = 'wall';
   assert.equal(api.canHear(world, map, { x: 1, y: 1 }, { x: 3, y: 1 }), true);
+});
+
+
+test('reshape 裁掉物件时，引用它的贴图组一起消失', () => {
+  const w = api.emptyWorld();
+  const m = w.maps[0];
+  const edge = { ...api.newObject('object', m.width - 1, m.height - 1, 1, 1), id: 'edge' };
+  m.objects.push(edge);
+  m.groups = [{ id: 'g-edge', name: '边缘贴图', cells: [api.fineKeyOf(m, (m.width - 1) * 3 + 1, (m.height - 1) * 3 + 1)], objectId: 'edge' }];
+  install(w);
+  api.reshapeMaps([m.id], 0, 0, -5, -5);
+  const mm = api.getWorld().maps[0];
+  assert.equal(mm.objects.some((o) => o.id === 'edge'), false);
+  assert.equal(mm.groups.some((g) => g.id === 'g-edge'), false);
+  assert.doesNotThrow(() => api.checkWorld(api.getWorld(), true));
 });

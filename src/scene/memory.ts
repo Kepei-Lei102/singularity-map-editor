@@ -139,7 +139,9 @@ export function migrateWorld(w: World): World {
         if (Object.keys(kept).length) m.fineMaterials = kept;
       }
     }
-    if (!m.seen) m.seen = { cells: m.cells.map((c, i) => (m.fog[i] === 1 ? c : '')), objects: [] };
+    if (!m.seen) m.seen = { cells: m.cells.map((c, i) => (m.fog[i] === 1 ? c : '')), objects: [], groups: [] };
+    m.seen.groups ??= [];
+    m.groups ??= [];
     m.autoFog ??= true;
     m.rooms ??= [];
     m.roomCells ??= new Array(m.width * m.height).fill('');
@@ -179,6 +181,7 @@ export function migrateWorld(w: World): World {
       delete (L as { subRevs?: unknown }).subRevs;
     }
     for (const L of Object.values(m.views)) delete (L as { subFog?: unknown }).subFog;
+    for (const L of Object.values(m.views)) { if (L?.seen) L.seen.groups ??= []; }
     for (const o of m.objects) for (const s of o.secrets) { s.kind ??= 'roll'; s.range ??= 1; }
   }
   if (v1) w.version = 2;

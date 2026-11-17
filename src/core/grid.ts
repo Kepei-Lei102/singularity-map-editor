@@ -54,3 +54,47 @@ export function hasFineDetail(m: { width: number; height: number; cells: string[
   }
   return false;
 }
+
+
+/** 一组小格的包围盒；x1/y1 是**开区间**。空组返回 null。 */
+export interface FineBounds { x0: number; y0: number; x1: number; y1: number }
+
+export function groupBounds(width: number, cells: readonly number[], height?: number): FineBounds | null {
+  if (!cells.length) return null;
+  const fw = fineWidth(width), limit = height === undefined ? Infinity : fw * fineHeight(height);
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  for (const key of cells) {
+    if (!Number.isSafeInteger(key) || key < 0 || key >= limit) continue;
+    const x = key % fw, y = Math.floor(key / fw);
+    if (x < x0) x0 = x;
+    if (y < y0) y0 = y;
+    if (x + 1 > x1) x1 = x + 1;
+    if (y + 1 > y1) y1 = y + 1;
+  }
+  return x0 === Infinity ? null : { x0, y0, x1, y1 };
+}
+
+/** 物件脚印覆盖的小格；默认给物件贴图组用。锚点按 1/3 格偏移。 */
+export function objectFootprintCells(width: number, height: number, o: { x: number; y: number; w: number; h: number; anchor?: { x: number; y: number } }): number[] {
+  const fw = width * SUB, fh = height * SUB;
+  const ax = Math.max(0, Math.min(SUB - 1, Math.floor(o.anchor?.x ?? 0)));
+  const ay = Math.max(0, Math.min(SUB - 1, Math.floor(o.anchor?.y ?? 0)));
+  const x3 = Math.floor(o.x * SUB) + ax, y3 = Math.floor(o.y * SUB) + ay;
+  const out: number[] = [];
+  for (let y = y3; y < y3 + o.h * SUB; y++) for (let x = x3; x < x3 + o.w * SUB; x++) {
+    if (x >= 0 && x < fw && y >= 0 && y < fh) out.push(y * fw + x);
+  }
+  return out;
+}
+
+/** 整组平移若干小格；移出地图的格子丢掉。 */
+export function shiftGroupCells(width: number, height: number, cells: readonly number[], dx3: number, dy3: number): number[] {
+  const fw = width * SUB, fh = height * SUB;
+  const out: number[] = [];
+  for (const key of cells) {
+    if (!Number.isSafeInteger(key) || key < 0) continue;
+    const x = key % fw + dx3, y = Math.floor(key / fw) + dy3;
+    if (x >= 0 && x < fw && y >= 0 && y < fh) out.push(y * fw + x);
+  }
+  return out;
+}

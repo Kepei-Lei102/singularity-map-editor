@@ -30,7 +30,7 @@ export function newMap(name: string, layer: string, floor: number, w: number, h:
   return {
     id: uid(), name, layer, floor, width: w, height: h, cells, fineCells: buildFineCells(w, h, cells),
     d100: new Array(w * h).fill(0), fog: new Array(w * h).fill(0),
-    seen: { cells: new Array(w * h).fill(''), objects: [] }, autoFog: true,
+    seen: { cells: new Array(w * h).fill(''), objects: [], groups: [] }, groups: [], autoFog: true,
     rooms: [], roomCells: new Array(w * h).fill(''), views: {}, spawn: null,
     objects: [], tokens: [], notes: '',
   };

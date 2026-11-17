@@ -12,7 +12,7 @@ import { hasFineDetail } from '../core/grid';
 import { materialAtCell } from '../scene/material';
 import { objectRect } from '../scene/architecture';
 import { applyKnowledge, type KnowledgeEffect } from '../rules/interaction';
-import type { Flow, GameMap, LogEntry, MapObject, MediaAttach, Room, RoomObjectSnapshot, Tier, Token, World } from '../core/types';
+import type { CellGroup, Flow, GameMap, LogEntry, MapObject, MediaAttach, Room, RoomObjectSnapshot, Tier, Token, World } from '../core/types';
 import { newObject } from '../core/defaults';
 import { NODE_H, NODE_W } from '../rules/flow';
 export { NODE_H, NODE_W, reachable } from '../rules/flow';
@@ -699,7 +699,13 @@ export function reshapeMaps(mapIds: string[], left: number, top: number, right: 
       const shiftCells = <T,>(data: Record<number, T>) => Object.fromEntries(Object.entries(data).flatMap(([key, v]) => { const x = +key % oldWidth + left, y = Math.floor(+key / oldWidth) + top; return x >= 0 && y >= 0 && x < W && y < H ? [[y * W + x, v]] : []; }));
       if (m.materialCells) m.materialCells = shiftCells(m.materialCells);
       if (m.fineMaterials) m.fineMaterials = shiftSub(m.fineMaterials);
+      const shiftGroups = (groups: CellGroup[] | undefined) => groups?.map((g) => ({ ...g, cells: g.cells.flatMap((key) => {
+        const x = key % (oldWidth * 3) + left * 3, y = Math.floor(key / (oldWidth * 3)) + top * 3;
+        return x >= 0 && y >= 0 && x < W * 3 && y < H * 3 ? [y * W * 3 + x] : [];
+      }) }));
+      if (m.groups) m.groups = shiftGroups(m.groups);
       for (const L of [m, ...Object.values(m.views)]) {
+        if (L.seen.groups) L.seen.groups = shiftGroups(L.seen.groups);
         if (L.seen.materialCells) L.seen.materialCells = shiftCells(L.seen.materialCells);
         if (L.seen.observed) L.seen.observed = shiftSub(L.seen.observed);
         if (L.seen.architectureRevs) L.seen.architectureRevs = shiftSub(L.seen.architectureRevs);
@@ -726,6 +732,9 @@ export function reshapeMaps(mapIds: string[], left: number, top: number, right: 
       m.objects = m.objects.filter(o => isArchitectureObject(o) || inside(o));
       m.tokens = m.tokens.filter(inside);
       m.seen.objects = m.seen.objects.filter(inside);
+      // 物件被裁到图外后，引用它的贴图组不能留成悬空引用；物件没了，组一起消失。
+      const liveObjects = new Set(m.objects.map((o) => o.id));
+      if (m.groups) m.groups = m.groups.filter((g) => !g.objectId || liveObjects.has(g.objectId));
       for (const p of m.slidingPuzzles ?? []) {
         p.x += left; p.y += top;
         if (p.goal) { p.goal.x += left; p.goal.y += top; }
@@ -799,9 +808,13 @@ export function duplicateMap(mapId: string, layer?: string) {
     if (r.reset) r.reset.objects = remapSnapshots(r.reset.objects);
     for (const l of r.layouts ?? []) l.objects = remapSnapshots(l.objects);
   }
+  copy.groups = (src.groups ?? []).flatMap((g) => {
+    if (g.objectId && !objectIds.has(g.objectId)) return [];
+    return [{ ...g, id: uid(), cells: [...g.cells], ...(g.objectId ? { objectId: objectIds.get(g.objectId)! } : {}) }];
+  });
   copy.tokens = [];
   copy.fog = copy.fog.map(() => 0);
-  copy.seen = { cells: copy.cells.map(() => ''), objects: [] };
+  copy.seen = { cells: copy.cells.map(() => ''), objects: [], groups: [] };
   copy.views = {}; // 每个人的旧记忆也不能带过去（物件已经换了 ID）
   if (layer) copy.layer = layer;
   else copy.name = src.name + '（副本）';

@@ -26,6 +26,28 @@ export interface Material {
   friction?: number; // 摩擦（预留，0–10）
 }
 
+export type TextureFit = 'fill' | 'contain';
+
+/** 一组贴图：图片铺满组的包围盒，组的任意形状负责裁剪。 */
+export interface TextureSpec {
+  mediaId: Id;
+  fit?: TextureFit; // 默认 fill；contain 保持比例留白
+  opacity?: number; // 0–1，默认 1
+}
+
+/**
+ * 任意形状的小格分组。cells 是绝对小格 key，不预设矩形/跨越线/容器类型；
+ * 有 objectId 表示物件自带贴图（替换外观），否则按 z 画在地面/贴花层。
+ */
+export interface CellGroup {
+  id: Id;
+  name: string;
+  cells: number[];
+  texture?: TextureSpec;
+  objectId?: Id;
+  z?: number;
+}
+
 export interface SecretTiers {
   crit: string;
   success: string;
@@ -221,6 +243,8 @@ export interface GameMap {
   materialCells?: Record<number, Id>;
   /** 小格材质覆盖；key = y3*(width*3)+x3，没有就退回 materialCells。 */
   fineMaterials?: Record<number, Id>;
+  /** 任意小格贴图分组；旧存档没有就是空。 */
+  groups?: CellGroup[];
   architecture?: Architecture;
   architectureFragments?: ArchitectureFragment[]; // 仅玩家同步的实时可见片段
   slidingPuzzles?: SlidingPuzzle[];
@@ -261,6 +285,8 @@ export interface Memory {
   objectRevs?: Record<Id, number>;
   architecture?: ArchitectureFragment[];
   materialCells?: Record<number, Id>;
+  /** 记得的贴图组快照；灰区按当时的样子画。 */
+  groups?: CellGroup[];
   cells: string[]; // 记得的地形，'' = 不记得
   objects: SeenObject[];
 }

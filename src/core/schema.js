@@ -380,6 +380,28 @@ export function checkWorld(w, migrated = false) {
     identity(o.identity, `${at}.identity`);
   });
   const fragments = (v, where) => arr(v, where).forEach(r => { obj(r, where); for (const k of ['x', 'y', 'w', 'h']) num(r[k], `${where}.${k}`, k === 'w' || k === 'h' ? .0000001 : -MAX_COORD, MAX_COORD); oneOf(r.material, ['wall', 'glass', 'door', 'opening'], where); });
+  const cellGroup = (g, where, n) => {
+    obj(g, where); id(g.id, `${where}.id`); str(g.name, `${where}.name`);
+    const cells = arr(g.cells, `${where}.cells`);
+    const seenCells = new Set();
+    cells.forEach((v, i) => {
+      int(v, `${where}.cells[${i}]`, 0, n * 9 - 1);
+      if (seenCells.has(v)) fail(`${where}.cells[${i}]`, `重复的小格 ${v}`);
+      seenCells.add(v);
+    });
+    if (g.texture !== undefined) {
+      obj(g.texture, `${where}.texture`);
+      if (!safeId(g.texture.mediaId)) fail(`${where}.texture.mediaId`, `不合法：${JSON.stringify(g.texture.mediaId)}`);
+      if (g.texture.fit !== undefined) oneOf(g.texture.fit, ['fill', 'contain'], `${where}.texture.fit`);
+      if (g.texture.opacity !== undefined) num(g.texture.opacity, `${where}.texture.opacity`, 0, 1);
+    }
+    if (g.objectId !== undefined) id(g.objectId, `${where}.objectId`);
+    if (g.z !== undefined) num(g.z, `${where}.z`, -1000000, 1000000);
+  };
+  const cellGroups = (v, where, n) => {
+    arr(v, where).forEach((g, i) => cellGroup(g, `${where}[${i}]`, n));
+    unique(v, where);
+  };
   const memory = (v, where, n) => {
     obj(v, where); strings(v.cells, `${where}.cells`, n); seenObjects(v.objects, `${where}.objects`);
     if (v.cellRevs !== undefined) arr(v.cellRevs, `${where}.cellRevs`).forEach(r => int(r, `${where}.cellRevs`, 0, Number.MAX_SAFE_INTEGER));
@@ -389,6 +411,8 @@ export function checkWorld(w, migrated = false) {
     }
     if (v.architecture !== undefined) fragments(v.architecture, `${where}.architecture`);
     if (v.materialCells !== undefined) for (const [key, value] of Object.entries(obj(v.materialCells, `${where}.materialCells`))) { int(+key, `${where}.materialCells key`, 0, n - 1); str(value, `${where}.materialCells value`); }
+    if (v.groups !== undefined) cellGroups(v.groups, `${where}.groups`, n);
+    if (migrated && v.groups === undefined) fail(`${where}.groups`, '缺失');
   };
 
   obj(w, '工程');
@@ -430,7 +454,7 @@ export function checkWorld(w, migrated = false) {
     if (m.heights !== undefined) arr(m.heights, `${at}.heights`, n).forEach((v, i) => int(v, `${at}.heights[${i}]`, -8, 24));
     fogs(m.fog, `${at}.fog`, n);
     optBool(m.autoFog, `${at}.autoFog`);
-    if (migrated) for (const k of ['roomCells', 'seen', 'views', 'rooms']) if (m[k] === undefined) fail(`${at}.${k}`, '缺失');
+    if (migrated) for (const k of ['roomCells', 'seen', 'views', 'rooms', 'groups']) if (m[k] === undefined) fail(`${at}.${k}`, '缺失');
     if (m.roomCells !== undefined) strings(m.roomCells, `${at}.roomCells`, n);
     if (m.seen !== undefined) memory(m.seen, `${at}.seen`, n);
     if (m.views !== undefined) Object.entries(obj(m.views, `${at}.views`)).forEach(([pc, L]) => {
@@ -531,6 +555,11 @@ export function checkWorld(w, migrated = false) {
       });
     });
     unique(m.objects, `${at}.objects`);
+    if (m.groups !== undefined) {
+      cellGroups(m.groups, `${at}.groups`, n);
+      for (const g of m.groups) if (g.objectId !== undefined && !m.objects.some((o) => o.id === g.objectId)) fail(`${at}.groups`, `找不到物件 ${g.objectId}`);
+    }
+    if (migrated && m.groups === undefined) fail(`${at}.groups`, '缺失');
     if (m.slidingPuzzles !== undefined) {
       const puzzles = arr(m.slidingPuzzles, `${at}.slidingPuzzles`);
       const members = new Set(), gates = new Set();
@@ -778,6 +807,10 @@ export function checkWorld(w, migrated = false) {
     if (m.key !== undefined && !(typeof m.key === 'string' && /^v:[A-Za-z0-9]{1,80}$/.test(m.key))) fail(`media[${i}].key`, `不合法：${JSON.stringify(m.key)}`);
   });
   unique(w.media, 'media');
+  const mediaIds = new Set(w.media.map((m) => m.id));
+  for (const m of w.maps) for (const g of m.groups ?? []) {
+    if (g.texture && !mediaIds.has(g.texture.mediaId)) fail(`地图「${m.name}」的贴图组「${g.name}」`, `找不到媒体 ${g.texture.mediaId}`);
+  }
   num(w.session, 'session');
   if (w.playerMapId !== null && w.playerMapId !== undefined) str(w.playerMapId, 'playerMapId');
   if (w.visionMode !== undefined) oneOf(w.visionMode, ['shared', 'individual', 'grouped'], 'visionMode');

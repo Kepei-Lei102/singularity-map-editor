@@ -2,7 +2,7 @@ import type { GameMap, VisionLayer, World } from '../core/types';
 import { current, isDraft } from 'immer';
 import { clipArchitecture } from './architecture';
 
-export const emptyVision = (n: number): VisionLayer => ({ fog: Array(n).fill(0), seen: { cells: Array(n).fill(''), objects: [] } });
+export const emptyVision = (n: number): VisionLayer => ({ fog: Array(n).fill(0), seen: { cells: Array(n).fill(''), objects: [], groups: [] } });
 export const cloneLayer = (L: VisionLayer): VisionLayer => JSON.parse(JSON.stringify({ fog: L.fog, seen: L.seen }));
 
 export function visionKey(w: World, pcId: string): string {
