@@ -188,9 +188,19 @@ test('existing room reset restores gate state and block position together', () =
   assert.deepEqual([api.getWorld().maps[0].objects[0].x, api.getWorld().maps[0].objects[2].state], [2, 0]);
 });
 
+test('滑块移动后物件组按新脚印重算', () => {
+  const { world, map, block } = fixture();
+  map.groups = [{ id: 'gt', name: '物件贴图', cells: api.objectFootprintCells(map.width, map.height, block), objectId: 'target' }];
+  install(world);
+  assert.equal(api.moveSlidingObject(map.id, 'target', 3, 2), null);
+  const m = api.getWorld().maps[0], g = m.groups.find((x) => x.objectId === 'target'), o = m.objects.find((x) => x.id === 'target');
+  assert.deepEqual(g.cells, api.objectFootprintCells(m.width, m.height, o));
+  assert.doesNotThrow(() => api.checkWorld(api.getWorld(), true));
+});
+
 test('copy remaps puzzle references and resets; reshape shifts board, goal and reset', () => {
   const { world, map } = fixture();
-  map.groups = [{ id: 'group', name: '贴图', cells: [api.fineKeyOf(map, 9, 9)], objectId: 'target' }];
+  map.groups = [{ id: 'group', name: '贴图', cells: api.objectFootprintCells(map.width, map.height, map.objects[0]), objectId: 'target' }];
   install(world);
   api.duplicateMap(map.id);
   let copy = api.getWorld().maps[1], p = copy.slidingPuzzles[0];
@@ -204,7 +214,7 @@ test('copy remaps puzzle references and resets; reshape shifts board, goal and r
   api.reshapeMaps([copy.id], 1, 1, 0, 0);
   copy = api.getWorld().maps[1]; p = copy.slidingPuzzles[0];
   assert.deepEqual([p.x, p.y, p.goal.x, p.goal.y], [2, 2, 4, 3]);
-  assert.deepEqual(copy.groups[0].cells, [api.fineKey(copy.width, 12, 12)]);
+  assert.deepEqual(copy.groups[0].cells, api.objectFootprintCells(copy.width, copy.height, copy.objects[0]));
   api.checkWorld(api.getWorld(), true);
   const before = api.getWorld(); api.reshapeMaps([copy.id], -3, 0, 0, 0);
   assert.equal(api.getWorld(), before);

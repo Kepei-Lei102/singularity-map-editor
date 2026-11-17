@@ -308,6 +308,7 @@ export function MapCanvas({ world, map, mode, playerNumbers = false, follow, vie
     if (tool === 'groupPaint') {
       const group = s.groupId && m.groups?.find((g) => g.id === s.groupId);
       if (!group) return toast('先在右侧「贴图组」里选一个组');
+      if (group.objectId) return toast('物件贴图在物件检查器里设，不能当普通贴图组涂');
       beginBatch();
       const { gx, gy } = toCell(e);
       const fx = Math.floor(gx * 3), fy = Math.floor(gy * 3);

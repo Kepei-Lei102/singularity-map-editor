@@ -8,7 +8,7 @@ import { getUI, getWorld, reachableWorlds, replaceWorld, setUI, toast, update, w
 import { blocksMovement, pcWithin } from '../scene/perception';
 import { sightCacheFor, viewerOf, visiblePoint } from '../scene/sight';
 import { subKey, terrainBlocksRect } from '../scene/terrain';
-import { groupBounds, hasFineDetail } from '../core/grid';
+import { groupBounds, hasFineDetail, objectFootprintCells } from '../core/grid';
 import { materialAtCell } from '../scene/material';
 import { objectRect } from '../scene/architecture';
 import { applyKnowledge, type KnowledgeEffect } from '../rules/interaction';
@@ -1466,6 +1466,36 @@ export function setCellGroupZ(mapId: string, groupId: string, z: number) {
     const m = findMap(d, mapId); if (!m) return;
     const g = m.groups?.find((x) => x.id === groupId); if (g) g.z = Math.max(-1000000, Math.min(1000000, Math.round(Number.isFinite(z) ? z : 0)));
   });
+}
+
+/** 给物件挂一张外观贴图。一个物件最多一个组；组格子永远按物件脚印重算，不给自由涂形状。
+ *  墙/门这类建筑物件本轮不接；返回组 ID（找不到物件或建筑物件返回 null）。 */
+export function setObjectTexture(mapId: string, objectId: string, mediaId: string, fit?: TextureFit): string | null {
+  const map = findMap(getWorld(), mapId);
+  const obj = map?.objects.find((o) => o.id === objectId);
+  if (!map || !obj || isArchitectureObject(obj)) return null;
+  const existing = map.groups?.find((g) => g.objectId === objectId);
+  const id = existing?.id ?? uid();
+  const name = existing?.name ?? `${obj.name}·贴图`;
+  update((d) => {
+    const m = findMap(d, mapId); if (!m) return;
+    const o = m.objects.find((x) => x.id === objectId); if (!o) return;
+    m.groups ??= [];
+    let g = m.groups.find((x) => x.objectId === objectId);
+    if (!g) { g = { id, name, cells: [], objectId: objectId }; m.groups.push(g); }
+    g.cells = objectFootprintCells(m.width, m.height, o);
+    const bounds = groupBounds(m.width, g.cells, m.height);
+    if (bounds) g.bounds = bounds; else delete g.bounds;
+    g.texture = { mediaId, fit: fit ?? g.texture?.fit ?? 'fill', opacity: g.texture?.opacity ?? 1 };
+  });
+  return id;
+}
+
+/** 解掉物件外观贴图：删掉这个物件的物件组，不留空组。 */
+export function clearObjectTexture(mapId: string, objectId: string) {
+  const map = findMap(getWorld(), mapId);
+  const group = map?.groups?.find((g) => g.objectId === objectId);
+  if (group) deleteCellGroup(mapId, group.id);
 }
 
 export function addArchitectureWall(mapId: string, a: { x: number; y: number }, b: { x: number; y: number }, material: 'wall' | 'glass', thickness: number): string | null {

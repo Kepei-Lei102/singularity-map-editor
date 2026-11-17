@@ -569,7 +569,12 @@ export function checkWorld(w, migrated = false) {
     unique(m.objects, `${at}.objects`);
     if (m.groups !== undefined) {
       cellGroups(m.groups, `${at}.groups`, n, m.width, m.height, false);
-      for (const g of m.groups) if (g.objectId !== undefined && !m.objects.some((o) => o.id === g.objectId)) fail(`${at}.groups`, `找不到物件 ${g.objectId}`);
+      const objectGroupOwners = new Set();
+      for (const g of m.groups) if (g.objectId !== undefined) {
+        if (!m.objects.some((o) => o.id === g.objectId)) fail(`${at}.groups`, `找不到物件 ${g.objectId}`);
+        if (objectGroupOwners.has(g.objectId)) fail(`${at}.groups`, `物件 ${g.objectId} 有不止一个贴图组`);
+        objectGroupOwners.add(g.objectId);
+      }
     }
     if (migrated && m.groups === undefined) fail(`${at}.groups`, '缺失');
     if (m.slidingPuzzles !== undefined) {

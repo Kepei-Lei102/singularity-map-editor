@@ -71,7 +71,8 @@ export function Inspector() {
 function CellGroups({ world, map, ui, editable }: { world: World; map: GameMap; ui: UIState; editable: boolean }) {
   const [busy, setBusy] = useState(false);
   if (!editable || ui.trial) return null;
-  const groups = map.groups ?? [];
+  // 物件贴图组不当地面/贴花组用；它的入口在物件检查器（3-B 接）。
+  const groups = (map.groups ?? []).filter((g) => !g.objectId);
   const group = groups.find((g) => g.id === ui.groupId);
   const images = world.media.filter((m) => m.mime.startsWith('image/'));
   const make = () => {

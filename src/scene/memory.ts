@@ -4,7 +4,7 @@ import { objectEnabled } from '../core/objectData.js';
 import { clipArchitecture, isArchitectureObject, migrateArchitecture } from './architecture';
 import { repairWorld } from '../core/schema.js';
 import { current, isDraft, type Draft } from 'immer';
-import { buildFineCells } from '../core/grid';
+import { buildFineCells, groupBounds, objectFootprintCells } from '../core/grid';
 import type { CellGroup, GameMap, Id, MapObject, SeenObject, VisionLayer, World } from '../core/types';
 import { linesToFlow } from '../rules/flow';
 import { DEFAULT_MATERIALS } from '../core/defaults';
@@ -37,6 +37,24 @@ export function sameSeen(a: SeenObject, b: SeenObject) {
   return a.name === b.name && a.icon === b.icon && a.color === b.color && a.x === b.x && a.y === b.y &&
     (a.anchor?.x ?? 0) === (b.anchor?.x ?? 0) && (a.anchor?.y ?? 0) === (b.anchor?.y ?? 0) &&
     a.w === b.w && a.h === b.h && a.height === b.height && a.stateLabel === b.stateLabel && JSON.stringify(a.identity) === JSON.stringify(b.identity);
+}
+
+/** 物件贴图组是物件外观的派生数据：格子永远等于物件当前脚印。放在 syncMemory 里统一校正，
+ *  这样拖动、改尺寸、房间复位、滑块移动、扩缩图、复制地图、导入都走同一条路。 */
+function syncObjectGroups(m: Draft<GameMap>) {
+  if (!m.groups?.length) return;
+  const objects = new Map(m.objects.map((o) => [o.id, o]));
+  for (const g of m.groups) {
+    if (!g.objectId) continue;
+    const o = objects.get(g.objectId);
+    if (!o) continue;
+    const cells = objectFootprintCells(m.width, m.height, o);
+    if (cells.length !== g.cells.length || cells.some((v, i) => v !== g.cells[i])) g.cells = cells;
+    const bounds = groupBounds(m.width, cells, m.height);
+    if (bounds) {
+      if (!g.bounds || g.bounds.x0 !== bounds.x0 || g.bounds.y0 !== bounds.y0 || g.bounds.x1 !== bounds.x1 || g.bounds.y1 !== bounds.y1) g.bounds = bounds;
+    } else if (g.bounds) delete g.bounds;
+  }
 }
 
 /** 把一份迷雾里"看得见"的部分同步进它的记忆。 */
@@ -115,6 +133,7 @@ export function syncMemory(d: Draft<World>) {
   const rev = d.observationSeq = (d.observationSeq ?? 0) + 1;
   for (const m of d.maps) {
     migrateArchitecture(m);
+    syncObjectGroups(m);
     if (d.visionMode === 'shared') {
       syncLayer(m, m, rev); pruneMemory(m, m);
       for (const p of d.party) m.views[p.id] = cloneLayer(m);
