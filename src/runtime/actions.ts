@@ -12,7 +12,7 @@ import { groupBounds, hasFineDetail, objectFootprintCells } from '../core/grid';
 import { materialAtCell } from '../scene/material';
 import { objectRect } from '../scene/architecture';
 import { applyKnowledge, type KnowledgeEffect } from '../rules/interaction';
-import type { CellGroup, Flow, GameMap, LogEntry, MapObject, MediaAttach, Room, RoomObjectSnapshot, TextureFit, Tier, Token, World } from '../core/types';
+import type { CellGroup, Flow, GameMap, LogEntry, MapObject, MediaAttach, MediaMeta, Room, RoomObjectSnapshot, TextureFit, Tier, Token, World } from '../core/types';
 import { newObject } from '../core/defaults';
 import { NODE_H, NODE_W } from '../rules/flow';
 export { NODE_H, NODE_W, reachable } from '../rules/flow';
@@ -1470,16 +1470,24 @@ export function setCellGroupZ(mapId: string, groupId: string, z: number) {
 
 /** 给物件挂一张外观贴图。一个物件最多一个组；组格子永远按物件脚印重算，不给自由涂形状。
  *  墙/门这类建筑物件本轮不接；返回组 ID（找不到物件或建筑物件返回 null）。 */
-export function setObjectTexture(mapId: string, objectId: string, mediaId: string, fit?: TextureFit): string | null {
-  const map = findMap(getWorld(), mapId);
+export function setObjectTexture(mapId: string, objectId: string, mediaId: string, fit?: TextureFit, media?: MediaMeta): string | null {
+  const world = getWorld();
+  const map = findMap(world, mapId);
   const obj = map?.objects.find((o) => o.id === objectId);
-  if (!map || !obj || isArchitectureObject(obj)) return null;
+  if (!map || !obj || obj.kind !== 'object' || isArchitectureObject(obj)) return null;
+  if (fit !== undefined && fit !== 'fill' && fit !== 'contain') return null;
+  const existingMedia = world.media.find((m) => m.id === mediaId);
+  if (media && (media.id !== mediaId || !media.mime.startsWith('image/'))) return null;
+  if (!existingMedia && !media) return null;
+  if (existingMedia && !existingMedia.mime.startsWith('image/')) return null;
   const existing = map.groups?.find((g) => g.objectId === objectId);
   const id = existing?.id ?? uid();
   const name = existing?.name ?? `${obj.name}·贴图`;
   update((d) => {
     const m = findMap(d, mapId); if (!m) return;
-    const o = m.objects.find((x) => x.id === objectId); if (!o) return;
+    const o = m.objects.find((x) => x.id === objectId);
+    if (!o || o.kind !== 'object' || isArchitectureObject(o)) return;
+    if (media && !d.media.some((x) => x.id === media.id)) d.media.push(media);
     m.groups ??= [];
     let g = m.groups.find((x) => x.objectId === objectId);
     if (!g) { g = { id, name, cells: [], objectId: objectId }; m.groups.push(g); }

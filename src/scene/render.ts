@@ -8,7 +8,7 @@ import { terrainAtSubcell } from './terrain';
 import { dominantId, fineKeyOf, groupBounds } from '../core/grid';
 import { materialAtCell, materialAtSubcell, materialMap, rememberedMaterialAtCell } from './material';
 import type { Selection, Tool, View } from '../core/store';
-import type { CellGroup, GameMap, MapObject, SeenObject, Token, World } from '../core/types';
+import type { CellGroup, GameMap, MapObject, SeenObject, TextureSpec, Token, World } from '../core/types';
 import { staleMemories } from './memory';
 import { CONN_ICON, CONN_LABEL } from '../core/types';
 import { CS, colName, distToRect, gridDist } from '../core/util';
@@ -224,11 +224,13 @@ const tokenGlyph = (name: string) => {
   return s.trim().charAt(0) || '?';
 };
 
-function drawObject(ctx: CanvasRenderingContext2D, o: MapObject, player: boolean, zoom: number, scale: number, labelOnly = false, showLabel = true) {
+function drawObject(ctx: CanvasRenderingContext2D, o: MapObject, player: boolean, zoom: number, scale: number, labelOnly = false, showLabel = true, texture?: TextureSpec, imageOf?: (mediaId: string) => CanvasImageSource | null) {
   const ax = (o.anchor?.x ?? 0) / 3, ay = (o.anchor?.y ?? 0) / 3;
   const X = (o.x + ax) * CS, Y = (o.y + ay) * CS, W = o.w * CS, H = o.h * CS;
   // 靠状态开合的物件（隔断、门）：此刻不挡路时只画虚线轮廓，表示板片收起了、人可以从这里过去。
-  const ghost = !!o.blocksWhen && !o.blocksWhen.includes(o.state);
+  const ghost = o.ghost ?? (!!o.blocksWhen && !o.blocksWhen.includes(o.state));
+  const textured = !!texture;
+  const img = textured && imageOf ? imageOf(texture.mediaId) : null;
   if (!labelOnly) {
     if (ghost) {
       ctx.save();
@@ -247,14 +249,26 @@ function drawObject(ctx: CanvasRenderingContext2D, o: MapObject, player: boolean
       ctx.shadowOffsetX = lift * 0.7 * scale;
       ctx.shadowOffsetY = lift * scale;
       ctx.globalAlpha = !player && o.hidden ? 0.55 : 1;
-      ctx.fillStyle = o.color;
-      ctx.fillRect(X + 2, Y + 2, W - 4, H - 4);
+      if (img && texture) drawObjectTexture(ctx, img, texture, X + 2, Y + 2, W - 4, H - 4);
+      else {
+        ctx.fillStyle = o.color;
+        ctx.fillRect(X + 2, Y + 2, W - 4, H - 4);
+      }
       ctx.restore();
-      ctx.lineWidth = 1.5;
-      ctx.strokeStyle = 'rgba(0,0,0,0.55)';
-      if (!player && o.hidden) ctx.setLineDash([4, 3]);
-      ctx.strokeRect(X + 2, Y + 2, W - 4, H - 4);
-      ctx.setLineDash([]);
+      // 有贴图时不再画默认黑框：透明区要真的露地形，边框交给选中框/悬停浮签。
+      if (!img) {
+        ctx.lineWidth = 1.5;
+        ctx.strokeStyle = 'rgba(0,0,0,0.55)';
+        if (!player && o.hidden) ctx.setLineDash([4, 3]);
+        ctx.strokeRect(X + 2, Y + 2, W - 4, H - 4);
+        ctx.setLineDash([]);
+      } else if (!player && o.hidden) {
+        ctx.lineWidth = 1.5;
+        ctx.strokeStyle = 'rgba(0,0,0,0.35)';
+        ctx.setLineDash([4, 3]);
+        ctx.strokeRect(X + 2, Y + 2, W - 4, H - 4);
+        ctx.setLineDash([]);
+      }
     }
 
   }
@@ -267,10 +281,11 @@ function drawObject(ctx: CanvasRenderingContext2D, o: MapObject, player: boolean
   ctx.clip();
   // Only flat outline markers need help against an unknown terrain background.
   const outlined = o.height === 0 && ghost;
+  const decorated = outlined || textured;
   if (ghost && !outlined) ctx.globalAlpha = 0.6;
-  ctx.fillStyle = outlined ? '#f4f1ea' : textColor(o.color);
-  if (outlined) { ctx.strokeStyle = 'rgba(18,18,24,0.8)'; ctx.lineWidth = 1 / zoom; ctx.lineJoin = 'round'; }
-  const label = (text: string, x: number, y: number) => { if (outlined) ctx.strokeText(text, x, y); ctx.fillText(text, x, y); };
+  ctx.fillStyle = decorated ? '#f4f1ea' : textColor(o.color);
+  if (decorated) { ctx.strokeStyle = 'rgba(18,18,24,0.8)'; ctx.lineWidth = 1 / zoom; ctx.lineJoin = 'round'; }
+  const label = (text: string, x: number, y: number) => { if (decorated) ctx.strokeText(text, x, y); ctx.fillText(text, x, y); };
   if (big) {
     const width = W - 10;
     const lineHeight = 12;
@@ -278,7 +293,7 @@ function drawObject(ctx: CanvasRenderingContext2D, o: MapObject, player: boolean
     const rows = Math.max(0, Math.floor((H - 10 - (o.height > 0 ? 10 : 0)) / lineHeight));
     const state = o.states.length > 1 ? `[${o.states[o.state] ?? ''}]` : '';
     ctx.font = '600 10px system-ui, sans-serif';
-    const nameLines = wrapLabel(ctx, (o.icon ? o.icon + ' ' : '') + o.name, width, Math.max(0, rows - (state && rows > 1 ? 1 : 0)));
+    const nameLines = wrapLabel(ctx, (textured ? '' : (o.icon ? o.icon + ' ' : '')) + o.name, width, Math.max(0, rows - (state && rows > 1 ? 1 : 0)));
     nameLines.forEach((line, i) => label(line, X + 5, Y + 13 + i * lineHeight));
     ctx.font = '9px system-ui, sans-serif';
     const stateLines = wrapLabel(ctx, state, width, rows - nameLines.length);
@@ -288,7 +303,7 @@ function drawObject(ctx: CanvasRenderingContext2D, o: MapObject, player: boolean
       label(t, X + W - 5 - ctx.measureText(t).width, Y + H - 5);
     }
   } else {
-    const glyph = o.icon || labelChars(o.name)[0] || '';
+    const glyph = textured ? (labelChars(o.name)[0] || '') : (o.icon || labelChars(o.name)[0] || '');
     const chars = labelChars(glyph);
     let fs = Math.min(W, H) * 0.55;
     let lines = [glyph];
@@ -328,9 +343,22 @@ function drawObject(ctx: CanvasRenderingContext2D, o: MapObject, player: boolean
   }
 }
 
+/** 贴图铺进物件矩形；fit/opacity 和普通贴图组同一套，透明像素直接露地形。 */
+function drawObjectTexture(ctx: CanvasRenderingContext2D, img: CanvasImageSource, texture: TextureSpec, x: number, y: number, w: number, h: number) {
+  const opacity = Math.max(0, Math.min(1, texture.opacity ?? 1));
+  ctx.globalAlpha *= opacity;
+  if (texture.fit === 'contain') {
+    const nw = (img as HTMLImageElement).naturalWidth || 0, nh = (img as HTMLImageElement).naturalHeight || 0;
+    if (nw > 0 && nh > 0) {
+      const scale = Math.min(w / nw, h / nh);
+      ctx.drawImage(img, x + (w - nw * scale) / 2, y + (h - nh * scale) / 2, nw * scale, nh * scale);
+    } else ctx.drawImage(img, x, y, w, h);
+  } else ctx.drawImage(img, x, y, w, h);
+}
+
 /** 悬停/选中时，在物件上方显示一个浮签：名字 [状态] · 高度。 */
-function drawTag(ctx: CanvasRenderingContext2D, o: MapObject, zoom: number) {
-  const parts = [(o.icon ? o.icon + ' ' : '') + o.name];
+function drawTag(ctx: CanvasRenderingContext2D, o: MapObject, zoom: number, texture?: TextureSpec) {
+  const parts = [(texture ? '' : (o.icon ? o.icon + ' ' : '')) + o.name];
   if (o.states.length > 1) parts.push(`[${o.states[o.state] ?? ''}]`);
   if (o.kind === 'object' && o.height > 0) parts.push(`${o.height}m`);
   const fullText = parts.join(' ');
@@ -536,6 +564,8 @@ export function render(
     }
 
   const imageOf = o.imageOf ?? ((id: string) => textureImage(id));
+  const objectTextures = new Map<string, TextureSpec>();
+  for (const g of map.groups ?? []) if (g.objectId && g.texture) objectTextures.set(g.objectId, g.texture);
   drawCellGroups(ctx, map, imageOf);
   if (player) drawSeenCellGroups(ctx, map, imageOf);
 
@@ -637,22 +667,24 @@ export function render(
 
   // 物件（矮的先画）、触发区
   const byHeight = (a: { height: number }, b: { height: number }) => a.height - b.height;
-  const labelSets: { objects: MapObject[]; fog?: number }[] = [];
-  const drawObjects = (objects: MapObject[], fog?: number) => {
+  const labelSets: { objects: MapObject[]; fog?: number; textureOf: (ob: MapObject) => TextureSpec | undefined }[] = [];
+  const drawObjects = (objects: MapObject[], fog: number | undefined, textureOf: (ob: MapObject) => TextureSpec | undefined) => {
     if (fog) { ctx.save(); ctx.clip(cellsPath(map, x0, y0, x1, y1, fog)); }
-    objects.sort(byHeight).forEach(ob => drawObject(ctx, ob, player, view.zoom, view.zoom * dpr, false, false));
+    objects.sort(byHeight).forEach(ob => drawObject(ctx, ob, player, view.zoom, view.zoom * dpr, false, false, textureOf(ob), imageOf));
     if (fog) ctx.restore();
-    labelSets.push({ objects, fog });
+    labelSets.push({ objects, fog, textureOf });
   };
-  if (!player) drawObjects(map.objects.filter(ob => objectEnabled(map, ob) && ob.kind === 'object' && !isArchitectureObject(ob)));
+  const liveTextureOf = (ob: MapObject) => objectTextures.get(ob.id);
+  if (!player) drawObjects(map.objects.filter(ob => objectEnabled(map, ob) && ob.kind === 'object' && !isArchitectureObject(ob)), undefined, liveTextureOf);
   else {
     const presented = playerPresentation(world, map, o.viewer ?? undefined);
-    drawObjects(map.objects.filter(ob => objectEnabled(map, ob) && ob.kind === 'object' && !isArchitectureObject(ob) && !ob.hidden && anyVisible(map, ob)).map(ob => presented.objects.find(x => x.id === ob.id)!), 1);
+    drawObjects(map.objects.filter(ob => objectEnabled(map, ob) && ob.kind === 'object' && !isArchitectureObject(ob) && !ob.hidden && anyVisible(map, ob)).map(ob => presented.objects.find(x => x.id === ob.id)!), 1, liveTextureOf);
+    // 灰区记忆还没有自己的物件外观（3-C）；不能借当前实时物件的贴图，否则换图立刻影响灰区。
     drawObjects(presented.seen.objects.map(fromMemory).filter(ob => {
       for (let y = ob.y; y < ob.y + ob.h; y++) for (let x = ob.x; x < ob.x + ob.w; x++)
         if (fogAt(map, map, x + .5, y + .5) === 2) return true;
       return false;
-    }), 2);
+    }), 2, () => undefined);
   }
   if (!player) map.objects.filter(ob => objectEnabled(map, ob) && ob.kind === 'zone').forEach(ob => drawZone(ctx, ob,
     o.selection?.type === 'object' && o.selection.id === ob.id || o.tool === 'zone', view.zoom));
@@ -695,7 +727,7 @@ export function render(
 
   // Only the representative label is drawn for objects sharing an anchor cell.
   // This is display aggregation: all object footprints and interactions stay intact.
-  for (const { objects, fog } of labelSets) {
+  for (const { objects, fog, textureOf } of labelSets) {
     if (fog) { ctx.save(); ctx.clip(cellsPath(map, x0, y0, x1, y1, fog)); }
     const stacks = new Map<string, MapObject[]>();
     for (const ob of objects) {
@@ -704,7 +736,7 @@ export function render(
     }
     for (const stack of stacks.values()) {
       const representative = stack.find(ob => ob.id === so?.id) ?? [...stack].sort((a, b) => a.id.localeCompare(b.id))[0];
-      drawObject(ctx, representative, player, view.zoom, view.zoom * dpr, true);
+      drawObject(ctx, representative, player, view.zoom, view.zoom * dpr, true, true, textureOf(representative), imageOf);
       if (stack.length > 1) {
         const x = (representative.x + representative.w) * CS - 3 / view.zoom, y = representative.y * CS + 11 / view.zoom;
         ctx.save(); ctx.font = `${9 / view.zoom}px system-ui, sans-serif`; ctx.textAlign = 'right';
@@ -877,7 +909,7 @@ export function render(
   if (tagged.size) {
     ctx.save();
     ctx.translate(view.panX, view.panY); ctx.scale(view.zoom, view.zoom);
-    tagged.forEach(t => drawTag(ctx, t, view.zoom));
+    tagged.forEach(t => drawTag(ctx, t, view.zoom, objectTextures.get(t.id)));
     ctx.restore();
   }
 }

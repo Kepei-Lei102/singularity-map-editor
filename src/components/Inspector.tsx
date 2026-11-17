@@ -4,13 +4,13 @@ import { objectEnabled } from '../core/objectData.js';
 import { toggleArchitectureDoor } from '../runtime/actions';
 import type { Draft } from 'immer';
 import { useState } from 'react';
-import { canEditMap, setUI, toast, update, useUI, useWorld, worldContext, type UIState } from '../core/store';
+import { canEditMap, getWorld, setUI, toast, update, useUI, useWorld, worldContext, type UIState } from '../core/store';
 import type { Connection, GameMap, MapObject, Secret, TextureFit, Token, World } from '../core/types';
 import { CONN_LABEL, TIERS, TIER_LABEL } from '../core/types';
 import {
   deleteMap, duplicateMap, fillEmptyCells, findMap, giveMapKnowledge, reshapeMaps, setVisionMode, findObj, fireAttach, hideSecret, itemsAt, jumpTo, resizeMap, revealSecret,
   revealObjectIdentity, hideObjectIdentity, sameSel, setObjectEnabled, setObjectState, setObjectStates, resetRoom, applyRoomLayout, moveSlidingObject, deleteMapObject,
-  addCellGroup, deleteCellGroup, renameCellGroup, setCellGroupTexture, setCellGroupFit, setCellGroupOpacity, setCellGroupZ, offerDeleteOrphanBlob,
+  addCellGroup, deleteCellGroup, renameCellGroup, setCellGroupTexture, setCellGroupFit, setCellGroupOpacity, setCellGroupZ, setObjectTexture, clearObjectTexture, offerDeleteOrphanBlob,
 } from '../runtime/actions';
 import { checkSlidingMove, seesSlidingObject, slidingPuzzleForObject } from '../scene/sliding';
 import { CELL_METERS, nearestPc, type Nearest } from '../scene/perception';
@@ -399,14 +399,19 @@ function distanceNote(s: Secret, near: Nearest | null) {
 /** 取整并夹在范围里（输入框里打了小数、负数、特别大的数都兜住）。 */
 const clampInt = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, Math.round(Number.isFinite(v) ? v : lo)));
 
-function ObjectInspector({ world, mapId, o, ui }: { world: World; mapId: string; o: MapObject; ui: UIState }) {
+export function ObjectInspector({ world, mapId, o, ui }: { world: World; mapId: string; o: MapObject; ui: UIState }) {
   const edit = canEditMap(ui);
   const up = (fn: (x: Draft<MapObject>) => void, key?: string) =>
     update((d) => { const x = findObj(d, mapId, o.id); if (x) fn(x); }, { coalesce: key && key + o.id });
   const [privTo, setPrivTo] = useState('');
+  const [texBusy, setTexBusy] = useState(false);
   const architecture = isArchitectureObject(o);
   const isZone = o.kind === 'zone';
   const map = findMap(world, mapId)!;
+  const textureGroup = map.groups?.find((g) => g.objectId === o.id);
+  const objectTexture = textureGroup?.texture;
+  const images = world.media.filter((m) => m.mime.startsWith('image/'));
+  const canTexture = edit && !ui.trial && !architecture && o.kind === 'object';
   const enabled = objectEnabled(map, o);
   const run = ui.mode === 'run' && enabled;
   const puzzle = slidingPuzzleForObject(map, o.id);
@@ -414,6 +419,38 @@ function ObjectInspector({ world, mapId, o, ui }: { world: World; mapId: string;
   const near = run ? nearestPc(world, map, o) : null;
   const upSecret = (id: string, fn: (s: Draft<Secret>) => void, key?: string) =>
     up((x) => { fn(x.secrets.find((y) => y.id === id)!); }, key && key + id);
+
+  const uploadTexture = async (file: File | null) => {
+    if (!file) return;
+    if (!file.type.startsWith('image/')) return toast('物件贴图要图片文件');
+    setTexBusy(true);
+    const ctx = worldContext();
+    const id = uid();
+    let stored: { key: string; created: boolean } | null = null;
+    try {
+      stored = await storeBlobStatus(file);
+      if (ctx !== worldContext()) {
+        toast('上传完成时工程已经换了，没有加进去');
+        await offerDeleteOrphanBlob(file.name, stored);
+        return;
+      }
+      if (!o || !findObj(getWorld(), mapId, o.id)) {
+        toast('上传完成时物件已经不在了');
+        await offerDeleteOrphanBlob(file.name, stored);
+        return;
+      }
+      const gid = setObjectTexture(mapId, o.id, id, undefined, { id, name: file.name, mime: file.type, size: file.size, key: stored.key });
+      if (!gid) {
+        toast('这张图不能挂到这个物件上');
+        await offerDeleteOrphanBlob(file.name, stored);
+      }
+    } catch {
+      if (stored) await offerDeleteOrphanBlob(file.name, stored);
+      toast(`上传失败：${file.name}`);
+    } finally {
+      setTexBusy(false);
+    }
+  };
 
   return (
     <>
@@ -470,6 +507,32 @@ function ObjectInspector({ world, mapId, o, ui }: { world: World; mapId: string;
           </>
         )}
       </Section>
+
+      {canTexture && <Section title="外观（物件贴图）">
+        <div className="hint">贴图替换物件外观：图片盖住原来的彩色方块，透明区直接露地形。整件东西铺一张图，大小和位置仍按物件脚印走。</div>
+        <Row label="贴图"><select value={objectTexture?.mediaId ?? ''} onChange={(e) => {
+          const id = e.target.value;
+          if (!id) { clearObjectTexture(mapId, o.id); return; }
+          if (!setObjectTexture(mapId, o.id, id)) toast('这张图不能挂到这个物件上');
+        }}>
+          <option value="">不贴图（用颜色）</option>
+          {images.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
+        </select></Row>
+        <label className="upload" title="上传一张图片作为物件外观">
+          {texBusy ? '上传中…' : '上传图片'}
+          <input type="file" accept="image/*" disabled={texBusy} onChange={(e) => { uploadTexture(e.target.files?.[0] ?? null); e.target.value = ''; }} />
+        </label>
+        {objectTexture && textureGroup && <>
+          <TexturePreview mediaId={objectTexture.mediaId} />
+          <Row label="铺法"><select value={objectTexture.fit ?? 'fill'} onChange={(e) => setCellGroupFit(mapId, textureGroup.id, e.target.value as TextureFit)}>
+            <option value="fill">铺满物件</option>
+            <option value="contain">完整放进物件</option>
+          </select></Row>
+          <Row label="不透明度"><Num value={objectTexture.opacity ?? 1} step={0.1} min={0} max={1} onChange={(v) => setCellGroupOpacity(mapId, textureGroup.id, v)} /></Row>
+          <button className="danger small" onClick={() => clearObjectTexture(mapId, o.id)}>清除贴图</button>
+        </>}
+        {!images.length && <div className="hint">媒体库里还没有图片；先上传一张，或去「媒体库」加图。</div>}
+      </Section>}
 
       {!isZone && !architecture && <IdentityControls world={world} mapId={mapId} o={o} enabled={enabled} />}
 

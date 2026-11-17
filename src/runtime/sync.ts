@@ -299,8 +299,17 @@ export function playerMap(m: GameMap, L: VisionLayer, pcId?: string): GameMap {
     }
     return out;
   };
+  const visibleObjects = m.objects.filter(o => objectEnabled(m, o) && o.kind === 'object' && !isArchitectureObject(o) && !o.hidden && anyVisible({ ...m, ...L }, o));
+  const visibleObjectIds = new Set(visibleObjects.map((o) => o.id));
   const groups = (m.groups ?? []).flatMap((g) => {
-    if (g.objectId) return [];
+    if (g.objectId) {
+      if (!visibleObjectIds.has(g.objectId)) return [];
+      const cells = g.cells.filter((key) => fogOf(key) === 1);
+      if (!cells.length) return [];
+      const out = visibleGroup(g, cells, cells.length === g.cells.length);
+      out.objectId = g.objectId;
+      return [out];
+    }
     const cells = g.cells.filter((key) => fogOf(key) === 1);
     return cells.length ? [visibleGroup(g, cells, cells.length === g.cells.length)] : [];
   });
@@ -346,9 +355,9 @@ export function playerMap(m: GameMap, L: VisionLayer, pcId?: string): GameMap {
     groups,
     d100: m.d100.map(() => 0), rooms: [], roomCells: m.roomCells.map(() => ''), notes: '', spawn: null,
     tokens: m.tokens.filter(t => { const p = tokenPosition(t); return t.pcId === pcId || fogAt(m, L, p.x, p.y) === 1; }),
-    objects: m.objects.filter(o => objectEnabled(m, o) && o.kind === 'object' && !isArchitectureObject(o) && !o.hidden && anyVisible({ ...m, ...L }, o)).map(o => ({
+    objects: visibleObjects.map(o => ({
       id: o.id, kind: o.kind, name: identityKnown(o, pcId) ? o.name : UNKNOWN_OBJECT, x: o.x, y: o.y, w: o.w, h: o.h, anchor: o.anchor, height: o.height, color: o.color, icon: identityKnown(o, pcId) ? o.icon : '',
-      state: identityKnown(o, pcId) ? o.state : 0, states: identityKnown(o, pcId) ? o.states.map((s, k) => k === o.state ? s : '') : [''], notes: '', hidden: false, media: [], secrets: [],
+      state: identityKnown(o, pcId) ? o.state : 0, states: identityKnown(o, pcId) ? o.states.map((s, k) => k === o.state ? s : '') : [''], ghost: !!o.blocksWhen && !o.blocksWhen.includes(o.state), notes: '', hidden: false, media: [], secrets: [],
     })),
   };
 }

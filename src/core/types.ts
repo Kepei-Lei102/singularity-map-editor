@@ -147,6 +147,8 @@ export interface MapObject {
   stateRev?: number; // 状态改过几次（自动加一）：流程图撤销时用来判断之后有没有被别人改过
   notes: string; // 只有主持人看得到
   hidden: boolean; // 对玩家隐藏
+  /** 仅玩家载荷/渲染派生：当前状态是否不挡路（open/ghost）。 */
+  ghost?: boolean;
   secrets: Secret[];
   media: MediaAttach[];
 }
