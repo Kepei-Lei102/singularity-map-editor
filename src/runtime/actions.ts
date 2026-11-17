@@ -8,7 +8,7 @@ import { getUI, getWorld, reachableWorlds, replaceWorld, setUI, toast, update, w
 import { blocksMovement, pcWithin } from '../scene/perception';
 import { sightCacheFor, viewerOf, visiblePoint } from '../scene/sight';
 import { subKey, terrainBlocksRect } from '../scene/terrain';
-import { hasFineDetail } from '../core/grid';
+import { groupBounds, hasFineDetail } from '../core/grid';
 import { materialAtCell } from '../scene/material';
 import { objectRect } from '../scene/architecture';
 import { applyKnowledge, type KnowledgeEffect } from '../rules/interaction';
@@ -196,6 +196,9 @@ export function deleteMapObject(mapId: string, objectId: string) {
     const removed = new Set([objectId, ...m.objects.filter(o => o.opening?.wallId === objectId).map(o => o.id)]);
     m.objects = m.objects.filter(o => !removed.has(o.id));
     if (m.groups) m.groups = m.groups.filter((g) => !g.objectId || !removed.has(g.objectId));
+    const pruneObjectGroups = (L: { seen: { groups?: CellGroup[] } }) => { if (L.seen.groups) L.seen.groups = L.seen.groups.filter((g) => !g.objectId || !removed.has(g.objectId)); };
+    pruneObjectGroups(m);
+    for (const L of Object.values(m.views)) pruneObjectGroups(L);
     for (const f of d.flows) for (const n of f.nodes) { if (n.effect?.mapId === mapId && removed.has(n.effect.objectId)) n.effect = null; if (n.applied?.mapId === mapId && removed.has(n.applied.objectId)) delete n.applied; }
     for (const r of m.rooms) {
       if (r.reset) r.reset.objects = r.reset.objects.filter((s) => !removed.has(s.id));
@@ -700,10 +703,17 @@ export function reshapeMaps(mapIds: string[], left: number, top: number, right: 
       const shiftCells = <T,>(data: Record<number, T>) => Object.fromEntries(Object.entries(data).flatMap(([key, v]) => { const x = +key % oldWidth + left, y = Math.floor(+key / oldWidth) + top; return x >= 0 && y >= 0 && x < W && y < H ? [[y * W + x, v]] : []; }));
       if (m.materialCells) m.materialCells = shiftCells(m.materialCells);
       if (m.fineMaterials) m.fineMaterials = shiftSub(m.fineMaterials);
-      const shiftGroups = (groups: CellGroup[] | undefined) => groups?.map((g) => ({ ...g, cells: g.cells.flatMap((key) => {
-        const x = key % (oldWidth * 3) + left * 3, y = Math.floor(key / (oldWidth * 3)) + top * 3;
-        return x >= 0 && y >= 0 && x < W * 3 && y < H * 3 ? [y * W * 3 + x] : [];
-      }), ...(g.bounds ? { bounds: { x0: g.bounds.x0 + left * 3, y0: g.bounds.y0 + top * 3, x1: g.bounds.x1 + left * 3, y1: g.bounds.y1 + top * 3 } } : {}) }));
+      const shiftGroups = (groups: CellGroup[] | undefined) => groups?.map((g) => {
+        const cells = g.cells.flatMap((key) => {
+          const x = key % (oldWidth * 3) + left * 3, y = Math.floor(key / (oldWidth * 3)) + top * 3;
+          return x >= 0 && y >= 0 && x < W * 3 && y < H * 3 ? [y * W * 3 + x] : [];
+        });
+        // bounds 是派生值：格子裁掉后按剩下的格子重算，不再照搬旧图的超大矩形。
+        const bounds = g.bounds ? groupBounds(W, cells, H) : undefined;
+        const next = { ...g, cells };
+        if (bounds) next.bounds = bounds; else delete next.bounds;
+        return next;
+      });
       if (m.groups) m.groups = shiftGroups(m.groups);
       for (const L of [m, ...Object.values(m.views)]) {
         if (L.seen.groups) L.seen.groups = shiftGroups(L.seen.groups);
@@ -736,6 +746,9 @@ export function reshapeMaps(mapIds: string[], left: number, top: number, right: 
       // 物件被裁到图外后，引用它的贴图组不能留成悬空引用；物件没了，组一起消失。
       const liveObjects = new Set(m.objects.map((o) => o.id));
       if (m.groups) m.groups = m.groups.filter((g) => !g.objectId || liveObjects.has(g.objectId));
+      const pruneObjectGroups = (L: { seen: { groups?: CellGroup[] } }) => { if (L.seen.groups) L.seen.groups = L.seen.groups.filter((g) => !g.objectId || liveObjects.has(g.objectId)); };
+      pruneObjectGroups(m);
+      for (const L of Object.values(m.views)) pruneObjectGroups(L);
       for (const p of m.slidingPuzzles ?? []) {
         p.x += left; p.y += top;
         if (p.goal) { p.goal.x += left; p.goal.y += top; }
@@ -1022,6 +1035,20 @@ export function hasBackup() {
  * 清理浏览器里用不到的媒体文件：文件从不覆盖，旧版本会越攒越多。
  * 只要还有任何地方可能用到就不删：这个标签页现在的世界和撤销记录、所有标签页的自动保存和导入前的备份、旧版备份里换下来的文件。
  */
+/** 删一张媒体：物件引用、实时贴图组、以及各层记忆里的贴图一起解掉；文件本身留给撤销。 */
+export function deleteMedia(mediaId: string) {
+  update((d) => {
+    d.media = d.media.filter((x) => x.id !== mediaId);
+    for (const m of d.maps) {
+      m.objects.forEach((o) => { o.media = o.media.filter((a) => a.mediaId !== mediaId); });
+      const clear = (groups?: CellGroup[]) => groups?.forEach((g) => { if (g.texture?.mediaId === mediaId) delete g.texture; });
+      clear(m.groups);
+      clear(m.seen.groups);
+      for (const L of Object.values(m.views)) clear(L.seen.groups);
+    }
+  });
+}
+
 export async function cleanupMedia() {
   if (getUI().trial) return toast('试玩中不能清理，先结束试玩');
   await exclusive('清理媒体文件', async () => {

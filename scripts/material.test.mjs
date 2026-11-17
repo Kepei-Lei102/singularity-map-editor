@@ -357,7 +357,9 @@ test('贴图版本：部分可见时换图，灰区格子保留旧图，可见�
   assert.equal(pm.maps[0].seen.groups.length, 1);
   assert.deepEqual(pm.maps[0].seen.groups[0].cells, [api.fineKeyOf(map, 24, 24)]);
   assert.equal(pm.maps[0].seen.groups[0].texture.mediaId, 'tex1');
-  assert.equal(pm.maps[0].seen.groups[0].id, 'mg0');
+  assert.match(pm.maps[0].seen.groups[0].id, /^mh/);
+  assert.ok(!pm.maps[0].seen.groups[0].id.includes('~'));
+  const oldMemoryId = pm.maps[0].seen.groups[0].id;
   assert.ok(!('sourceId' in pm.maps[0].seen.groups[0]));
   assert.ok(!('textureKey' in pm.maps[0].seen.groups[0]));
   assert.ok(!JSON.stringify(pm).includes('sourceId'));
@@ -373,6 +375,56 @@ test('贴图版本：部分可见时换图，灰区格子保留旧图，可见�
   const byTex = Object.fromEntries(pm2.maps[0].seen.groups.map((g) => [g.texture.mediaId, g.cells]));
   assert.deepEqual(byTex.tex1, [api.fineKeyOf(map, 24, 24)]);
   assert.deepEqual(byTex.tex2, [api.fineKeyOf(map, 3, 3)]);
-  assert.deepEqual(pm2.maps[0].seen.groups.map((g) => g.id), ['mg0', 'mg1']);
-  for (const g of pm2.maps[0].seen.groups) assert.ok(!('sourceId' in g) && !('textureKey' in g));
+  assert.equal(new Set(pm2.maps[0].seen.groups.map((g) => g.id)).size, 2);
+  assert.equal(pm2.maps[0].seen.groups.find((g) => g.texture.mediaId === 'tex1').id, oldMemoryId);
+  for (const g of pm2.maps[0].seen.groups) assert.match(g.id, /^mh/) && assert.ok(!('sourceId' in g) && !('textureKey' in g));
+});
+
+test('删媒体会清掉实时组、记忆组和各视野的贴图引用', () => {
+  const pcId = 'a';
+  const { map } = fixture(pcId);
+  api.update((d) => {
+    d.media.push({ id: 'tex', name: '旧地板', mime: 'image/png', size: 10 });
+    const m = api.findMap(d, map.id);
+    m.groups = [{ id: 'g', name: '地板', cells: [api.fineKeyOf(m, 3, 3), api.fineKeyOf(m, 24, 24)], texture: { mediaId: 'tex' } }];
+  });
+  api.update((d) => { const m = api.findMap(d, map.id); m.fog[8 * m.width + 8] = 2; });
+  api.deleteMedia('tex');
+  const m = api.findMap(api.getWorld(), map.id);
+  assert.equal(m.groups[0].texture, undefined);
+  assert.equal(m.seen.groups.every((g) => g.texture === undefined), true);
+  assert.doesNotThrow(() => api.checkWorld(api.getWorld()));
+  const pm = api.playerWorld(api.getWorld(), map.id, pcId);
+  assert.deepEqual(pm.media, []);
+  assert.equal(JSON.stringify(pm).includes('tex'), false);
+});
+
+test('缩图会把贴图组 bounds 按剩余格子重算，不留旧图的超大矩形', () => {
+  const { map } = fixture();
+  api.update((d) => {
+    const m = api.findMap(d, map.id);
+    m.groups = [{ id: 'g', name: '地板', cells: [api.fineKeyOf(m, 21, 24), api.fineKeyOf(m, 24, 24)] }];
+    m.groups[0].bounds = { x0: 3, y0: 3, x1: 25, y1: 25 };
+  });
+  api.reshapeMaps([map.id], -5, 0, 0, 0);
+  const m = api.findMap(api.getWorld(), map.id);
+  assert.equal(m.width, 5);
+  assert.deepEqual(m.groups[0].cells, [api.fineKeyOf(m, 6, 24), api.fineKeyOf(m, 9, 24)]);
+  assert.deepEqual(m.groups[0].bounds, { x0: 6, y0: 24, x1: 10, y1: 25 });
+  assert.doesNotThrow(() => api.checkWorld(api.getWorld()));
+});
+
+test('playerMap 实时组也显式挑字段，不把 sourceId/textureKey 带出去', () => {
+  const pcId = 'a';
+  const { map } = fixture(pcId);
+  api.update((d) => {
+    d.media.push({ id: 'tex', name: '地板', mime: 'image/png', size: 10 });
+    const m = api.findMap(d, map.id);
+    m.groups = [{ id: 'g', name: '地板', cells: [api.fineKeyOf(m, 3, 3)], texture: { mediaId: 'tex' }, sourceId: 'secret-source', textureKey: 'secret-key' }];
+  });
+  const pm = api.playerWorld(api.getWorld(), map.id, pcId);
+  assert.equal(JSON.stringify(pm).includes('sourceId'), false);
+  assert.equal(JSON.stringify(pm).includes('textureKey'), false);
+  assert.equal(JSON.stringify(pm).includes('secret-source'), false);
+  assert.equal(pm.maps[0].groups[0].name, '贴图');
 });

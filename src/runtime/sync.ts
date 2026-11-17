@@ -251,6 +251,14 @@ function judgmentVisible(w: World, j: DiceJudgment, pcId: string): boolean {
   return visiblePoint(w, m, viewerOf(t, { sex: pc?.sex, heightCm: pc?.heightCm }), { x: j.place.x, y: j.place.y });
 }
 
+/** 玩家侧记忆组的 id：不暴露原组/版本，但对同一个原组+贴图版本保持稳定。 */
+function opaqueMemoryId(sourceId: string, key: string): string {
+  let h = 2166136261;
+  const text = `${sourceId}\u0000${key}`;
+  for (let i = 0; i < text.length; i++) { h ^= text.charCodeAt(i); h = Math.imul(h, 16777619); }
+  return `mh${(h >>> 0).toString(36)}`;
+}
+
 /** Only the bound role's live cells and memory leave the host. */
 export function playerMap(m: GameMap, L: VisionLayer, pcId?: string): GameMap {
   const seen = {
@@ -279,9 +287,12 @@ export function playerMap(m: GameMap, L: VisionLayer, pcId?: string): GameMap {
     const x3 = key % fineRows, y3 = Math.floor(key / fineRows);
     return L.fog[Math.floor(y3 / 3) * m.width + Math.floor(x3 / 3)] ?? 0;
   };
+  const copyTexture = (t: CellGroup['texture']) => t ? { mediaId: t.mediaId, ...(t.fit !== undefined ? { fit: t.fit } : {}), ...(t.opacity !== undefined ? { opacity: t.opacity } : {}) } : undefined;
   const visibleGroup = (g: CellGroup, cells: number[], withFullBounds: boolean): CellGroup => {
-    const out: CellGroup = { ...g, name: '贴图', cells };
-    delete out.bounds;
+    const out: CellGroup = { id: g.id, name: '贴图', cells };
+    const texture = copyTexture(g.texture);
+    if (texture) out.texture = texture;
+    if (g.z !== undefined) out.z = g.z;
     if (withFullBounds) {
       const bounds = groupBounds(m.width, cells, m.height);
       if (bounds) out.bounds = bounds;
@@ -293,17 +304,34 @@ export function playerMap(m: GameMap, L: VisionLayer, pcId?: string): GameMap {
     const cells = g.cells.filter((key) => fogOf(key) === 1);
     return cells.length ? [visibleGroup(g, cells, cells.length === g.cells.length)] : [];
   });
-  const seenGroups: CellGroup[] = [];
+  // 同一原组+同一贴图版本在玩家侧合成一个不透明 id；旧工程里拆开的同版本记忆也并回来。
+  type MemoryBucket = { key: string; cells: Set<number>; texture?: CellGroup['texture']; z?: number };
+  const buckets = new Map<string, MemoryBucket>();
+  const usedIds = new Set((m.groups ?? []).map((g) => g.id));
   for (const g of L.seen.groups ?? []) {
     if (g.objectId) continue;
     const cells = g.cells.filter((key) => fogOf(key) === 2).sort((a, b) => a - b);
     if (!cells.length) continue;
+    const source = g.sourceId ?? g.id;
+    const key = g.textureKey ?? (g.texture ? `${g.texture.mediaId}~${g.texture.fit ?? 'fill'}~${g.texture.opacity ?? 1}` : 'none');
+    const base = opaqueMemoryId(source, key);
+    let id = base, n = 0;
+    while (usedIds.has(id) && buckets.get(id)?.key !== key) id = `${base}x${++n}`;
+    usedIds.add(id);
+    let bucket = buckets.get(id);
+    if (!bucket) { bucket = { key, cells: new Set() }; buckets.set(id, bucket); }
+    for (const cell of cells) bucket.cells.add(cell);
+    if (!bucket.texture) bucket.texture = copyTexture(g.texture);
+    if (bucket.z === undefined) bucket.z = g.z;
+  }
+  const seenGroups: CellGroup[] = [];
+  for (const [id, bucket] of buckets) {
+    const cells = [...bucket.cells].sort((a, b) => a - b);
     const bounds = groupBounds(m.width, cells, m.height);
     if (!bounds) continue;
-    // 玩家侧不暴露记忆组的内部版本键（原组 id / mediaId~fit~opacity）；id 也换成不透明的序号。
-    const out: CellGroup = { id: `mg${seenGroups.length}`, name: '贴图', cells, bounds };
-    if (g.texture) out.texture = { mediaId: g.texture.mediaId, ...(g.texture.fit !== undefined ? { fit: g.texture.fit } : {}), ...(g.texture.opacity !== undefined ? { opacity: g.texture.opacity } : {}) };
-    if (g.z !== undefined) out.z = g.z;
+    const out: CellGroup = { id, name: '贴图', cells, bounds };
+    if (bucket.texture) out.texture = bucket.texture;
+    if (bucket.z !== undefined) out.z = bucket.z;
     seenGroups.push(out);
   }
   seen.groups = seenGroups;

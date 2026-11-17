@@ -1,5 +1,5 @@
 import { useSyncExternalStore } from 'react';
-import { cleanupMedia, stopMedia, playMedia } from '../runtime/actions';
+import { cleanupMedia, deleteMedia, stopMedia, playMedia } from '../runtime/actions';
 import { isOnlineTransport, subscribeTransportKind } from '../runtime/sync';
 import { storeBlob, useBlobUrl } from '../runtime/media';
 import { toast, update, useUI, useWorld, worldContext } from '../core/store';
@@ -45,13 +45,7 @@ export function MediaPanel() {
             <button className="danger small" onClick={() => {
               if (!confirm(`删除「${m.name}」？挂在物件上的引用也会一起删掉。`)) return;
               // 文件本身先不删：撤销、试玩结束恢复时还要用到。浏览器里多留一份不碍事，导出的工程只带还在用的。
-              update((d) => {
-                d.media = d.media.filter((x) => x.id !== m.id);
-                d.maps.forEach((mp) => {
-                  mp.objects.forEach((o) => { o.media = o.media.filter((a) => a.mediaId !== m.id); });
-                  mp.groups?.forEach((g) => { if (g.texture?.mediaId === m.id) delete g.texture; });
-                });
-              });
+              deleteMedia(m.id);
             }}>×</button>
           </span>
         </div>

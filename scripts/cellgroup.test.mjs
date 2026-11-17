@@ -87,6 +87,34 @@ test('schema 拒绝重复组 ID、重复/越界小格和坏贴图字段', () => 
   assert.throws(() => api.checkWorld(opacity), /texture\.opacity/);
 });
 
+test('schema 校验 bounds 与记忆层内部字段', () => {
+  const ok = validWorld();
+  ok.maps[0].groups[0].bounds = { x0: 0, y0: 0, x1: ok.maps[0].width * 3, y1: ok.maps[0].height * 3 };
+  assert.doesNotThrow(() => api.checkWorld(ok));
+
+  const bad = validWorld();
+  bad.maps[0].groups[0].bounds = { x0: -1, y0: 0, x1: 2, y1: 2 };
+  assert.throws(() => api.checkWorld(bad), /bounds\.x0/);
+
+  const inverted = validWorld();
+  inverted.maps[0].seen.groups[0].bounds = { x0: 3, y0: 0, x1: 2, y1: 2 };
+  assert.throws(() => api.checkWorld(inverted), /bounds/);
+
+  const liveInternal = validWorld();
+  liveInternal.maps[0].groups[0].sourceId = 'g-terrain';
+  assert.throws(() => api.checkWorld(liveInternal), /sourceId/);
+
+  const memInternal = validWorld();
+  memInternal.maps[0].seen.groups[0].sourceId = 'g-terrain';
+  memInternal.maps[0].seen.groups[0].textureKey = 'tex~fill~0.8';
+  memInternal.maps[0].seen.groupRevs = { 'g-terrain~tex~fill~0.8': 3 };
+  assert.doesNotThrow(() => api.checkWorld(memInternal));
+
+  const badRev = validWorld();
+  badRev.maps[0].seen.groupRevs = { g: -1 };
+  assert.throws(() => api.checkWorld(badRev), /groupRevs/);
+});
+
 test('schema 拒绝不存在的贴图媒体和物件引用', () => {
   const missingMedia = validWorld();
   missingMedia.maps[0].groups[0].texture.mediaId = 'nope';

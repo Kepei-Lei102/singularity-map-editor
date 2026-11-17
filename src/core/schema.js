@@ -380,7 +380,7 @@ export function checkWorld(w, migrated = false) {
     identity(o.identity, `${at}.identity`);
   });
   const fragments = (v, where) => arr(v, where).forEach(r => { obj(r, where); for (const k of ['x', 'y', 'w', 'h']) num(r[k], `${where}.${k}`, k === 'w' || k === 'h' ? .0000001 : -MAX_COORD, MAX_COORD); oneOf(r.material, ['wall', 'glass', 'door', 'opening'], where); });
-  const cellGroup = (g, where, n) => {
+  const cellGroup = (g, where, n, width, height, memory = false) => {
     obj(g, where); id(g.id, `${where}.id`); str(g.name, `${where}.name`);
     const cells = arr(g.cells, `${where}.cells`);
     const seenCells = new Set();
@@ -397,12 +397,23 @@ export function checkWorld(w, migrated = false) {
     }
     if (g.objectId !== undefined) id(g.objectId, `${where}.objectId`);
     if (g.z !== undefined) num(g.z, `${where}.z`, -1000000, 1000000);
+    if (g.bounds !== undefined) {
+      obj(g.bounds, `${where}.bounds`);
+      for (const k of ['x0', 'y0', 'x1', 'y1']) int(g.bounds[k], `${where}.bounds.${k}`, 0, (k === 'x0' || k === 'x1') ? width * 3 : height * 3);
+      if (g.bounds.x0 >= g.bounds.x1 || g.bounds.y0 >= g.bounds.y1) fail(`${where}.bounds`, '必须是非空矩形');
+    }
+    if (memory) {
+      if (g.sourceId !== undefined) id(g.sourceId, `${where}.sourceId`);
+      if (g.textureKey !== undefined) str(g.textureKey, `${where}.textureKey`);
+    } else if (g.sourceId !== undefined || g.textureKey !== undefined) {
+      fail(`${where}`, '实时贴图组不能带记忆层内部字段 sourceId / textureKey');
+    }
   };
-  const cellGroups = (v, where, n) => {
-    arr(v, where).forEach((g, i) => cellGroup(g, `${where}[${i}]`, n));
+  const cellGroups = (v, where, n, width, height, memory = false) => {
+    arr(v, where).forEach((g, i) => cellGroup(g, `${where}[${i}]`, n, width, height, memory));
     unique(v, where);
   };
-  const memory = (v, where, n) => {
+  const memory = (v, where, n, m) => {
     obj(v, where); strings(v.cells, `${where}.cells`, n); seenObjects(v.objects, `${where}.objects`);
     if (v.cellRevs !== undefined) arr(v.cellRevs, `${where}.cellRevs`).forEach(r => int(r, `${where}.cellRevs`, 0, Number.MAX_SAFE_INTEGER));
     for (const field of ['observed', 'objectRevs', 'architectureRevs']) if (v[field] !== undefined) for (const [key, value] of Object.entries(obj(v[field], `${where}.${field}`))) {
@@ -411,7 +422,8 @@ export function checkWorld(w, migrated = false) {
     }
     if (v.architecture !== undefined) fragments(v.architecture, `${where}.architecture`);
     if (v.materialCells !== undefined) for (const [key, value] of Object.entries(obj(v.materialCells, `${where}.materialCells`))) { int(+key, `${where}.materialCells key`, 0, n - 1); str(value, `${where}.materialCells value`); }
-    if (v.groups !== undefined) cellGroups(v.groups, `${where}.groups`, n);
+    if (v.groups !== undefined) cellGroups(v.groups, `${where}.groups`, n, m.width, m.height, true);
+    if (v.groupRevs !== undefined) for (const [key, value] of Object.entries(obj(v.groupRevs, `${where}.groupRevs`))) { id(key, `${where}.groupRevs key`); int(value, `${where}.groupRevs`, 0, Number.MAX_SAFE_INTEGER); }
     if (migrated && v.groups === undefined) fail(`${where}.groups`, '缺失');
   };
 
@@ -456,9 +468,9 @@ export function checkWorld(w, migrated = false) {
     optBool(m.autoFog, `${at}.autoFog`);
     if (migrated) for (const k of ['roomCells', 'seen', 'views', 'rooms', 'groups']) if (m[k] === undefined) fail(`${at}.${k}`, '缺失');
     if (m.roomCells !== undefined) strings(m.roomCells, `${at}.roomCells`, n);
-    if (m.seen !== undefined) memory(m.seen, `${at}.seen`, n);
+    if (m.seen !== undefined) memory(m.seen, `${at}.seen`, n, m);
     if (m.views !== undefined) Object.entries(obj(m.views, `${at}.views`)).forEach(([pc, L]) => {
-      obj(L, `${at}.views.${pc}`); fogs(L.fog, `${at}.views.${pc}.fog`, n); memory(L.seen, `${at}.views.${pc}.seen`, n);
+      obj(L, `${at}.views.${pc}`); fogs(L.fog, `${at}.views.${pc}.fog`, n); memory(L.seen, `${at}.views.${pc}.seen`, n, m);
     });
     if (m.rooms !== undefined) {
       arr(m.rooms, `${at}.rooms`).forEach((r, i) => {
@@ -556,7 +568,7 @@ export function checkWorld(w, migrated = false) {
     });
     unique(m.objects, `${at}.objects`);
     if (m.groups !== undefined) {
-      cellGroups(m.groups, `${at}.groups`, n);
+      cellGroups(m.groups, `${at}.groups`, n, m.width, m.height, false);
       for (const g of m.groups) if (g.objectId !== undefined && !m.objects.some((o) => o.id === g.objectId)) fail(`${at}.groups`, `找不到物件 ${g.objectId}`);
     }
     if (migrated && m.groups === undefined) fail(`${at}.groups`, '缺失');
