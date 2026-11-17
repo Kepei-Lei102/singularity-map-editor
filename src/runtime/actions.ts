@@ -1031,17 +1031,13 @@ export function hasBackup() {
   return !!loadSlot('backup');
 }
 
-/**
- * 清理浏览器里用不到的媒体文件：文件从不覆盖，旧版本会越攒越多。
- * 只要还有任何地方可能用到就不删：这个标签页现在的世界和撤销记录、所有标签页的自动保存和导入前的备份、旧版备份里换下来的文件。
- */
 /** 删一张媒体：物件引用、实时贴图组、以及各层记忆里的贴图一起解掉；文件本身留给撤销。 */
 export function deleteMedia(mediaId: string) {
   update((d) => {
     d.media = d.media.filter((x) => x.id !== mediaId);
     for (const m of d.maps) {
       m.objects.forEach((o) => { o.media = o.media.filter((a) => a.mediaId !== mediaId); });
-      const clear = (groups?: CellGroup[]) => groups?.forEach((g) => { if (g.texture?.mediaId === mediaId) delete g.texture; });
+      const clear = (groups?: CellGroup[]) => groups?.forEach((g) => { if (g.texture?.mediaId === mediaId) { delete g.texture; delete g.textureKey; } });
       clear(m.groups);
       clear(m.seen.groups);
       for (const L of Object.values(m.views)) clear(L.seen.groups);
@@ -1049,6 +1045,10 @@ export function deleteMedia(mediaId: string) {
   });
 }
 
+/**
+ * 清理浏览器里用不到的媒体文件：文件从不覆盖，旧版本会越攒越多。
+ * 只要还有任何地方可能用到就不删：这个标签页现在的世界和撤销记录、所有标签页的自动保存和导入前的备份、旧版备份里换下来的文件。
+ */
 export async function cleanupMedia() {
   if (getUI().trial) return toast('试玩中不能清理，先结束试玩');
   await exclusive('清理媒体文件', async () => {

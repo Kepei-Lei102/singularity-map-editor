@@ -33,6 +33,7 @@ export interface RenderOpts {
   rulers?: boolean; // 画面边缘的坐标尺
   subgrid?: boolean; // 作者辅助线：显示 1/3 小格线；打开时强制按小格渲染
   fineEdit?: boolean; // 作者正处在小格编辑：缩小时也强制显示真实小格
+  imageOf?: (mediaId: string) => CanvasImageSource | null; // 测试/预览可注入图片；默认读本地媒体缓存
 }
 
 
@@ -534,8 +535,9 @@ export function render(
       }
     }
 
-  drawCellGroups(ctx, map, (id) => textureImage(id));
-  if (player) drawSeenCellGroups(ctx, map, (id) => textureImage(id));
+  const imageOf = o.imageOf ?? ((id: string) => textureImage(id));
+  drawCellGroups(ctx, map, imageOf);
+  if (player) drawSeenCellGroups(ctx, map, imageOf);
 
   // 高度：整层平就不用画。有高度的地方叠一层暖色，越高越亮，右上角标数字。
   if (!player && map.heights && map.heights.some((v) => v)) {

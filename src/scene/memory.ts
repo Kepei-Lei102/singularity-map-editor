@@ -72,23 +72,26 @@ function syncLayer(m: Draft<GameMap>, L: Draft<VisionLayer>, rev: number) {
   // 贴图组记忆：同一块地按贴图版本分开记。看得见的格子跟现在的贴图，
   // 看不见的格子留在它上次被看见时的那一版；换图只影响看得见的部分。
   // 物件贴图（objectId）是物件外观，等物件外观那一步再接记忆；这里只记地面/贴花。
-  const textureKeyOf = (g: CellGroup) => g.texture ? `${g.texture.mediaId}~${g.texture.fit ?? 'fill'}~${g.texture.opacity ?? 1}` : 'none';
+  const textureKeyOf = (g: CellGroup) => g.texture ? `${g.texture.mediaId}~${g.texture.fit ?? 'fill'}~${Math.round((g.texture.opacity ?? 1) * 1000) / 1000}` : 'none';
   const memorySourceOf = (g: CellGroup) => g.sourceId ?? g.id;
   const liveGroups = (source.groups ?? []).filter((g) => !g.objectId);
-  L.seen.groupRevs ??= {};
   const visibleCellsOf = (g: CellGroup) => new Set(g.cells.filter((key) => spatialFog(source, layer, key) === 1));
   const nextGroups = new Map<string, CellGroup>();
-  // 旧记忆组：可见格交给实时层；灰格保留。按原版本保留，不套当前贴图。
+  const nextRevs = new Map<string, number>();
+  const oldRevs = L.seen.groupRevs ?? {};
+  // 旧记忆组：只留灰格，按原版本保留；同时把旧工程的旧 id 归一成「原组~版本」。
   for (const old of (L.seen.groups ?? []).filter((g) => !g.objectId)) {
-    const cells = old.cells.filter((key) => {
-      const fog = spatialFog(source, layer, key);
-      return fog === 2;
-    });
+    const cells = old.cells.filter((key) => spatialFog(source, layer, key) === 2).sort((a, b) => a - b);
     if (!cells.length) continue;
-    const next: CellGroup = { ...old, cells: [...cells].sort((a, b) => a - b), sourceId: memorySourceOf(old), textureKey: old.textureKey ?? textureKeyOf(old) };
-    delete next.objectId;
-    delete next.bounds;
-    nextGroups.set(old.id, next);
+    const sourceId = memorySourceOf(old);
+    const textureKey = textureKeyOf(old);
+    const id = `${sourceId}~${textureKey}`;
+    const before = nextGroups.get(id);
+    const next: CellGroup = before
+      ? { ...before, cells: [...new Set([...before.cells, ...cells])].sort((a, b) => a - b) }
+      : { id, name: old.name, cells, ...(old.texture ? { texture: old.texture } : {}), ...(old.z !== undefined ? { z: old.z } : {}), sourceId, textureKey };
+    nextGroups.set(id, next);
+    nextRevs.set(id, Math.max(nextRevs.get(id) ?? 0, oldRevs[id] ?? 0, oldRevs[old.id] ?? 0));
   }
   // 当前可见的格子：按当前的贴图版本单独记一份；同一个版本和旧灰格并起来。
   for (const live of liveGroups) {
@@ -101,10 +104,10 @@ function syncLayer(m: Draft<GameMap>, L: Draft<VisionLayer>, rev: number) {
     const merged = before ? [...new Set([...before.cells, ...cells])].sort((a, b) => a - b) : cells;
     const next: CellGroup = { id, name: live.name, cells: merged, z: live.z, texture: live.texture, sourceId: live.id, textureKey };
     nextGroups.set(id, next);
-    L.seen.groupRevs[id] = rev;
+    nextRevs.set(id, rev);
   }
   L.seen.groups = [...nextGroups.values()];
-  for (const id of Object.keys(L.seen.groupRevs)) if (!nextGroups.has(id)) delete L.seen.groupRevs[id];
+  L.seen.groupRevs = Object.fromEntries([...nextRevs].filter(([id]) => nextGroups.has(id)));
 }
 
 /** 每次修改世界后执行：全队那份和每个人自己那份，都把"看得见"的部分同步进记忆。 */

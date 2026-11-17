@@ -386,6 +386,8 @@ test('删媒体会清掉实时组、记忆组和各视野的贴图引用', () =>
   api.update((d) => {
     d.media.push({ id: 'tex', name: '旧地板', mime: 'image/png', size: 10 });
     const m = api.findMap(d, map.id);
+    const o = { ...api.newObject('object', 4, 4, 1, 1), id: 'om', media: [{ id: 'am', mediaId: 'tex', label: '附件', trigger: 'manual', broadcast: false, once: false }] };
+    m.objects.push(o);
     m.groups = [{ id: 'g', name: '地板', cells: [api.fineKeyOf(m, 3, 3), api.fineKeyOf(m, 24, 24)], texture: { mediaId: 'tex' } }];
   });
   api.update((d) => { const m = api.findMap(d, map.id); m.fog[8 * m.width + 8] = 2; });
@@ -393,6 +395,7 @@ test('删媒体会清掉实时组、记忆组和各视野的贴图引用', () =>
   const m = api.findMap(api.getWorld(), map.id);
   assert.equal(m.groups[0].texture, undefined);
   assert.equal(m.seen.groups.every((g) => g.texture === undefined), true);
+  assert.deepEqual(m.objects.find((o) => o.id === 'om').media, []);
   assert.doesNotThrow(() => api.checkWorld(api.getWorld()));
   const pm = api.playerWorld(api.getWorld(), map.id, pcId);
   assert.deepEqual(pm.media, []);
@@ -427,4 +430,113 @@ test('playerMap 实时组也显式挑字段，不把 sourceId/textureKey 带出�
   assert.equal(JSON.stringify(pm).includes('textureKey'), false);
   assert.equal(JSON.stringify(pm).includes('secret-source'), false);
   assert.equal(pm.maps[0].groups[0].name, '贴图');
+});
+
+test('旧记忆组 id 归一：旧 id 会并回「原组~版本」', () => {
+  const pcId = 'a';
+  const { map } = fixture(pcId);
+  api.update((d) => {
+    d.media.push({ id: 'tex', name: '地板', mime: 'image/png', size: 10 });
+    const m = api.findMap(d, map.id);
+    m.groups = [{ id: 'g', name: '地板', cells: [api.fineKeyOf(m, 3, 3), api.fineKeyOf(m, 24, 24)], texture: { mediaId: 'tex' } }];
+  });
+  api.update((d) => {
+    const m = api.findMap(d, map.id);
+    m.fog[8 * m.width + 8] = 2; // B 灰
+    m.seen.groups = [{ id: 'g', name: '旧记忆', cells: [api.fineKeyOf(m, 24, 24)], texture: { mediaId: 'tex' } }]; // 老工程：没有 sourceId/textureKey
+  });
+  const m = api.findMap(api.getWorld(), map.id);
+  assert.equal(m.seen.groups.length, 1);
+  assert.equal(m.seen.groups[0].id, 'g~' + m.seen.groups[0].textureKey);
+  assert.deepEqual(m.seen.groups[0].cells, [api.fineKeyOf(m, 3, 3), api.fineKeyOf(m, 24, 24)]);
+  assert.equal(m.seen.groups[0].sourceId, 'g');
+  assert.equal(m.seen.groups[0].textureKey, ['tex', 'fill', '1'].join('~'));
+  assert.doesNotThrow(() => api.checkWorld(api.getWorld()));
+});
+
+test('pruneMemory 会把 fog=0 的贴图组清掉', () => {
+  const { map } = fixture();
+  const L = api.emptyVision(map.width * map.height);
+  L.fog.fill(0);
+  const key = ['tex', 'fill', '1'].join('~');
+  L.seen.groups = [{ id: `g~${key}`, name: '地板', cells: [api.fineKeyOf(map, 3, 3)], texture: { mediaId: 'tex' }, sourceId: 'g', textureKey: key }];
+  api.pruneMemory(map, L);
+  assert.deepEqual(L.seen.groups, []);
+});
+
+test('render 玩家模式真的会调用 drawSeenCellGroups 画灰区贴图', () => {
+  const pcId = 'a';
+  const { map } = fixture(pcId);
+  api.update((d) => {
+    d.media.push({ id: 'tex', name: '地板', mime: 'image/png', size: 10 });
+    const m = api.findMap(d, map.id);
+    m.groups = [{ id: 'g', name: '地板', cells: [api.fineKeyOf(m, 3, 3)], texture: { mediaId: 'tex' } }];
+  });
+  api.update((d) => { const m = api.findMap(d, map.id); m.fog[1 * m.width + 1] = 2; });
+  const world = api.getWorld();
+  const pm = api.playerWorld(world, map.id, pcId);
+  const calls = [];
+  const ctx = new Proxy({}, {
+    get(target, prop) {
+      if (prop === 'drawImage') return (...args) => calls.push(args);
+      if (prop === 'measureText') return () => ({ width: 10 });
+      if (prop in target) return target[prop];
+      return () => {};
+    },
+    set(target, prop, value) { target[prop] = value; return true; },
+  });
+  api.render(ctx, 640, 480, 1, world, pm.maps[0], { zoom: 1, panX: 0, panY: 0 }, {
+    mode: 'player', selection: null, preview: null, hover: null, brush: 1, tool: 'select', pending: null, showFog: true,
+    imageOf: () => ({ naturalWidth: 10, naturalHeight: 10 }),
+  });
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0][0].naturalWidth, 10);
+});
+
+test('贴图版本键区分 fit/opacity，换回旧版本会并回旧灰格', () => {
+  const pcId = 'a';
+  const { map } = fixture(pcId);
+  api.update((d) => {
+    d.media.push({ id: 'tex', name: '地板', mime: 'image/png', size: 10 });
+    const m = api.findMap(d, map.id);
+    m.groups = [{ id: 'g', name: '地板', cells: [api.fineKeyOf(m, 3, 3), api.fineKeyOf(m, 24, 24)], texture: { mediaId: 'tex', fit: 'fill', opacity: 1 } }];
+  });
+  api.update((d) => { const m = api.findMap(d, map.id); m.fog[8 * m.width + 8] = 2; });
+  api.update((d) => { const m = api.findMap(d, map.id); m.groups[0].texture = { mediaId: 'tex', fit: 'contain', opacity: 0.5 }; });
+  const pm = api.playerWorld(api.getWorld(), map.id, pcId);
+  assert.equal(pm.maps[0].groups[0].texture.fit, 'contain');
+  assert.equal(pm.maps[0].groups[0].texture.opacity, 0.5);
+  assert.deepEqual(pm.maps[0].seen.groups.map((g) => g.texture.fit), ['fill']);
+  api.update((d) => { const m = api.findMap(d, map.id); m.groups[0].texture = { mediaId: 'tex', fit: 'fill', opacity: 1 }; });
+  const m2 = api.findMap(api.getWorld(), map.id);
+  assert.equal(m2.seen.groups.filter((g) => g.sourceId === 'g').length, 1);
+  assert.equal(m2.seen.groups[0].texture.fit, 'fill');
+});
+
+test('playerMap 记忆组 id 稳定、碰撞加后缀、同源同版本并组', () => {
+  const { map } = fixture();
+  const L = api.emptyVision(map.width * map.height);
+  L.fog.fill(1);
+  L.fog[1 * map.width + 1] = 2;
+  L.fog[8 * map.width + 8] = 2;
+  const version = ['tex', 'fill', '1'].join('~');
+  L.seen.groups = [
+    { id: 'old-a', name: '旧', cells: [api.fineKeyOf(map, 3, 3)], texture: { mediaId: 'tex' }, sourceId: 'g', textureKey: version },
+    { id: 'old-b', name: '旧', cells: [api.fineKeyOf(map, 24, 24)], texture: { mediaId: 'tex' }, sourceId: 'g', textureKey: version },
+  ];
+  const pm = api.playerMap(map, L);
+  assert.equal(pm.seen.groups.length, 1);
+  assert.deepEqual(pm.seen.groups[0].cells, [api.fineKeyOf(map, 3, 3), api.fineKeyOf(map, 24, 24)]);
+  const stable = pm.seen.groups[0].id;
+  assert.equal(api.playerMap(map, L).seen.groups[0].id, stable);
+
+  // 与实时组 id 撞车时加后缀，仍然不和 live id 相同。
+  let h = 2166136261;
+  const text = 'g\u0000' + version;
+  for (let i = 0; i < text.length; i++) { h ^= text.charCodeAt(i); h = Math.imul(h, 16777619); }
+  const collision = `mh${(h >>> 0).toString(36)}`;
+  const map2 = { ...map, groups: [{ id: collision, name: '实时', cells: [api.fineKeyOf(map, 0, 0)], texture: { mediaId: 'tex' } }] };
+  const pm2 = api.playerMap(map2, L);
+  assert.notEqual(pm2.seen.groups[0].id, collision);
+  assert.equal(pm2.seen.groups[0].id.startsWith(collision), true);
 });
