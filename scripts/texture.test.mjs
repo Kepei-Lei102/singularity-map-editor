@@ -65,6 +65,16 @@ function resetCache() {
   heldImage = null;
 }
 
+test('玩家窗口收到的世界媒体表会换成内容存储名；清空后回落到 id', () => {
+  api.applyMediaIndex({ media: [{ id: 'tex', name: '柜纹', mime: 'image/png', size: 1, key: 'v:abc' }] });
+  assert.equal(api.storageKey('tex'), 'v:abc');
+  api.applyMediaIndex({ media: [{ id: 'old', name: '旧图', mime: 'image/png', size: 1 }] });
+  assert.equal(api.storageKey('tex'), 'tex');
+  assert.equal(api.storageKey('old'), 'old');
+  api.applyMediaIndex(null);
+  assert.equal(api.storageKey('old'), 'old');
+});
+
 test('同一媒体只加载一次，成功后 revoke 临时地址', async () => {
   resetCache();
   const loader = makeLoader(async () => new Blob(['x']));

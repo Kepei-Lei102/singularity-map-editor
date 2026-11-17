@@ -6,6 +6,7 @@ import { TIER_LABEL } from '../core/types';
 import { MapCanvas } from './MapCanvas';
 import { UTTERANCE_MAX } from '../rules/dialogue';
 import { MediaView } from './MediaPanel';
+import { applyMediaIndex } from '../runtime/media';
 import { DiceTray, type DiceTrayRecord } from './DiceTray';
 import { hpOf } from '../rules/combat';
 import { damageLanded, damageLost } from '../runtime/trial';
@@ -70,6 +71,7 @@ export function PlayerView() {
   const saveNotes = (v: string) => { setNotes(v); try { localStorage.setItem('ts-player-notes', v); } catch { /* 存不了也不影响看 */ } };
 
   useEffect(() => onOnlinePlayerClosed((reason) => {
+    applyMediaIndex(null);
     setWorld(null); setMedia(null); setPending(null); setRolled(null);
     setJoinError(`房间已关闭：${reason}`);
   }), []);
@@ -78,6 +80,7 @@ export function PlayerView() {
     let cancelled = false;
     const handle = (m: SyncMsg) => {
       if (m.type === 'world') {
+        applyMediaIndex(m.world);
         setWorld(m.world);
         setFocus(m.focus ?? null);
         setCast(m.cast ?? null);
@@ -99,7 +102,7 @@ export function PlayerView() {
         setCodeRequest((cur) => cur?.id === m.id ? null : cur);
         if (m.text) setCodeFeedback(m.text);
       }
-      else if (m.type === 'clear') { setWorld(null); setMedia(null); setFocus(null); setCast(null); setPending(null); setRolled(null); setCodeRequest(null); setCodeSent(false); setCodeText(''); setCodeFeedback(null); }
+      else if (m.type === 'clear') { applyMediaIndex(null); setWorld(null); setMedia(null); setFocus(null); setCast(null); setPending(null); setRolled(null); setCodeRequest(null); setCodeSent(false); setCodeText(''); setCodeFeedback(null); }
       else if (m.type === 'move-result') setMoveNote(m.ok ? (m.kind === 'prompt' ? { ok: true, msg: m.msg } : null) : { ok: false, msg: m.msg });
       else if (m.type === 'play') setMedia({ mediaId: m.mediaId, label: m.label, mime: m.mime, blob: m.blob });
       else if (m.type === 'stop') setMedia(null);
@@ -112,7 +115,7 @@ export function PlayerView() {
         off = listenAsPlayer(handle, isOnline ? { online: true, binding: onlinePlayerInfo()?.binding } : {});
       })
       .catch((e) => { if (!cancelled) setJoinError(e instanceof Error ? e.message : '线上房间连不上'); });
-    return () => { cancelled = true; off?.(); };
+    return () => { cancelled = true; off?.(); applyMediaIndex(null); };
   }, []);
 
   // 方向键走一格，发给见证者那边执行。焦点在输入框里就不抢。
