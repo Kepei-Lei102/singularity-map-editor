@@ -135,11 +135,11 @@ function memoryDirty(a: World, b: World): boolean {
   for (const m of b.maps) {
     const o = a.maps.find((x) => x.id === m.id);
     if (!o) return true;
-    if (o.cells !== m.cells || o.subCells !== m.subCells || o.objects !== m.objects || o.tokens !== m.tokens
+    if (o.cells !== m.cells || o.fineCells !== m.fineCells || o.objects !== m.objects || o.tokens !== m.tokens
       || o.architecture !== m.architecture || o.architectureFragments !== m.architectureFragments
-      || o.subdivisions !== m.subdivisions || o.heights !== m.heights || o.fog !== m.fog || o.subFog !== m.subFog
+      || o.heights !== m.heights || o.fog !== m.fog
       || o.views !== m.views || o.autoFog !== m.autoFog
-      || o.materialCells !== m.materialCells || o.materialSubCells !== m.materialSubCells) return true;
+      || o.materialCells !== m.materialCells || o.fineMaterials !== m.fineMaterials) return true;
   }
   return false;
 }
@@ -227,7 +227,7 @@ export const useWorld = () => useSyncExternalStore(subscribe, getWorld);
 
 export type Tool =
   | 'select' | 'pan' | 'paint' | 'fill' | 'erase' | 'object' | 'zone' | 'conn' | 'token'
-  | 'subdivide' | 'unsubdivide' | 'wall' | 'glass' | 'archDoor' | 'archErase'
+  | 'wall' | 'glass' | 'archDoor' | 'archErase'
   | 'd100' | 'room' | 'fogReveal' | 'fogHide' | 'fogBlack'
   /** 高度：单格抬高。左键 +1，Shift +左键 −1，拖动连续。 */
   | 'heightBrush'
@@ -328,7 +328,7 @@ export interface UIState {
   showFogInEdit: boolean;
   showNumbers: boolean;
   showRulers: boolean;
-  fine: boolean; // 小格画笔：落点按 1/3 格吸附，落点自动细分
+  fine: boolean; // 小格画笔：落点按 1/3 格吸附
   showSubgrid: boolean;
   toast: string | null;
   focus?: import('./types').Focus | null; // 统一暂停：战斗/技能/对话

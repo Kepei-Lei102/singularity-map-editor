@@ -297,8 +297,6 @@ export function repairDoorOpenStates(w, opts = {}) {
 /** 纯 JS 建筑校验，命令行与编辑器都拒绝悬空门洞和未细分墙。 */
 export function checkArchitecture(m) {
   const c = checker('建筑数据有问题：');
-  const subs = new Set();
-  for (const i of m.subdivisions ?? []) { c.int(i, 'subdivisions', 0, m.width * m.height - 1); if (subs.has(i)) c.fail('subdivisions', '索引重复'); subs.add(i); }
   if (m.architecture) { c.obj(m.architecture, 'architecture'); c.arr(m.architecture.walls, 'walls'); c.arr(m.architecture.doors, 'doors'); }
   const walls = architectureWalls(m), doors = architectureDoors(m);
   c.unique([...(m.objects ?? []), ...(m.architecture?.walls ?? []), ...(m.architecture?.doors ?? [])], 'objects / architecture');
@@ -310,8 +308,9 @@ export function checkArchitecture(m) {
     const len = Math.abs(w.b.x - w.a.x) + Math.abs(w.b.y - w.a.y);
     for (let i = 0; i < len; i++) {
       const x = w.a.x + (i + .5) * Math.sign(w.b.x - w.a.x), y = w.a.y + (i + .5) * Math.sign(w.b.y - w.a.y);
-      const candidates = w.a.x === w.b.x ? [[Math.floor(x / 3 - 1e-7), Math.floor(y / 3)], [Math.floor(x / 3), Math.floor(y / 3)]] : [[Math.floor(x / 3), Math.floor(y / 3 - 1e-7)], [Math.floor(x / 3), Math.floor(y / 3)]];
-      if (!candidates.some(([cx, cy]) => cx >= 0 && cy >= 0 && cx < m.width && cy < m.height && subs.has(cy * m.width + cx))) c.fail(w.id, '墙经过未细分区域');
+      // 现在每个大格都自动带 3×3 小格，墙不需要再先“细分”。
+      const x3 = Math.floor(x), y3 = Math.floor(y);
+      if (x3 < 0 || y3 < 0 || x3 >= m.width * 3 || y3 >= m.height * 3) c.fail(w.id, '墙超出地图');
     }
   }
   for (const d of doors) {
@@ -366,48 +365,6 @@ export function checkRoomObjects(map, snapshots) {
  * 检查整份工程，有问题就抛出一句能看懂的错误（带出错的位置）。
  * migrated = true：浏览器里迁移（补旧字段）之后再查一遍，这时旧字段都必须在（编辑器直接用它们）。
  */
-/**
- * 旧版「取消细分」只删了记忆，没删地图上的子格覆盖（f6d9758 才补上删除）。
- * 这种存档里会留下 subCells / materialSubCells / 子格迷雾，但父格已经不在 subdivisions 里；
- * 导出前严格校验会报「子格地形只能落在细分过的格子里」。
- *
- * 取消细分本来就是要丢弃这一格的子格数据，所以迁移时把这些找不到父格的键丢掉；
- * 只丢掉孤儿键，不动仍然有效的子格，也不改 subdivisions。
- * 返回丢掉的数量，方便测试和以后做提示。
- */
-export function repairOrphanSubcells(w) {
-  const maps = Array.isArray(w?.maps) ? w.maps : [];
-  let dropped = 0;
-  const drop = (data, width, height, subs) => {
-    if (!data || typeof data !== 'object') return;
-    const n = width * 3, max = width * height * 9;
-    for (const key of Object.keys(data)) {
-      const k = +key;
-      const parent = Number.isSafeInteger(k) && k >= 0 && k < max
-        ? Math.floor(Math.floor(k / n) / 3) * width + Math.floor((k % n) / 3)
-        : -1;
-      if (!subs.has(parent)) { delete data[key]; dropped++; }
-    }
-  };
-  for (const m of maps) {
-    if (!m || !Number.isInteger(m.width) || !Number.isInteger(m.height)) continue;
-    const subs = new Set(Array.isArray(m.subdivisions) ? m.subdivisions : []);
-    drop(m.subCells, m.width, m.height, subs);
-    drop(m.materialSubCells, m.width, m.height, subs);
-    drop(m.subFog, m.width, m.height, subs);
-    const layers = [m, ...Object.values(m.views && typeof m.views === 'object' ? m.views : {})];
-    for (const L of layers) {
-      if (!L || typeof L !== 'object') continue;
-      drop(L.subFog, m.width, m.height, subs);
-      const seen = L.seen;
-      if (seen && typeof seen === 'object') {
-        for (const k of ['subCells', 'materialSubCells', 'observed', 'subRevs', 'architectureRevs']) drop(seen[k], m.width, m.height, subs);
-      }
-    }
-  }
-  return dropped;
-}
-
 export function checkWorld(w, migrated = false) {
   const c = checker('工程文件有问题：');
   const { fail, obj, arr, str, optStr, bool, optBool, id, int, num, optNum, oneOf, unique, strings } = c;
@@ -426,18 +383,16 @@ export function checkWorld(w, migrated = false) {
   const memory = (v, where, n) => {
     obj(v, where); strings(v.cells, `${where}.cells`, n); seenObjects(v.objects, `${where}.objects`);
     if (v.cellRevs !== undefined) arr(v.cellRevs, `${where}.cellRevs`).forEach(r => int(r, `${where}.cellRevs`, 0, Number.MAX_SAFE_INTEGER));
-    for (const field of ['observed', 'objectRevs', 'subRevs', 'architectureRevs']) if (v[field] !== undefined) for (const [key, value] of Object.entries(obj(v[field], `${where}.${field}`))) {
+    for (const field of ['observed', 'objectRevs', 'architectureRevs']) if (v[field] !== undefined) for (const [key, value] of Object.entries(obj(v[field], `${where}.${field}`))) {
       if (field !== 'objectRevs') int(+key, `${where}.observed key`, 0, n * 9 - 1);
       int(value, `${where}.${field}`, 0, Number.MAX_SAFE_INTEGER);
     }
     if (v.architecture !== undefined) fragments(v.architecture, `${where}.architecture`);
-    if (v.subCells !== undefined) for (const [key, value] of Object.entries(obj(v.subCells, `${where}.subCells`))) { int(+key, `${where}.subCells key`, 0, n * 9 - 1); str(value, `${where}.subCells value`); }
     if (v.materialCells !== undefined) for (const [key, value] of Object.entries(obj(v.materialCells, `${where}.materialCells`))) { int(+key, `${where}.materialCells key`, 0, n - 1); str(value, `${where}.materialCells value`); }
-    if (v.materialSubCells !== undefined) for (const [key, value] of Object.entries(obj(v.materialSubCells, `${where}.materialSubCells`))) { int(+key, `${where}.materialSubCells key`, 0, n * 9 - 1); str(value, `${where}.materialSubCells value`); }
   };
 
   obj(w, '工程');
-  if (w.version !== 1) fail('version', '不是 1（不是这个编辑器的工程文件）');
+  if (w.version !== 2) fail('version', '不是 2（不是这个编辑器的工程文件）');
   str(w.name, 'name');
   arr(w.terrains, 'terrains').forEach((t, i) => {
     const at = `terrains[${i}]`;
@@ -464,28 +419,11 @@ export function checkWorld(w, migrated = false) {
       if (bad) fail(`${at}.cellCm`, `大格尺寸必须是 75 的整倍数或整因数（15–1500cm），现在是 ${JSON.stringify(m.cellCm)}`);
     }
     const n = m.width * m.height;
-    if (m.subdivisions !== undefined) arr(m.subdivisions, `${at}.subdivisions`);
-    if (m.subCells !== undefined) {
-      for (const [key, value] of Object.entries(obj(m.subCells, `${at}.subCells`))) {
-        const k = +key; int(k, `${at}.subCells key`, 0, m.width * m.height * 9 - 1);
-        optStr(value, `${at}.subCells value`);
-        const x3 = k % (m.width * 3), y3 = Math.floor(k / (m.width * 3));
-        const cell = Math.floor(y3 / 3) * m.width + Math.floor(x3 / 3);
-        if (!m.subdivisions?.includes(cell)) fail(`${at}.subCells`, '子格地形只能落在细分过的格子里');
-      }
-    }
+    strings(m.cells, `${at}.cells`, n);
+    strings(m.fineCells, `${at}.fineCells`, n * 9);
+    if (m.fineMaterials !== undefined) for (const [key, value] of Object.entries(obj(m.fineMaterials, `${at}.fineMaterials`))) { int(+key, `${at}.fineMaterials key`, 0, n * 9 - 1); str(value, `${at}.fineMaterials value`); }
     checkArchitecture(m);
     if (m.architectureFragments !== undefined) fragments(m.architectureFragments, `${at}.architectureFragments`);
-    const checkSubFog = (L, at) => {
-      if (L.subFog !== undefined) for (const [key, v] of Object.entries(obj(L.subFog, at))) {
-        const k = +key; int(k, at, 0, n * 9 - 1);
-        if (![0, 1, 2].includes(v)) fail(at, '子格迷雾只能是 0/1/2');
-        const sx = k % (m.width * 3), sy = Math.floor(k / (m.width * 3));
-        if (!m.subdivisions?.includes(Math.floor(sy / 3) * m.width + Math.floor(sx / 3))) fail(at, '子格迷雾不在细分区域');
-      }
-    };
-    checkSubFog(m, `${at}.subFog`);
-    for (const L of Object.values(m.views ?? {})) checkSubFog(L, `${at}.views.subFog`);
     strings(m.cells, `${at}.cells`, n);
     arr(m.d100, `${at}.d100`, n).forEach((v, i) => num(v, `${at}.d100[${i}]`));
     // 高度：每格一个整数，负数是往地面以下挖坑。范围跟 scene/height.ts 的 MIN/MAX 对齐。
@@ -675,7 +613,7 @@ export function checkWorld(w, migrated = false) {
       obj(t, ta); id(t.id, `${ta}.id`); str(t.name, `${ta}.name`); str(t.color, `${ta}.color`); int(t.x, `${ta}.x`); int(t.y, `${ta}.y`);
       if (t.subcell !== undefined) {
         obj(t.subcell, `${ta}.subcell`); int(t.subcell.x, `${ta}.subcell.x`, 0, m.width * 3 - 1); int(t.subcell.y, `${ta}.subcell.y`, 0, m.height * 3 - 1);
-        if (Math.floor(t.subcell.x / 3) !== t.x || Math.floor(t.subcell.y / 3) !== t.y || !m.subdivisions?.includes(t.y * m.width + t.x)) fail(ta, '子格位置与主格锚点/细分范围不一致');
+        if (Math.floor(t.subcell.x / 3) !== t.x || Math.floor(t.subcell.y / 3) !== t.y) fail(ta, '子格位置与主格锚点不一致');
       }
       if (t.pcId !== null) str(t.pcId, `${ta}.pcId`);
       if (t.status !== undefined) { obj(t.status, `${ta}.status`); str(t.status.label, `${ta}.status.label`); optNum(t.status.endsAt, `${ta}.status.endsAt`); optNum(t.status.roundsLeft, `${ta}.status.roundsLeft`); }

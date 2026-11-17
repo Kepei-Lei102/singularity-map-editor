@@ -3,6 +3,7 @@ import { objectEnabled } from '../core/objectData.js';
 import { objectStateError, isArchitectureObject, furnitureSweepBlocked, isSubdivided, tokenPosition } from './architecture';
 import { blocksMovement } from './perception';
 import { sightCacheFor, viewerOf, visiblePoint } from './sight';
+import { terrainBlocksRect } from './terrain';
 
 /** 当前操控者确实看见家具的一部分，记忆与队友视野不算。 */
 export function seesSlidingObject(world: World, map: GameMap, objectId: string, tokenId: string): boolean {
@@ -48,10 +49,7 @@ export function checkSlidingMove(world: World, map: GameMap, objectId: string, x
     if (map.tokens.some((t) => overlaps(box, { x: tokenPosition(t).x - 1 / 3, y: tokenPosition(t).y - 1 / 3, w: 2 / 3, h: 2 / 3 }))) return '人物站在移动路径上，请先让开';
     if (map.objects.some((o) => o.id !== block.id && o.kind === 'object' && objectEnabled(map, o) &&
       (members.has(o.id) || blocksMovement(o)) && overlaps(box, o))) return '被其它滑块或挡路物件挡住了';
-    for (let cy = box.y; cy < box.y + box.h; cy++) for (let cx = box.x; cx < box.x + box.w; cx++) {
-      const terrain = world.terrains.find((t) => t.id === map.cells[cy * map.width + cx]);
-      if (!terrain || terrain.blocksMove) return '被不可通行的地形挡住了';
-    }
+    if (terrainBlocksRect(world, map, box)) return '被不可通行的地形挡住了';
   }
   if (puzzle.goal && objectEnabled(map, map.objects.find(o => o.id === puzzle.gateId)) &&
     objectEnabled(map, map.objects.find(o => o.id === puzzle.targetId))) {

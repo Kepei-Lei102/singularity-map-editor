@@ -1,7 +1,7 @@
 import { effectiveLayer } from '../scene/vision';
 import { objectEnabled } from '../core/objectData.js';
 import { architectureWalls, architectureDoors, isArchitectureObject, characterPathClear, furnitureSweepBlocked, isSubdivided, tokenPosition, objectRect, anchorFromPoint } from '../scene/architecture';
-import { addArchitectureDoor, addArchitectureWall, eraseArchitecture, moveMapToken, paintFog, paintMaterialCells, paintMaterialSubcells, paintTerrainCells, paintTerrainSubcells, subdivideRegion, toggleArchitectureDoor, nudgeHeight } from '../runtime/actions';
+import { addArchitectureDoor, addArchitectureWall, eraseArchitecture, moveMapToken, paintFog, paintMaterialCells, paintMaterialSubcells, paintTerrainCells, paintTerrainSubcells, toggleArchitectureDoor, nudgeHeight } from '../runtime/actions';
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { GameMap, World } from '../core/types';
 import { CS, cellLine, uid } from '../core/util';
@@ -25,20 +25,6 @@ type Drag =
   | { k: 'click'; next: Selection };
 
 const PAINT_TOOLS = ['paint', 'erase', 'd100', 'room', 'fogReveal', 'fogHide', 'fogBlack'];
-
-/** 小格画笔落点用：把物件实际占到的格子顺手细分，已经细分过的就跳过。 */
-function subdivideFootprint(mapId: string, rect: { x: number; y: number; w: number; h: number }) {
-  const m = findMap(getWorld(), mapId);
-  if (!m) return;
-  const x0 = Math.max(0, Math.floor(rect.x)), y0 = Math.max(0, Math.floor(rect.y));
-  const x1 = Math.min(m.width - 1, Math.ceil(rect.x + rect.w - 1e-9) - 1), y1 = Math.min(m.height - 1, Math.ceil(rect.y + rect.h - 1e-9) - 1);
-  if (x1 < x0 || y1 < y0) return;
-  const subs = new Set(m.subdivisions ?? []);
-  let all = true;
-  for (let y = y0; y <= y1 && all; y++) for (let x = x0; x <= x1; x++) if (!subs.has(y * m.width + x)) { all = false; break; }
-  if (all) return;
-  subdivideRegion(mapId, { x: x0, y: y0, w: x1 - x0 + 1, h: y1 - y0 + 1 }, false);
-}
 
 /** Zones are background: only their visible border is an explicit selection/drag target. */
 export function zoneBorderHit(r: { x: number; y: number; w: number; h: number }, gx: number, gy: number, zoom: number) {
@@ -130,6 +116,7 @@ export function MapCanvas({ world, map, mode, playerNumbers = false, follow, vie
       tool: ui.tool, pending: ui.pendingConn, showFog: ui.showFogInEdit, viewer,
       numbers: mode === 'player' ? playerNumbers : ui.showNumbers, rulers: mode === 'player' ? true : ui.showRulers,
       subgrid: ui.showSubgrid,
+      fineEdit: ui.fine,
     });
   });
 
@@ -320,7 +307,7 @@ export function MapCanvas({ world, map, mode, playerNumbers = false, follow, vie
       paintTerrain(cx, cy, fx, fy, value, tool, s.brush, s.fine, s.terrainId, s.materialId, s.paintLayer);
       return;
     }
-    if (tool === 'fill' || tool === 'object' || tool === 'zone' || tool === 'subdivide' || tool === 'unsubdivide') {
+    if (tool === 'fill' || tool === 'object' || tool === 'zone') {
       const { gx, gy } = toCell(e);
       const a = anchorFromPoint({ x: gx, y: gy });
       const fineFill = s.fine && tool === 'fill';
@@ -434,7 +421,6 @@ export function MapCanvas({ world, map, mode, playerNumbers = false, follow, vie
         const ay = fineNow && ny + o.h < map.height ? Math.max(0, Math.min(2, Math.round((target.y - ny) * 3))) : 0;
         if (nx !== o.x || ny !== o.y || ax !== prevAx || ay !== prevAy) dr.moved = true;
         if ((nx !== o.x || ny !== o.y || ax !== prevAx || ay !== prevAy) && (o.kind === 'zone' || !furnitureSweepBlocked(m, o, nx, ny))) {
-          if (fineNow) subdivideFootprint(map.id, { x: nx + ax / 3, y: ny + ay / 3, w: o.w, h: o.h });
           update((d) => { const od = findMap(d, map.id)!.objects.find((x) => x.id === dr.id)!; od.x = nx; od.y = ny; if (ax || ay) od.anchor = { x: ax, y: ay }; else delete od.anchor; });
         }
       }
@@ -493,11 +479,7 @@ export function MapCanvas({ world, map, mode, playerNumbers = false, follow, vie
     if (dr.k === 'rect' && preview) {
       const r = preview;
       const { tool, terrainId, materialId, paintLayer } = getUI();
-      if (tool === 'subdivide' || tool === 'unsubdivide') {
-        const error = subdivideRegion(map.id, r, tool === 'unsubdivide');
-        if (error) toast(error);
-        else if (tool === 'subdivide') setUI({ fine: true, showSubgrid: true }); // 细分完直接给小格画笔
-      } else if (tool === 'fill') {
+      if (tool === 'fill') {
         if (dr.fine && dr.fx0 !== undefined && dr.fx1 !== undefined && dr.fy0 !== undefined && dr.fy1 !== undefined) {
           const cells3: [number, number][] = [];
           for (let y = Math.min(dr.fy0, dr.fy1); y <= Math.max(dr.fy0, dr.fy1); y++)
@@ -509,10 +491,9 @@ export function MapCanvas({ world, map, mode, playerNumbers = false, follow, vie
           for (let y = r.y; y < r.y + r.h; y++) for (let x = r.x; x < r.x + r.w; x++) cells.push([x, y]);
           paintMaterialCells(map.id, cells, materialId);
         } else {
-          update((d) => {
-            const m = findMap(d, map.id)!;
-            for (let y = r.y; y < r.y + r.h; y++) for (let x = r.x; x < r.x + r.w; x++) m.cells[y * m.width + x] = terrainId;
-          });
+          const cells: [number, number][] = [];
+          for (let y = r.y; y < r.y + r.h; y++) for (let x = r.x; x < r.x + r.w; x++) cells.push([x, y]);
+          paintTerrainCells(map.id, cells, terrainId);
         }
       } else {
         const o = newObject(tool === 'zone' ? 'zone' : 'object', r.x, r.y, r.w, r.h);
@@ -521,7 +502,6 @@ export function MapCanvas({ world, map, mode, playerNumbers = false, follow, vie
         const ax = fineNow && r.x + r.w < map.width ? dr.ax : 0;
         const ay = fineNow && r.y + r.h < map.height ? dr.ay : 0;
         if (ax || ay) o.anchor = { x: ax, y: ay };
-        if (fineNow) subdivideFootprint(map.id, { x: r.x + ax / 3, y: r.y + ay / 3, w: r.w, h: r.h });
         update((d) => { findMap(d, map.id)!.objects.push(o); });
         setUI({ selection: { type: 'object', mapId: map.id, id: o.id }, tab: 'inspect', tool: 'select' });
       }

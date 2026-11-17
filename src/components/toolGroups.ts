@@ -20,8 +20,6 @@ export const ALL_TOOLS: [Tool, string, string, ToolGroup][] = [
   ['erase', '橡皮', 'E', 'terrain'],
   ['room', '房间', 'M', 'terrain'],
   ['d100', 'D100 区域', 'D', 'terrain'],
-  ['subdivide', '细分为3×3', '', 'terrain'],
-  ['unsubdivide', '取消细分', '', 'terrain'],
   ['wall', '薄墙', '', 'arch'],
   ['glass', '玻璃墙', '', 'arch'],
   ['archDoor', '建筑门', '', 'arch'],
@@ -56,7 +54,7 @@ export const toolLabel = (t: Tool): string => TOOL_LABEL.get(t) ?? t;
 
 /** 编辑地图 = 形状；备团 = 内容；带团 = 跑。 */
 export const MODE_TOOLS: Record<Mode, Tool[]> = {
-  edit: ['pan', 'subdivide', 'unsubdivide', 'wall', 'glass', 'archDoor', 'archErase', 'select',
+  edit: ['pan', 'wall', 'glass', 'archDoor', 'archErase', 'select',
     'paint', 'fill', 'erase', 'object', 'zone', 'conn', 'room', 'd100', 'heightBrush', 'heightRect'],
   prep: ['select', 'pan', 'token', 'fogReveal', 'fogHide', 'fogBlack'],
   run: ['select', 'pan', 'token', 'fogReveal', 'fogHide', 'fogBlack'],

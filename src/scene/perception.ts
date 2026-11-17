@@ -2,7 +2,7 @@ import { objectEnabled } from '../core/objectData.js';
 import { architectureBlocksSight, architectureGeometry, isArchitectureObject, tokenPosition, isSubdivided } from './architecture';
 import { produce } from 'immer';
 import type { GameMap, MapObject, Token, VisionLayer, World } from '../core/types';
-import { partyVisionDetailOf, sightCacheFor, visiblePoint, viewerOf, type SightCache, type Viewer } from './sight';
+import { partyVisionOf, sightCacheFor, visiblePoint, viewerOf, type SightCache, type Viewer } from './sight';
 import { cloneLayer, emptyVision, mergeLayers, visionKey } from './vision';
 import { cellLine, gridDist } from '../core/util';
 
@@ -64,14 +64,14 @@ function sightToObject(world: World, map: GameMap, eye: Viewer, o: MapObject, sh
 }
 /**
  * 规则书视野。只有棋子才有朝向和姿态，所以这里收棋子列表而不是坐标。
- * 子格：主格衰减仍按整格；细分格再用 1/3 精度判断线穿过的挡死小块。
+ * 迷雾按大格记；小格地形仍参与线遮挡，但不会再单独生成一份小格迷雾。
  */
-export function detailedVisionRulebook(world: World, map: GameMap, tokens: Token[]): { vis: Uint8Array; sub: Record<number, number> } {
+export function detailedVisionRulebook(world: World, map: GameMap, tokens: Token[]): Uint8Array {
   const viewers = tokens.map((t) => {
     const pc = world.party.find((p) => p.id === t.pcId);
     return viewerOf(t, { sex: pc?.sex, heightCm: pc?.heightCm });
   });
-  return partyVisionDetailOf(world, map, viewers);
+  return partyVisionOf(world, map, viewers);
 }
 
 const step = (f: number, seeing: number) => (seeing ? 1 : f === 1 ? 2 : f);
@@ -87,16 +87,14 @@ export function withVision(next: World, prev: World): World {
     for (const m of d.maps) {
       const src = next.maps.find(x => x.id === m.id)!;
       const before = prev.maps.find(x => x.id === m.id);
-      const dirty = membershipChanged || !before || !before.autoFog || before.cells !== src.cells || before.objects !== src.objects || before.tokens !== src.tokens || before.architecture !== src.architecture || before.subdivisions !== src.subdivisions || next.terrains !== prev.terrains;
+      const dirty = membershipChanged || !before || !before.autoFog || before.cells !== src.cells || before.fineCells !== src.fineCells || before.objects !== src.objects || before.tokens !== src.tokens || before.architecture !== src.architecture || before.materialCells !== src.materialCells || before.fineMaterials !== src.fineMaterials || next.terrains !== prev.terrains;
       const ids = new Set(d.party.map(p => p.id));
       for (const id of Object.keys(m.views)) if (!ids.has(id)) delete m.views[id];
       for (const p of d.party) m.views[p.id] ??= emptyVision(m.width * m.height);
       const apply = (L: VisionLayer, members: Set<string>) => {
         const mine = src.tokens.filter(t => t.pcId && members.has(t.pcId));
-        const { vis, sub } = detailedVisionRulebook(next, src, mine);
+        const vis = detailedVisionRulebook(next, src, mine);
         L.fog = L.fog.map((f, i) => step(f, vis[i]));
-        const old = L.subFog ?? {};
-        L.subFog = Object.fromEntries(Object.entries(sub).map(([k, v]) => [k, step(old[+k] ?? 0, v)]));
       };
       if (prev.visionMode === 'shared' && next.visionMode !== 'shared' && before)
         for (const p of d.party) m.views[p.id] = cloneLayer(before);

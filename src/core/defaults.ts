@@ -1,5 +1,6 @@
 import type { Effect, FlowNode, GameMap, MapObject, Material, Terrain, World } from './types';
 import { uid } from './util';
+import { buildFineCells } from './grid';
 
 export const DEFAULT_TERRAINS: Terrain[] = [
   { id: 'floor', name: '地板', color: '#d9cbb0', blocksMove: false, visionCoef: 0.1 },
@@ -27,7 +28,7 @@ export function newMap(name: string, layer: string, floor: number, w: number, h:
     for (let x = 0; x < w; x++)
       cells.push(walls && (x === 0 || y === 0 || x === w - 1 || y === h - 1) ? 'wall' : fill);
   return {
-    id: uid(), name, layer, floor, width: w, height: h, cells,
+    id: uid(), name, layer, floor, width: w, height: h, cells, fineCells: buildFineCells(w, h, cells),
     d100: new Array(w * h).fill(0), fog: new Array(w * h).fill(0),
     seen: { cells: new Array(w * h).fill(''), objects: [] }, autoFog: true,
     rooms: [], roomCells: new Array(w * h).fill(''), views: {}, spawn: null,
@@ -48,7 +49,7 @@ export function newObject(kind: 'object' | 'zone', x: number, y: number, w: numb
 export function emptyWorld(): World {
   const m = newMap('一楼', '现实', 1, 24, 16);
   return {
-    version: 1, name: '未命名世界', terrains: structuredClone(DEFAULT_TERRAINS), materials: structuredClone(DEFAULT_MATERIALS),
+    version: 2, name: '未命名世界', terrains: structuredClone(DEFAULT_TERRAINS), materials: structuredClone(DEFAULT_MATERIALS),
     maps: [m], connections: [], party: [], log: [], media: [],
     flows: [{ id: uid(), name: '主线', mapId: null, edges: [], nodes: [{ id: uid(), title: '开场', x: 40, y: 40, kind: 'start', effect: null, origin: 'predicted', status: 'predicted' }] }],
     session: 1, playerMapId: null, visionMode: 'shared', marks: [], npcs: [],
@@ -110,6 +111,8 @@ export function demoWorld(): World {
   dream.objects = dream.objects.map((o) => ({ ...o, id: uid() }));
   for (let y = 5; y <= 9; y++) for (let x = 7; x <= 12; x++) { dream.cells[y * 20 + x] = 'hole'; dream.d100[y * 20 + x] = 1; }
   dream.objects[0] = { ...dream.objects[0], height: 9, name: '无限高的书架' };
+  study.fineCells = buildFineCells(study.width, study.height, study.cells);
+  dream.fineCells = buildFineCells(dream.width, dream.height, dream.cells);
 
   const upstairs = newMap('阁楼', '现实', 2, 12, 10);
 

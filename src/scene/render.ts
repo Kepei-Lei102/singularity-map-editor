@@ -2,10 +2,11 @@ import { playerObject, playerSeen } from './identity';
 import { objectEnabled } from '../core/objectData.js';
 import { effectiveLayer, visionMembers } from './vision';
 import { visibleArchitectureGeometry } from '../core/architectureData.js';
-import { isArchitectureObject, clipArchitecture, fogAt, isSubdivided, tokenPosition } from './architecture';
+import { isArchitectureObject, clipArchitecture, fogAt, tokenPosition } from './architecture';
 import { anyVisible } from './memory';
-import { subKey, terrainAtSubcell } from './terrain';
-import { materialAtSubcell, materialMap, rememberedMaterialAtSubcell } from './material';
+import { terrainAtSubcell } from './terrain';
+import { dominantId, fineKeyOf } from '../core/grid';
+import { materialAtCell, materialAtSubcell, materialMap, rememberedMaterialAtCell } from './material';
 import type { Selection, Tool, View } from '../core/store';
 import type { GameMap, MapObject, SeenObject, Token, World } from '../core/types';
 import { staleMemories } from './memory';
@@ -29,7 +30,8 @@ export interface RenderOpts {
   viewer?: string | null; // 玩家视角时以谁的眼睛看（视野各自独立时用他自己那份迷雾，标记也按他算）
   numbers?: boolean; // 显示编号 O1 / Z2 / T1 / C1（和给 AI 的图一致）
   rulers?: boolean; // 画面边缘的坐标尺
-  subgrid?: boolean; // 仅显示已手动细分区的辅助线，不改变几何或走位
+  subgrid?: boolean; // 作者辅助线：显示 1/3 小格线；打开时强制按小格渲染
+  fineEdit?: boolean; // 作者正处在小格编辑：缩小时也强制显示真实小格
 }
 
 export interface Numbered { label: string; kind: 'object' | 'zone' | 'token' | 'conn'; id: string; x: number; y: number; w: number; h: number; name: string }
@@ -307,8 +309,7 @@ function fromMemory(r: SeenObject): MapObject {
 function cellsPath(map: GameMap, x0: number, y0: number, x1: number, y1: number, fogValue: number) {
   const p = new Path2D();
   for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) {
-    const n = isSubdivided(map, x, y) ? 3 : 1;
-    for (let sy = 0; sy < n; sy++) for (let sx = 0; sx < n; sx++) if (fogAt(map, map, x + (sx + .5) / n, y + (sy + .5) / n) === fogValue) p.rect((x + sx / n) * CS, (y + sy / n) * CS, CS / n, CS / n);
+    if (fogAt(map, map, x + .5, y + .5) === fogValue) p.rect(x * CS, y * CS, CS, CS);
   }
   return p;
 }
@@ -363,23 +364,55 @@ function playerPresentation(world: World, map: GameMap, viewer?: string): GameMa
     seen: { ...map.seen, objects: map.seen.objects.map(r => playerSeen(r, viewer, map.objects.find(ob => ob.id === r.id))) } };
 }
 
+/** 小于这个屏幕像素时，小格细节退化成整大格铺色，避免缩小时满屏接缝噪点。 */
+export const FINE_LOD_PX = 4;
+
+/** 当前缩放下是否该把小格合并成大格；作者强制小格/子格线时不合并。 */
+export function fineLodAt(zoom: number, forceFine = false): boolean {
+  return !forceFine && CS * zoom / 3 < FINE_LOD_PX;
+}
+
+/** 取出现次数最多的 id；平手时按遍历顺序取先出现的，结果稳定。 */
+/** 缩小时这一大格该铺成什么颜色：小格里出现最多的地形；没有 fineCells 才退回大格底。 */
+export function aggregateTerrain(m: GameMap, x: number, y: number): string {
+  const base = m.cells[y * m.width + x] ?? '';
+  if (!m.fineCells) return base;
+  const ids: string[] = [];
+  for (let sy = 0; sy < 3; sy++) for (let sx = 0; sx < 3; sx++) {
+    ids.push(m.fineCells[fineKeyOf(m, x * 3 + sx, y * 3 + sy)] ?? base);
+  }
+  // 9 格全被擦空是“有细节且全空”，不能再回退大格底，否则低缩放会画出 floor，
+  // 而 cellFloor 按 9 个空小格判成墙。
+  return dominantId(ids);
+}
+
+/** 缩小时这一大格的材质：小格里出现最多的材质；没有就退回大格材质。 */
+export function aggregateMaterial(m: GameMap, x: number, y: number): string {
+  const base = materialAtCell(m, y * m.width + x);
+  const ids: string[] = [];
+  for (let sy = 0; sy < 3; sy++) for (let sx = 0; sx < 3; sx++) {
+    ids.push(m.fineMaterials?.[fineKeyOf(m, x * 3 + sx, y * 3 + sy)] ?? base);
+  }
+  return dominantId(ids);
+}
+
 /** 选中棋子那圈「看清范围」的视野缓存：键是引用相等，改了就自动失效。 */
 let clearVision: {
   map: GameMap; token: Token; cells: GameMap['cells']; objects: GameMap['objects'];
-  architecture: GameMap['architecture']; subdivisions: GameMap['subdivisions']; heights: GameMap['heights'];
+  architecture: GameMap['architecture']; fineCells: GameMap['fineCells']; heights: GameMap['heights'];
   terrains: World['terrains']; vis: Uint8Array;
 } | null = null;
 
 function clearVisionOf(world: World, map: GameMap, st: Token): Uint8Array {
   const m = clearVision;
   if (m && m.map === map && m.token === st && m.cells === map.cells && m.objects === map.objects
-    && m.architecture === map.architecture && m.subdivisions === map.subdivisions && m.heights === map.heights
+    && m.architecture === map.architecture && m.fineCells === map.fineCells && m.heights === map.heights
     && m.terrains === world.terrains) return m.vis;
   const pc = world.party.find((p) => p.id === st.pcId);
   const vis = visionOf(world, map, viewerOf(st, { sex: pc?.sex, heightCm: pc?.heightCm }));
   clearVision = {
     map, token: st, cells: map.cells, objects: map.objects, architecture: map.architecture,
-    subdivisions: map.subdivisions, heights: map.heights, terrains: world.terrains, vis,
+    fineCells: map.fineCells, heights: map.heights, terrains: world.terrains, vis,
   };
   return vis;
 }
@@ -390,7 +423,7 @@ export function render(
 ) {
   // 视野各自独立时，玩家视角换成这个人自己的那份迷雾和记忆；后面的代码照常读 map.fog / map.seen
   const own = o.mode === 'player' && o.viewer ? effectiveLayer(world, map0, o.viewer) : undefined; // 这个人还没有视野层：什么都没看过
-  const visibleMap: GameMap = own ? { ...map0, fog: own.fog, subFog: own.subFog, seen: own.seen } : map0;
+  const visibleMap: GameMap = own ? { ...map0, fog: own.fog, seen: own.seen } : map0;
   const player = o.mode === 'player';
   const map = visibleMap;
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
@@ -409,28 +442,42 @@ export function render(
 
   ctx.fillStyle = '#262830';
   ctx.fillRect(0, 0, W * CS, H * CS);
+  // 屏幕上一小格不到 FINE_LOD_PX 时合并成大格；作者开着小格编辑/子格线时不合并。
+  const forceFine = !player && !!(o.fineEdit || o.subgrid);
+  const lod = fineLodAt(view.zoom, forceFine);
   for (let y = y0; y <= y1; y++)
     for (let x = x0; x <= x1; x++) {
       const i = y * W + x;
-      const n = isSubdivided(map, x, y) ? 3 : 1;
-      for (let sy = 0; sy < n; sy++) for (let sx = 0; sx < n; sx++) {
-        const f = fogAt(map, map, x + (sx + .5) / n, y + (sy + .5) / n), key = subKey(map, x * 3 + sx, y * 3 + sy);
-        const base = map.cells[i];
-        const id = player
-          ? (f === 1 ? (n === 3 ? terrainAtSubcell(map, x * 3 + sx, y * 3 + sy) : base)
-            : f === 2 ? (n === 3 ? map.seen.subCells?.[key] ?? '' : map.seen.cells[i]) : '')
-          : (n === 3 ? terrainAtSubcell(map, x * 3 + sx, y * 3 + sy) : base);
+      const f = fogAt(map, map, x + .5, y + .5);
+      if (player && !f) continue;
+      const memory = player && f === 2;
+      if (memory || lod) {
+        // 记忆整块按大格；缩小时整大格合并，颜色取小格里的多数派。
+        const id = memory ? map.seen.cells[i] : aggregateTerrain(map, x, y);
         if (!id) continue;
         ctx.fillStyle = terrains.get(id)?.color ?? '#ff00ff';
-        ctx.fillRect((x + sx / n) * CS, (y + sy / n) * CS, CS / n + .1, CS / n + .1);
-        const mid = player
-          ? (f === 1 ? materialAtSubcell(map, x * 3 + sx, y * 3 + sy) : f === 2 ? rememberedMaterialAtSubcell(map, x * 3 + sx, y * 3 + sy) : '')
-          : materialAtSubcell(map, x * 3 + sx, y * 3 + sy);
+        ctx.fillRect(x * CS, y * CS, CS + .1, CS + .1);
+        const mid = memory ? rememberedMaterialAtCell(map, i) : aggregateMaterial(map, x, y);
         const mat = mid ? materials.get(mid) : undefined;
         if (mat) {
           ctx.globalAlpha = .78;
           ctx.fillStyle = mat.color;
-          ctx.fillRect((x + sx / n) * CS, (y + sy / n) * CS, CS / n + .1, CS / n + .1);
+          ctx.fillRect(x * CS, y * CS, CS + .1, CS + .1);
+          ctx.globalAlpha = 1;
+        }
+        continue;
+      }
+      for (let sy = 0; sy < 3; sy++) for (let sx = 0; sx < 3; sx++) {
+        const id = terrainAtSubcell(map, x * 3 + sx, y * 3 + sy);
+        if (!id) continue;
+        ctx.fillStyle = terrains.get(id)?.color ?? '#ff00ff';
+        ctx.fillRect((x + sx / 3) * CS, (y + sy / 3) * CS, CS / 3 + .1, CS / 3 + .1);
+        const mid = materialAtSubcell(map, x * 3 + sx, y * 3 + sy);
+        const mat = mid ? materials.get(mid) : undefined;
+        if (mat) {
+          ctx.globalAlpha = .78;
+          ctx.fillStyle = mat.color;
+          ctx.fillRect((x + sx / 3) * CS, (y + sy / 3) * CS, CS / 3 + .1, CS / 3 + .1);
           ctx.globalAlpha = 1;
         }
       }
@@ -467,11 +514,15 @@ export function render(
   for (let y = y0; y <= y1 + 1; y++) { ctx.moveTo(x0 * CS, y * CS); ctx.lineTo((x1 + 1) * CS, y * CS); }
   ctx.stroke();
 
-  if (!player && o.subgrid) for (const i of map.subdivisions ?? []) {
-    const x = i % W, y = Math.floor(i / W);
-    ctx.strokeStyle = 'rgba(120,190,210,.6)'; ctx.lineWidth = .65 / view.zoom;
-    ctx.strokeRect(x * CS, y * CS, CS, CS); ctx.beginPath();
-    for (let j = 1; j < 3; j++) { ctx.moveTo((x + j / 3) * CS, y * CS); ctx.lineTo((x + j / 3) * CS, (y + 1) * CS); ctx.moveTo(x * CS, (y + j / 3) * CS); ctx.lineTo((x + 1) * CS, (y + j / 3) * CS); }
+  if (!player && o.subgrid) {
+    ctx.strokeStyle = 'rgba(120,190,210,.55)'; ctx.lineWidth = .6 / view.zoom;
+    ctx.beginPath();
+    for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) {
+      for (let j = 1; j < 3; j++) {
+        ctx.moveTo((x + j / 3) * CS, y * CS); ctx.lineTo((x + j / 3) * CS, (y + 1) * CS);
+        ctx.moveTo(x * CS, (y + j / 3) * CS); ctx.lineTo((x + 1) * CS, (y + j / 3) * CS);
+      }
+    }
     ctx.stroke();
   }
   // 房间底色（主持人视角；墙上不涂）
@@ -685,13 +736,10 @@ export function render(
     const grey = player ? 'rgba(14,14,22,0.58)' : 'rgba(40,40,60,0.32)';
     for (let y = y0; y <= y1; y++)
       for (let x = x0; x <= x1; x++) {
-        const n = isSubdivided(map, x, y) ? 3 : 1;
-        for (let sy = 0; sy < n; sy++) for (let sx = 0; sx < n; sx++) {
-          const f = fogAt(map, map, x + (sx + .5) / n, y + (sy + .5) / n);
-          if (f === 1) continue;
-          ctx.fillStyle = f === 2 ? grey : black;
-          ctx.fillRect((x + sx / n) * CS, (y + sy / n) * CS, CS / n, CS / n);
-        }
+        const f = fogAt(map, map, x + .5, y + .5);
+        if (f === 1) continue;
+        ctx.fillStyle = f === 2 ? grey : black;
+        ctx.fillRect(x * CS, y * CS, CS, CS);
       }
     // 主持人：玩家记得的样子已经过时的物件
     if (!player) {

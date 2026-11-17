@@ -1,32 +1,27 @@
 // 地形读取的唯一入口。
 // 约定：
-// - 底色永远在 GameMap.cells（大格）。
-// - 细分过的格子里，子格可以在 subCells 里覆盖，key = sy3 * width*3 + sx3。
-// - 没有覆盖时退回大格地形；不允许出现别的查找顺序。
+// - 大格底在 GameMap.cells；规则/旧逻辑仍可用它。
+// - 小格在 GameMap.fineCells 里是完整数组，长度 = width*3 * height*3，key = y3*(width*3)+x3。
+// - 没有小格细节的大格，fineCells 的 9 格与 cells 相同；有细节时逐小格读。
 // 渲染、碰撞、视线、迷雾、玩家同步都必须从这里拿地形，不要各自拼 key。
 
 import type { GameMap, Terrain, World } from '../core/types';
+import { SUB, fineKeyOf, hasFineDetail } from '../core/grid';
 import { heightAt } from './height';
 
-export const SUB = 3;
-export const subKey = (m: GameMap, x3: number, y3: number) => y3 * (m.width * SUB) + x3;
+export { SUB };
+export const subKey = (m: GameMap, x3: number, y3: number) => fineKeyOf(m, x3, y3);
 
-/** 这个坐标（主格单位，可带小数）所在的大格是否细分过。 */
+/** 这个坐标（主格单位，可带小数）所在的大格有没有小格细节。 */
 export function isSubdivided(m: GameMap, x: number, y: number): boolean {
   if (x < 0 || y < 0 || x >= m.width || y >= m.height) return false;
-  return !!m.subdivisions?.includes(Math.floor(y) * m.width + Math.floor(x));
+  return hasFineDetail(m, Math.floor(x), Math.floor(y));
 }
 
-/** 子格 id 对应的地形；先看覆盖，没有再退回大格。 */
+/** 小格地形；没有 fineCells 的旧数据退回大格。 */
 export function terrainAtSubcell(m: GameMap, x3: number, y3: number): string {
-  const x = Math.floor(x3 / SUB), y = Math.floor(y3 / SUB);
-  if (x < 0 || y < 0 || x >= m.width || y >= m.height) return '';
-  const cellIdx = y * m.width + x;
-  if (m.subdivisions?.includes(cellIdx)) {
-    const override = m.subCells?.[subKey(m, x3, y3)];
-    if (override !== undefined) return override;
-  }
-  return m.cells[cellIdx] ?? '';
+  if (x3 < 0 || y3 < 0 || x3 >= m.width * SUB || y3 >= m.height * SUB) return '';
+  return m.fineCells?.[subKey(m, x3, y3)] ?? m.cells[Math.floor(y3 / SUB) * m.width + Math.floor(x3 / SUB)] ?? '';
 }
 
 /** 点所在地形；px/py 是主格单位的小数坐标（和棋子、物件同一套坐标）。 */
@@ -41,7 +36,7 @@ export function terrainMap(world: Pick<World, 'terrains'>): Map<string, Terrain>
   return new Map(world.terrains.map((t) => [t.id, t]));
 }
 
-/** 与这块矩形相交、且 blocksMove 的地形小块。没细分的格子返回整格，细分过的格子返回 1/3 小块。 */
+/** 与这块矩形相交、且 blocksMove 的地形小块。有细格细节的格子返回 1/3 小块，否则返回整格。 */
 export function terrainBlockers(world: Pick<World, 'terrains'>, m: GameMap, area: TerrainRect): TerrainRect[] {
   const terrains = terrainMap(world);
   const out: TerrainRect[] = [];
@@ -49,11 +44,9 @@ export function terrainBlockers(world: Pick<World, 'terrains'>, m: GameMap, area
   const x1 = Math.min(m.width - 1, Math.ceil(area.x + area.w) - 1);
   const y1 = Math.min(m.height - 1, Math.ceil(area.y + area.h) - 1);
   for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) {
-    const cellIdx = y * m.width + x;
-    const fine = !!m.subdivisions?.includes(cellIdx);
-    const n = fine ? SUB : 1;
+    const fine = hasFineDetail(m, x, y), n = fine ? SUB : 1;
     for (let sy = 0; sy < n; sy++) for (let sx = 0; sx < n; sx++) {
-      const id = fine ? terrainAtSubcell(m, x * SUB + sx, y * SUB + sy) : m.cells[cellIdx] ?? '';
+      const id = fine ? terrainAtSubcell(m, x * SUB + sx, y * SUB + sy) : m.cells[y * m.width + x] ?? '';
       const t = terrains.get(id);
       if (t && !t.blocksMove) continue; // 没登记的地形（空白）按不可通行算，和旧规则一致
       out.push({ x: x + sx / n, y: y + sy / n, w: 1 / n, h: 1 / n });
@@ -72,12 +65,6 @@ export function terrainBlocksPoint(world: Pick<World, 'terrains'>, m: GameMap, p
   const id = terrainAtPoint(m, px, py);
   const t = terrainMap(world).get(id);
   return !t || t.blocksMove;
-}
-
-/** 这个位置的地形视野衰减系数。现在规则仍按大格算，等第二步细化到子格。 */
-export function terrainVisionCoef(world: Pick<World, 'terrains'>, m: GameMap, x: number, y: number): number {
-  const id = m.cells[y * m.width + x] ?? '';
-  return terrainMap(world).get(id)?.visionCoef ?? 0;
 }
 
 /**
@@ -111,14 +98,14 @@ export function cellFloor(world: Pick<World, 'terrains'>, m: GameMap, x: number,
   if (x < 0 || y < 0 || x >= m.width || y >= m.height) return 'wall';
   const terrains = terrainMap(world);
   const idx = y * m.width + x;
-  if (!m.subdivisions?.includes(idx)) {
+  if (!hasFineDetail(m, x, y)) {
     const t = terrains.get(m.cells[idx] ?? '');
     // 没登记的地形按旧规则当不可通行，也当墙（跳不过去）。
     if (!t) return 'wall';
     if (!t.blocksMove) return 'open';
     return t.crossable === false ? 'wall' : 'gap';
   }
-  // 细分过的格子：三个子格有任何一个不能站，就按整格算。
+  // 有细格细节的格子：三个子格有任何一个不能站，就按整格算。
   let sawGap = false;
   for (let sy = 0; sy < SUB; sy++) for (let sx = 0; sx < SUB; sx++) {
     const t = terrains.get(terrainAtSubcell(m, x * SUB + sx, y * SUB + sy));

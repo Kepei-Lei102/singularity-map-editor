@@ -655,7 +655,7 @@ test('推箱下跳无检定：无玩家窗口时 host 结算的事件顺序是�
 test('坑前确认：确认那一下不落移动账，跳过去仍走跳跃事件', () => {
   const { m } = fight();
   api.toggleCombat(); // 自由行动
-  api.update((d) => { d.maps[0].cells[1 * 10 + 2] = 'hole'; });
+  api.update((d) => { const m = d.maps[0]; m.cells[1 * 10 + 2] = 'hole'; for (let sy = 0; sy < 3; sy++) for (let sx = 0; sx < 3; sx++) m.fineCells[(1 * 3 + sy) * m.width * 3 + 2 * 3 + sx] = 'hole'; });
   const before = api.getWorld().events?.length ?? 0;
   api.trialMove(0, -1); // 转身
   api.trialMove(0, -1); // 坑前提示

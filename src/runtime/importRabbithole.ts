@@ -2,6 +2,7 @@ import { MAX_COORD, MAX_SIDE } from '../core/schema.js';
 import JSZip from 'jszip';
 import type { GameMap, MapObject, MediaMeta, Room, Terrain, World } from '../core/types';
 import { DEFAULT_TERRAINS, newMap, newObject } from '../core/defaults';
+import { buildFineCells } from '../core/grid';
 import { uid } from '../core/util';
 
 // 导入旧工具 Rabbithole 的地图（map.json，或连配图一起打的 bundle zip）。
@@ -121,6 +122,7 @@ export async function importRabbithole(file: File): Promise<RabbitholeImport> {
       if (cell.interactiveId) intCells.set(cell.interactiveId, [...(intCells.get(cell.interactiveId) ?? []), [x, y]]);
     }
     if (m.floor === 1) m.cells = m.cells.map((c) => c || 'yard');
+    m.fineCells = buildFineCells(m.width, m.height, m.cells);
     // 备注（带分组名）和附件：家具和可交互物都要带上，不能只管可交互物
     const notesOf = (it: RHItem) => {
       const group = it.groupId ? groupName.get(it.groupId) : undefined;
@@ -171,7 +173,7 @@ export async function importRabbithole(file: File): Promise<RabbitholeImport> {
 
   const ground = maps.find((m) => m.floor === 1) ?? maps[0];
   const world: World = {
-    version: 1,
+    version: 2,
     name: '示例地图（从 Rabbithole 导入）',
     terrains: [...structuredClone(DEFAULT_TERRAINS), ...EXTRA_TERRAINS],
     maps,

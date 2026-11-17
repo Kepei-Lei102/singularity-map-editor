@@ -12,7 +12,7 @@ const root = fileURLToPath(new URL('..', import.meta.url));
 const temp = await mkdtemp(join(tmpdir(), 'ts-sliding-test-'));
 const bundle = join(temp, 'editor.cjs');
 await build({
-  stdin: { contents: `export * from './src/scene/sliding'; export * from './src/scene/architecture'; export * from './src/scene/perception'; export * from './src/core/defaults'; export * from './src/core/schema'; export * from './src/core/store'; export * from './src/runtime/actions'; export * from './src/runtime/trial'; export { playerWorld } from './src/runtime/sync';`, resolveDir: root },
+  stdin: { contents: `export * from './src/scene/sliding'; export * from './src/scene/architecture'; export * from './src/scene/perception'; export * from './src/scene/terrain'; export * from './src/core/grid'; export * from './src/core/defaults'; export * from './src/core/schema'; export * from './src/core/store'; export * from './src/runtime/actions'; export * from './src/runtime/trial'; export { playerWorld } from './src/runtime/sync';`, resolveDir: root },
   outfile: bundle, bundle: true, platform: 'node', format: 'cjs', logLevel: 'silent',
 });
 const storage = () => { const data = new Map(); return { getItem: (k) => data.get(k) ?? null, setItem: (k, v) => data.set(k, v), removeItem: (k) => data.delete(k) }; };
@@ -35,6 +35,11 @@ function fixture() {
   map.slidingPuzzles = [{ id: 'puzzle', name: '滑块', x: 1, y: 1, w: 6, h: 6, objectIds: ['target', 'other'], targetId: 'target', goal: { x: 3, y: 2 }, gateId: 'gate' }];
   world.maps = [map];
   return { world, map, block, other, gate };
+}
+
+function setBaseTerrain(map, x, y, id) {
+  map.cells[y * map.width + x] = id;
+  for (let sy = 0; sy < 3; sy++) for (let sx = 0; sx < 3; sx++) map.fineCells[(y * 3 + sy) * map.width * 3 + x * 3 + sx] = id;
 }
 
 function install(world) {
@@ -99,8 +104,15 @@ test('diagonal and fractional movement is rejected', () => {
 
 test('terrain blocks every cell swept by a multi-cell block', () => {
   const { world, map, block } = fixture();
-  map.cells[2 * map.width + 4] = 'wall';
+  setBaseTerrain(map, 4, 2, 'wall');
   assert.match(api.checkSlidingMove(world, map, block.id, 5, 2), /地形/);
+});
+
+test('小格墙也挡住滑块扫过的整条路径', () => {
+  const { world, map, block } = fixture();
+  // 目标大格 (3,2) 的左上 1/3 小格里画墙；大格底仍是 floor。
+  map.fineCells[(2 * 3) * map.width * 3 + 3 * 3] = 'wall';
+  assert.match(api.checkSlidingMove(world, map, block.id, 3, 2), /地形/);
 });
 
 test('external objects use blocksMovement and ignore triggers; people must leave the swept path', () => {
@@ -499,22 +511,24 @@ test('schema rejects malformed metadata, bad references, overlapping blocks and 
 function fineFixture() {
   const world = api.emptyWorld(), map = api.newMap('细格', '测试', 0, 8, 8, 'floor', false);
   map.autoFog = false; world.maps = [map];
-  map.subdivisions = Array.from({ length: 64 }, (_, i) => i);
   map.architecture = { walls: [{ id: 'wall', a: { x: 12, y: 0 }, b: { x: 12, y: 24 }, thickness: 100, material: 'wall' }], doors: [{ id: 'door', wallId: 'wall', offset: 9, width: 3, open: false }] };
   return { world, map };
 }
-test('old maps never subdivide automatically; rectangle and undo are one transaction', () => {
-  const { world, map } = fineFixture(); delete map.subdivisions; delete map.architecture; install(world);
+test('小格地形一次事务，可撤销重做；不再有细分开关', () => {
+  const { world, map } = fineFixture(); delete map.architecture; install(world);
+  const before = api.getWorld().maps[0].fineCells.slice();
+  api.paintTerrainSubcells(map.id, [[6, 6]], 'grass');
+  assert.equal(api.terrainAtSubcell(api.getWorld().maps[0], 6, 6), 'grass');
   assert.equal(api.getWorld().maps[0].subdivisions, undefined);
-  assert.equal(api.subdivideRegion(map.id, { x: 2, y: 2, w: 2, h: 2 }), null);
-  assert.deepEqual(api.getWorld().maps[0].subdivisions, [18, 19, 26, 27]);
-  api.undo(); assert.equal(api.getWorld().maps[0].subdivisions, undefined);
-  api.redo(); assert.equal(api.getWorld().maps[0].subdivisions.length, 4);
+  api.undo();
+  assert.deepEqual(api.getWorld().maps[0].fineCells, before);
+  api.redo();
+  assert.equal(api.terrainAtSubcell(api.getWorld().maps[0], 6, 6), 'grass');
 });
 test('architecture schema rejects fractional diagonal out of range uncovered and orphan/overlap doors', () => {
   const { world } = fineFixture(); api.checkWorld(world);
   for (const mutate of [m => m.architecture.walls[0].a.x = 1.5, m => m.architecture.walls[0].b.x = 13, m => m.architecture.walls[0].b.y = 25,
-    m => m.subdivisions = [], m => m.architecture.doors[0].wallId = 'missing', m => m.architecture.doors[0].offset = 23,
+    m => m.architecture.doors[0].wallId = 'missing', m => m.architecture.doors[0].offset = 23,
     m => m.architecture.doors.push({ ...m.architecture.doors[0], id: 'other' })]) {
     const w = structuredClone(world); mutate(w.maps[0]); assert.throws(() => api.checkWorld(w));
   }
@@ -532,20 +546,8 @@ test('thin wall and closed door block swept people and furniture; glass transmit
   map.architecture.doors[0].width = 1;
   assert.equal(api.characterPathClear(world, map, { x: 3.5, y: 19 / 6 }, { x: 4.5, y: 19 / 6 }), false);
 });
-test('shared subcell wall has no corner leak and does not reveal opposite side of same main cell', () => {
-  const { world, map } = fineFixture(); map.architecture.walls[0].a.x = 11; map.architecture.walls[0].b.x = 11;
-  map.tokens = [{ id: 'eye', pcId: 'pc', name: '眼睛', color: '#fff', x: 3, y: 1, subcell: { x: 9, y: 4 } }];
-  map.autoFog = true; install(world);
-  api.update(d => { d.maps[0].tokens[0].subcell.x = 10; });
-  const m = api.getWorld().maps[0];
-  assert.equal(m.subFog[4 * 24 + 10], 1); assert.equal(m.subFog[4 * 24 + 11], 0);
-  assert.equal(api.architectureBlocksSight(m, { x: 3, y: 0 }, { x: 4, y: 1 }), true);
-  const payload = api.playerWorld(api.getWorld(), m.id).maps[0];
-  assert.equal(payload.architecture, undefined);
-  assert.ok(payload.architectureFragments.every(r => r.x + r.w <= 11 / 3 + 1e-8));
-});
 test('人走路一律整格：一次方向就是一整格，不落细分格', () => {
-  const { world, map } = fineFixture(); map.architecture = undefined; map.subdivisions = [27]; map.spawn = { x: 3, y: 3 };
+  const { world, map } = fineFixture(); map.architecture = undefined; map.spawn = { x: 3, y: 3 };
   install(world); api.startTrial(); api.toggleCombat();
   api.trialMove(1, 0); // 战斗中第一次按方向是原地转身，不移动
   api.trialMove(1, 0);
@@ -556,44 +558,50 @@ test('人走路一律整格：一次方向就是一整格，不落细分格', ()
   assert.equal(Object.values(api.getUI().trial.moved)[0], 3, '走一格扣一格');
   api.endTrial();
 });
-test('cancel subdivision refuses walls doors and subcell tokens without mutation', () => {
-  const { world, map } = fineFixture(); install(world);
-  assert.match(api.subdivideRegion(map.id, { x: 0, y: 0, w: 8, h: 8 }, true), /建筑/);
-  api.update(d => { d.maps[0].architecture = undefined; d.maps[0].tokens = [{ id: 't', pcId: null, name: 't', color: '#fff', x: 1, y: 1, subcell: { x: 4, y: 4 } }]; });
-  assert.match(api.subdivideRegion(map.id, { x: 1, y: 1, w: 1, h: 1 }, true), /棋子/);
-});
-test('door toggles update fine vision immediately, grey memory freezes, sandbox restores geometry', () => {
+test('开关门立即改变大格视野，灰区记忆冻结，试玩恢复几何', () => {
   const { world, map } = fineFixture(); map.spawn = { x: 3, y: 3 }; install(world); api.startTrial();
-  assert.equal(api.getWorld().maps[0].subFog[10 * 24 + 13], 0);
+  const idx = 3 * map.width + 4;
+  assert.equal(api.getWorld().maps[0].fog[idx], 0);
   assert.equal(api.toggleArchitectureDoor(map.id, 'door'), null);
-  assert.equal(api.getWorld().maps[0].subFog[10 * 24 + 13], 1);
+  assert.equal(api.getWorld().maps[0].fog[idx], 1);
   assert.equal(api.toggleArchitectureDoor(map.id, 'door'), null);
-  assert.equal(api.getWorld().maps[0].subFog[10 * 24 + 13], 2);
+  assert.equal(api.getWorld().maps[0].fog[idx], 2);
   assert.ok(api.getWorld().maps[0].seen.architecture.length > 0);
   api.endTrial(); assert.equal(api.openingIsOpen(api.getWorld().maps[0].objects.find(o => o.id === 'door')), false);
 });
-test('reshape shifts architecture subcells and memory; copy keeps geometry but clears knowledge', () => {
+test('改尺寸会平移小格地形和记忆；复制保留几何但清掉知识', () => {
   const { world, map } = fineFixture(); map.tokens = [{ id: 't', pcId: 'pc', name: 't', color: '#fff', x: 2, y: 2, subcell: { x: 7, y: 7 } }];
-  map.subFog = { 175: 2 }; map.seen.subCells = { 175: 'floor' }; install(world);
+  const key = 7 * 24 + 7; map.fineCells[key] = 'grass';
+  map.seen.cells[2 * 8 + 2] = 'floor';
+  install(world);
   api.reshapeMaps([map.id], 1, 1, 0, 0);
-  const m = api.getWorld().maps[0]; assert.equal(m.objects.find(o => o.id === 'wall').geometry.a.x, 15); assert.deepEqual(m.tokens[0].subcell, { x: 10, y: 10 });
-  assert.equal(m.subFog[280], 2); assert.equal(m.seen.subCells[280], 'floor'); api.checkWorld(api.getWorld());
+  const m = api.getWorld().maps[0];
+  assert.equal(m.objects.find(o => o.id === 'wall').geometry.a.x, 15);
+  assert.deepEqual(m.tokens[0].subcell, { x: 10, y: 10 });
+  assert.equal(m.fineCells[10 * 27 + 10], 'grass');
+  assert.equal(m.seen.cells[3 * 9 + 3], 'floor');
+  api.checkWorld(api.getWorld());
   api.duplicateMap(map.id); const copy = api.getWorld().maps[1];
-  assert.deepEqual(copy.objects.find(o => o.geometry).geometry, m.objects.find(o => o.geometry).geometry); assert.equal(copy.objects.find(o => o.opening).opening.wallId, copy.objects.find(o => o.geometry).id); assert.notEqual(copy.objects.find(o => o.geometry).id, 'wall'); assert.deepEqual(copy.subFog, {}); assert.deepEqual(copy.seen.architecture, []);
+  assert.deepEqual(copy.objects.find(o => o.geometry).geometry, m.objects.find(o => o.geometry).geometry);
+  assert.equal(copy.objects.find(o => o.opening).opening.wallId, copy.objects.find(o => o.geometry).id);
+  assert.notEqual(copy.objects.find(o => o.geometry).id, 'wall');
+  assert.equal(copy.fog.every((v) => v === 0), true);
+  assert.deepEqual(copy.seen.architecture, []);
 });
-
-test('independent fine vision uses each eye and unknown architecture never reaches sync', () => {
+test('各自独立视野按各自的眼和大格迷雾算，未知建筑不进同步', () => {
   const { world, map } = fineFixture(); world.visionMode = 'individual'; map.autoFog = true;
   map.tokens = [{ id: 'l', pcId: 'left', name: 'left', color: '#fff', x: 2, y: 1 }, { id: 'r', pcId: 'right', name: 'right', color: '#fff', x: 5, y: 1 }];
   install(world); api.update(d => { d.maps[0].tokens[0].y = 2; });
-  const m = api.getWorld().maps[0]; assert.equal(m.views.left.subFog[4 * 24 + 16], 0); assert.equal(m.views.right.subFog[4 * 24 + 16], 1);
+  const m = api.getWorld().maps[0];
+  assert.equal(m.views.left.fog[1 * 8 + 5], 0);
+  assert.equal(m.views.right.fog[1 * 8 + 5], 1);
   const w = structuredClone(api.getWorld()); w.maps[0].tokens = [w.maps[0].tokens[0]]; w.maps[0].views = {}; w.visionMode = 'shared';
-  w.maps[0].subFog = {}; w.maps[0].fog.fill(0); w.maps[0].seen = { cells: w.maps[0].cells.map(() => ''), objects: [] };
-  const hidden = api.playerWorld(w, map.id).maps[0]; assert.equal(hidden.architecture, undefined); assert.deepEqual(hidden.architectureFragments, []); assert.deepEqual(hidden.subdivisions, []); assert.deepEqual(hidden.subFog, {});
+  w.maps[0].fog.fill(0); w.maps[0].seen = { cells: w.maps[0].cells.map(() => ''), objects: [] };
+  const hidden = api.playerWorld(w, map.id).maps[0]; assert.equal(hidden.architecture, undefined);
+  assert.deepEqual(hidden.architectureFragments, []); assert.ok(hidden.fineCells.every((v) => v === ''));
 });
 test('sliding swept path cannot cross a thin wall and still accepts integer movement', () => {
-  const { world, map, block } = fixture(); map.subdivisions = Array.from({ length: 100 }, (_, i) => i);
-  map.architecture = { walls: [{ id: 'thin', a: { x: 13, y: 3 }, b: { x: 13, y: 18 }, thickness: 50, material: 'glass' }], doors: [] };
+  const { world, map, block } = fixture();   map.architecture = { walls: [{ id: 'thin', a: { x: 13, y: 3 }, b: { x: 13, y: 18 }, thickness: 50, material: 'glass' }], doors: [] };
   assert.match(api.checkSlidingMove(world, map, block.id, 3, 2), /建筑/);
   assert.equal(api.checkSlidingMove(world, map, block.id, 1, 2), null);
 });
@@ -607,7 +615,7 @@ test('door closing refuses occupied aperture, snapshots restore only surviving d
   api.eraseArchitecture(map.id, 'wall'); api.resetRoom(map.id, 'room'); assert.deepEqual(api.getWorld().maps[0].objects.filter(o => o.geometry), []);
 });
 test('coarse to fine and back movement cannot cross thin walls or corner geometry', () => {
-  const { world, map } = fineFixture(); map.subdivisions = [27, 28]; map.architecture = { walls: [{ id: 'w', a: { x: 10, y: 9 }, b: { x: 10, y: 12 }, thickness: 100, material: 'wall' }], doors: [] };
+  const { world, map } = fineFixture(); map.architecture = { walls: [{ id: 'w', a: { x: 10, y: 9 }, b: { x: 10, y: 12 }, thickness: 100, material: 'wall' }], doors: [] };
   map.spawn = { x: 2, y: 3 }; install(world); api.startTrial();
   api.trialMove(1, 0); // 先转身
   const before = api.getWorld().maps[0].tokens[0]; api.trialMove(1, 0);
@@ -656,7 +664,7 @@ test('new native door ordinary flow changes real geometry vision revisions and c
   map.tokens = [{ id: 'eye', pcId: 'pc', name: 'eye', color: '#fff', x: 3, y: 3 }]; world.flows = [doorFlow(map.id)]; install(world);
   const a = { x: 3.5, y: 3.5 }, b = { x: 4.5, y: 3.5 };
   api.setNodeStatus('door-flow', 'door-event', 'happened'); let m = api.getWorld().maps[0];
-  assert.equal(api.characterPathClear(api.getWorld(), m, a, b, 'eye'), true); assert.equal(m.subFog[10 * 24 + 13], 1);
+  assert.equal(api.characterPathClear(api.getWorld(), m, a, b, 'eye'), true); assert.equal(m.fog[3 * 8 + 4], 1);
   assert.equal(m.objects.find(o => o.id === 'door').stateRev, 1); assert.equal(api.getWorld().flows[0].nodes[0].applied.rev, 1);
   api.setObjectState(map.id, 'door', 0); api.setObjectState(map.id, 'door', 1);
   api.setNodeStatus('door-flow', 'door-event', 'predicted');
@@ -711,7 +719,7 @@ test('physical overrides govern geometry independently and never restore a coars
   api.checkWorld(world);
 });
 test('native geometry sync contains only anonymous clipped fragments without hidden content or component bounds', () => {
-  const { world, map } = nativeFineFixture(); map.fog.fill(1); map.subFog = Object.fromEntries(Array.from({length: 576}, (_, i) => [i, 1]));
+  const { world, map } = nativeFineFixture(); map.fog.fill(1);
   for (const o of map.objects) { o.notes = 'GM-only'; o.secrets = [{ id: 's-' + o.id, label: 'secret', kind: 'roll', range: 1, check: 'check', tiers: {crit:'secret', success:'secret', fail:'secret', fumble:'secret'} }]; }
   install(world); const payload = api.playerWorld(api.getWorld(), map.id).maps[0];
   assert.deepEqual(payload.objects, []); assert.deepEqual(payload.seen.objects, []); assert.ok(payload.architectureFragments.length);
@@ -740,8 +748,7 @@ test('native room layouts restore door state atomically and preserve all door co
   api.checkWorld(api.getWorld(), true);
 });
 test('sliding native door safe close prevents partial furniture and state changes', () => {
-  const { world, map } = fixture(); map.subdivisions = Array.from({ length: 100 }, (_, i) => i);
-  const wall = { ...api.newObject('object', 8, 0, 1, 10), id: 'wall', geometry: { kind: 'wall', a: {x:24,y:0}, b:{x:24,y:30}, thickness:100, material:'wall' } };
+  const { world, map } = fixture();   const wall = { ...api.newObject('object', 8, 0, 1, 10), id: 'wall', geometry: { kind: 'wall', a: {x:24,y:0}, b:{x:24,y:30}, thickness:100, material:'wall' } };
   map.objects.push(wall); const gate = map.objects.find(o => o.id === 'gate');
   gate.opening = { wallId: 'wall', offset: 21, width: 3, openStates: [1] }; api.migrateArchitecture(map);
   assert.equal(api.applySlidingMove(world, map, 'target', 3, 2), null);
@@ -790,14 +797,22 @@ test('interactive table arrangements run atomically, keep reset, bump state revi
 });
 
 test('interactive destination occupancy rejects the whole batch and allows edge touching and nonblocking decorations', () => {
-  for (const obstacle of ['object','person','terrain','geometry']) {
+  for (const obstacle of ['object','person','terrain','fine terrain','blank terrain','unknown terrain','geometry']) {
     const {world,map}=interactiveFixture();
     if(obstacle==='object')map.objects.push({...api.newObject('object',3,4,1,1),id:'blocker',height:1});
     if(obstacle==='person')map.tokens.push({id:'person',pcId:null,name:'人',color:'#fff',x:3,y:4});
-    if(obstacle==='terrain')map.cells[4*map.width+3]='wall';
+    if(obstacle==='terrain')setBaseTerrain(map,3,4,'wall');
+    if(obstacle==='fine terrain')map.fineCells[(4*3)*map.width*3+3*3]='wall';
+    if(obstacle==='blank terrain'){
+      map.cells[4*map.width+3]='';
+      for(let sy=0;sy<3;sy++)for(let sx=0;sx<3;sx++)map.fineCells[(4*3+sy)*map.width*3+3*3+sx]='';
+    }
+    if(obstacle==='unknown terrain'){
+      map.cells[4*map.width+3]='void';
+      for(let sy=0;sy<3;sy++)for(let sx=0;sx<3;sx++)map.fineCells[(4*3+sy)*map.width*3+3*3+sx]='void';
+    }
     if(obstacle==='geometry'){
-      map.subdivisions=Array.from({length:map.width*map.height},(_,i)=>i);
-      map.objects.push({...api.newObject('object',3,4,1,1),id:'thin',geometry:{kind:'wall',a:{x:10,y:12},b:{x:10,y:15},thickness:100,material:'wall'}});
+            map.objects.push({...api.newObject('object',3,4,1,1),id:'thin',geometry:{kind:'wall',a:{x:10,y:12},b:{x:10,y:15},thickness:100,material:'wall'}});
     }
     install(world);api.setUI({mode:'run'});const before=api.getWorld();
     assert.ok(api.applyRoomLayout(map.id,'games','game-separated'));assert.equal(api.getWorld(),before,obstacle+' must not partially move tables/chairs');

@@ -1,11 +1,11 @@
 import { identityKnowledge } from './identity';
-import { terrainAtSubcell } from './terrain';
-import { materialAtCell, materialAtSubcell } from './material';
+import { materialAtCell } from './material';
 import { objectEnabled } from '../core/objectData.js';
 import { clipArchitecture, isArchitectureObject, migrateArchitecture } from './architecture';
-import { repairOrphanSubcells, repairWorld } from '../core/schema.js';
+import { repairWorld } from '../core/schema.js';
 import { current, isDraft, type Draft } from 'immer';
-import type { GameMap, MapObject, SeenObject, VisionLayer, World } from '../core/types';
+import { buildFineCells } from '../core/grid';
+import type { GameMap, Id, MapObject, SeenObject, VisionLayer, World } from '../core/types';
 import { linesToFlow } from '../rules/flow';
 import { DEFAULT_MATERIALS } from '../core/defaults';
 import { cloneLayer, emptyVision, mergeLayers, pruneMemory, spatialFog, visionKey } from './vision';
@@ -15,11 +15,10 @@ import { cloneLayer, emptyVision, mergeLayers, pruneMemory, spatialFog, visionKe
 
 type Rect = { x: number; y: number; w: number; h: number };
 
-export function anyVisible(m: { width: number; height: number; fog: number[]; subdivisions?: number[]; subFog?: Record<number, number> }, r: Rect) {
+export function anyVisible(m: { width: number; height: number; fog: number[] }, r: Rect) {
   for (let y = Math.max(0, r.y); y < Math.min(m.height, r.y + r.h); y++)
     for (let x = Math.max(0, r.x); x < Math.min(m.width, r.x + r.w); x++) {
-      if (!(m.subdivisions ?? []).includes(y * m.width + x)) { if (m.fog[y * m.width + x] === 1) return true; }
-      else for (let sy = 0; sy < 3; sy++) for (let sx = 0; sx < 3; sx++) if (m.subFog?.[(y * 3 + sy) * m.width * 3 + x * 3 + sx] === 1) return true;
+      if (m.fog[y * m.width + x] === 1) return true;
     }
   return false;
 }
@@ -46,25 +45,18 @@ function syncLayer(m: Draft<GameMap>, L: Draft<VisionLayer>, rev: number) {
   // repeats thousands of trapped subdivision lookups on every movement.
   const source = isDraft(m) ? current(m) : m;
   const layer = isDraft(L) ? current(L) : L;
-  L.seen.cellRevs ??= Array(m.width * m.height).fill(0); L.seen.observed ??= {}; L.seen.objectRevs ??= {}; L.seen.subRevs ??= {}; L.seen.architectureRevs ??= {};
-  for (let key = 0; key < source.width * source.height * 9; key++) if (spatialFog(source, layer, key) === 1) { L.seen.observed[key] = rev; L.seen.subRevs[key] = rev; L.seen.architectureRevs[key] = rev; }
+  L.seen.cellRevs ??= Array(m.width * m.height).fill(0); L.seen.observed ??= {}; L.seen.objectRevs ??= {}; L.seen.architectureRevs ??= {};
+  for (let key = 0; key < source.width * source.height * 9; key++) if (spatialFog(source, layer, key) === 1) { L.seen.observed[key] = rev; L.seen.architectureRevs[key] = rev; }
   const n = m.width * m.height;
-  L.seen.materialCells ??= {}; L.seen.materialSubCells ??= {};
+  L.seen.materialCells ??= {};
   for (let i = 0; i < n; i++) if (L.fog[i] === 1) {
     L.seen.cells[i] = m.cells[i]; L.seen.cellRevs[i] = rev;
     const mid = materialAtCell(m, i);
     if (mid) L.seen.materialCells[i] = mid; else delete L.seen.materialCells[i];
   }
-  L.seen.subCells ??= {};
-  for (const [key, f] of Object.entries(L.subFog ?? {})) if (f === 1) {
-    const sx = +key % (m.width * 3), sy = Math.floor(+key / (m.width * 3));
-    L.seen.subCells[+key] = terrainAtSubcell(m, sx, sy);
-    const mid = materialAtSubcell(m, sx, sy);
-    if (mid) L.seen.materialSubCells[+key] = mid; else delete L.seen.materialSubCells[+key];
-  }
   const historical = clipArchitecture(source, layer, 2, layer.seen.architecture ?? []);
   L.seen.architecture = [...historical, ...clipArchitecture(source, layer)];
-  const box = { ...source, fog: layer.fog, subFog: layer.subFog };
+  const box = { ...source, fog: layer.fog };
   const live = source.objects.filter((o) => objectEnabled(source, o) && o.kind === 'object' && !isArchitectureObject(o) && !o.hidden && anyVisible(box, o));
   const liveIds = new Set(live.map((o) => o.id));
   // 记忆里的东西，原地方现在看得见了、但它已经不在那（被搬走/删掉/藏起来）→ 忘掉
@@ -108,19 +100,89 @@ export function syncMemory(d: Draft<World>) {
 
 /** 旧存档（只有 0/1 迷雾）补上记忆字段。 */
 export function migrateWorld(w: World): World {
-  repairOrphanSubcells(w);
+  const v1 = (w as { version?: number }).version === 1;
   for (const m of w.maps) {
     migrateArchitecture(m);
+    // v1（粗格 + 稀疏子格覆盖）→ v2（完整小格数组）。
+    if (!m.fineCells) {
+      m.fineCells = buildFineCells(m.width, m.height, m.cells ?? []);
+      // 旧版的子格只对当时列在 subdivisions 里的主格有效；取消细分后遗留的孤儿键
+      // 不能重新长回来。这里按父格过滤，坏 key/出界 key 直接丢。
+      const legacySubs = (m as { subdivisions?: number[] }).subdivisions;
+      const subs = new Set(Array.isArray(legacySubs) ? legacySubs : []);
+      const legacy = (m as { subCells?: Record<number, string> }).subCells;
+      if (legacy) {
+        const fw = m.width * 3, limit = fw * m.height * 3;
+        for (const [rawKey, value] of Object.entries(legacy)) {
+          const key = +rawKey;
+          if (!Number.isInteger(key) || key < 0 || key >= limit) continue;
+          const x3 = key % fw, y3 = Math.floor(key / fw);
+          if (!subs.has(Math.floor(y3 / 3) * m.width + Math.floor(x3 / 3))) continue;
+          m.fineCells[key] = value;
+        }
+      }
+    }
+    if (!m.fineMaterials) {
+      const legacy = (m as { materialSubCells?: Record<number, Id> }).materialSubCells;
+      if (legacy) {
+        const legacySubs = (m as { subdivisions?: number[] }).subdivisions;
+        const subs = new Set(Array.isArray(legacySubs) ? legacySubs : []);
+        const fw = m.width * 3, limit = fw * m.height * 3;
+        const kept: Record<number, Id> = {};
+        for (const [rawKey, value] of Object.entries(legacy)) {
+          const key = +rawKey;
+          if (!Number.isInteger(key) || key < 0 || key >= limit) continue;
+          const x3 = key % fw, y3 = Math.floor(key / fw);
+          if (!subs.has(Math.floor(y3 / 3) * m.width + Math.floor(x3 / 3))) continue;
+          kept[key] = value;
+        }
+        if (Object.keys(kept).length) m.fineMaterials = kept;
+      }
+    }
     if (!m.seen) m.seen = { cells: m.cells.map((c, i) => (m.fog[i] === 1 ? c : '')), objects: [] };
     m.autoFog ??= true;
     m.rooms ??= [];
     m.roomCells ??= new Array(m.width * m.height).fill('');
     m.views ??= {};
     m.spawn ??= null;
-    // 新建筑旧记忆缺子格时不继承整格揭示；自动视野从真实眼睛重新计算。
-    if (m.subdivisions?.length && !m.autoFog && !m.subFog) m.subFog = {};
+    // 旧版的 observed / architectureRevs 也按小格 key 记；父格已取消细分的孤儿键
+    // 要跟地形/材质一起清掉，否则历史墙裁剪还会读到。
+    const legacySubs = (m as { subdivisions?: number[] }).subdivisions;
+    if (v1 || Array.isArray(legacySubs)) {
+      const subs = new Set(legacySubs);
+      const fw = m.width * 3, limit = fw * m.height * 3;
+      const dropOrphans = (data?: Record<number, number>) => {
+        if (!data || typeof data !== 'object') return;
+        for (const rawKey of Object.keys(data)) {
+          const key = +rawKey;
+          if (!Number.isInteger(key) || key < 0 || key >= limit) {
+            delete (data as Record<string, unknown>)[rawKey];
+            continue;
+          }
+          const parent = Math.floor(Math.floor(key / fw) / 3) * m.width + Math.floor((key % fw) / 3);
+          if (!subs.has(parent)) delete data[key];
+        }
+      };
+      for (const L of [m.seen, ...Object.values(m.views).map((v) => v.seen)]) {
+        if (!L || typeof L !== 'object') continue;
+        dropOrphans((L as { observed?: Record<number, number> }).observed);
+        dropOrphans((L as { architectureRevs?: Record<number, number> }).architectureRevs);
+      }
+    }
+    delete (m as { subdivisions?: unknown }).subdivisions;
+    delete (m as { subCells?: unknown }).subCells;
+    delete (m as { materialSubCells?: unknown }).materialSubCells;
+    delete (m as { subFog?: unknown }).subFog;
+    for (const L of [m.seen, ...Object.values(m.views).map((v) => v.seen)]) {
+      delete (L as { subCells?: unknown }).subCells;
+      delete (L as { materialSubCells?: unknown }).materialSubCells;
+      delete (L as { subRevs?: unknown }).subRevs;
+    }
+    for (const L of Object.values(m.views)) delete (L as { subFog?: unknown }).subFog;
     for (const o of m.objects) for (const s of o.secrets) { s.kind ??= 'roll'; s.range ??= 1; }
   }
+  if (v1) w.version = 2;
+  w.version = 2;
   w.materials ??= structuredClone(DEFAULT_MATERIALS);
   w.visionMode ??= 'shared';
   w.visionGroups ??= [];
@@ -135,7 +197,7 @@ export function migrateWorld(w: World): World {
   let maxRev = w.observationSeq ?? 0;
   for (const m of w.maps) for (const L of [m, ...Object.values(m.views)]) {
     for (const value of L.seen.cellRevs ?? []) maxRev = Math.max(maxRev, value ?? 0);
-    for (const field of [L.seen.observed, L.seen.objectRevs, L.seen.subRevs, L.seen.architectureRevs])
+    for (const field of [L.seen.observed, L.seen.objectRevs, L.seen.architectureRevs])
       for (const value of Object.values(field ?? {})) maxRev = Math.max(maxRev, value);
   }
   w.observationSeq = maxRev;

@@ -100,8 +100,11 @@ test('自由行动：玩家窗口收到转向回执是成功，不是失败', ()
 test('自由行动：要检定的宽坑开判定也不算失败', () => {
   const { map } = fixture();
   api.update((d) => {
-    d.maps[0].cells[4 * 10 + 5] = 'hole'; // 北边两格都是坑
-    d.maps[0].cells[3 * 10 + 5] = 'hole';
+    const m = d.maps[0];
+    for (const y of [4, 3]) {
+      m.cells[y * 10 + 5] = 'hole';
+      for (let sy = 0; sy < 3; sy++) for (let sx = 0; sx < 3; sx++) m.fineCells[(y * 3 + sy) * m.width * 3 + 5 * 3 + sx] = 'hole';
+    }
     d.party[0].attributes = { 力量: 50, 敏捷: 50, 意志: 50, 观察: 50, 智慧: 50, 魅力: 50 };
   });
   api.openPlayerWindow('pc', true);
@@ -122,7 +125,7 @@ test('自由行动：要检定的宽坑开判定也不算失败', () => {
 
 test('自由行动：坑前确认和跳过去成功都不该是红条', () => {
   const { map } = fixture();
-  api.update((d) => { d.maps[0].cells[4 * 10 + 5] = 'hole'; }); // 北边一格是坑
+  api.update((d) => { const m = d.maps[0]; m.cells[4 * 10 + 5] = 'hole'; for (let sy = 0; sy < 3; sy++) for (let sx = 0; sx < 3; sx++) m.fineCells[(4 * 3 + sy) * m.width * 3 + 5 * 3 + sx] = 'hole'; }); // 北边一格是坑
   api.openPlayerWindow('pc', true);
   const win = windows.at(-1);
   const move = (dx, dy) => api.onMove({ type: 'move', dx, dy, __ts: 'ts-map', seq: 's2', from: api.SESSION, inst: 'inst', born: 1 }, win);

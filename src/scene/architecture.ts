@@ -1,9 +1,9 @@
 import { objectEnabled } from '../core/objectData.js';
 import { architectureGeometry, isArchitectureObject } from '../core/architectureData.js';
 export { architectureGeometry, architectureWalls, architectureDoors, architectureObjectBounds, isArchitectureObject, openingIsOpen, migrateArchitecture, normalizeArchitectureBounds } from '../core/architectureData.js';
-import type { ArchitectureFragment, GameMap, Point, Token, Wall, World } from '../core/types';
-import { isSubdivided, subKey, terrainBlockers } from './terrain';
-export { isSubdivided, subKey } from './terrain';
+import type { ArchitectureFragment, GameMap, Point, Token, World } from '../core/types';
+import { isSubdivided, terrainBlockers } from './terrain';
+export { isSubdivided } from './terrain';
 
 export const tokenPosition = (t: { x: number; y: number; subcell?: Point }): Point => t.subcell
   ? { x: (t.subcell.x + 0.5) / 3, y: (t.subcell.y + 0.5) / 3 }
@@ -20,22 +20,9 @@ export const anchorFromPoint = (p: Point): Point => {
   const cx = Math.floor(p.x), cy = Math.floor(p.y);
   return { x: Math.min(2, Math.max(0, Math.floor((p.x - cx) * 3 + 1e-8))), y: Math.min(2, Math.max(0, Math.floor((p.y - cy) * 3 + 1e-8))) };
 };
-export function fogAt(m: GameMap, L: { fog: number[]; subFog?: Record<number, number> }, x: number, y: number) {
-  if (isSubdivided(m, x, y)) return L.subFog?.[subKey(m, Math.floor(x * 3), Math.floor(y * 3))] ?? 0;
+export function fogAt(m: GameMap, L: { fog: number[] }, x: number, y: number) {
   return L.fog[Math.floor(y) * m.width + Math.floor(x)] ?? 0;
 }
-export function wallCovered(m: Pick<GameMap, 'width' | 'height' | 'subdivisions'>, w: Wall) {
-  const subs = new Set(m.subdivisions);
-  const length = Math.abs(w.b.x - w.a.x) + Math.abs(w.b.y - w.a.y);
-  for (let i = 0; i < length; i++) {
-    const x = w.a.x + (i + 0.5) * Math.sign(w.b.x - w.a.x), y = w.a.y + (i + 0.5) * Math.sign(w.b.y - w.a.y);
-    const candidates = w.a.x === w.b.x ? [[Math.floor(x / 3 - 1e-7), Math.floor(y / 3)], [Math.floor(x / 3), Math.floor(y / 3)]]
-      : [[Math.floor(x / 3), Math.floor(y / 3 - 1e-7)], [Math.floor(x / 3), Math.floor(y / 3)]];
-    if (!candidates.some(([cx, cy]) => cx >= 0 && cy >= 0 && cx < m.width && cy < m.height && subs.has(cy * m.width + cx))) return false;
-  }
-  return true;
-}
-
 export function segmentHitsRect(a: Point, b: Point, r: { x: number; y: number; w: number; h: number }, pad = 0) {
   let lo = 0, hi = 1;
   for (const [p, delta, min, max] of [[a.x, b.x - a.x, r.x - pad, r.x + r.w + pad], [a.y, b.y - a.y, r.y - pad, r.y + r.h + pad]]) {
@@ -89,7 +76,7 @@ export function setTokenPosition(m: GameMap, t: Token, p: Point) {
   if (isSubdivided(m, p.x, p.y)) t.subcell = { x: Math.floor(p.x * 3 + 1e-8), y: Math.floor(p.y * 3 + 1e-8) };
   else delete t.subcell;
 }
-export function clipArchitecture(m: GameMap, L: { fog: number[]; subFog?: Record<number, number> }, value = 1, geometry: ArchitectureFragment[] = architectureGeometry(m, true).filter(r => !r.hidden)) {
+export function clipArchitecture(m: GameMap, L: { fog: number[] }, value = 1, geometry: ArchitectureFragment[] = architectureGeometry(m, true).filter(r => !r.hidden)) {
   const out: ArchitectureFragment[] = [];
   for (const r of geometry) {
     const scale = 3;

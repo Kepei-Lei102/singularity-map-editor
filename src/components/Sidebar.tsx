@@ -83,10 +83,9 @@ export function Sidebar() {
             </span>
           </Row>
         )}
-        {['subdivide', 'unsubdivide'].includes(ui.tool) && <div className="hint">拖出主格矩形，松手整次应用；只有手动细分区启用0.25米吸附。取消不会删除墙、门或棋子。</div>}
         {['wall', 'glass'].includes(ui.tool) && <>
           <Row label="墙厚 mm"><Num value={ui.wallThickness} min={1} max={750} onChange={v => setUI({ wallThickness: Math.max(1, Math.min(750, v)) })} /></Row>
-          <div className="hint">在细分区拖出水平或竖直中心线。墙厚向两侧平分；实体墙挡视线，玻璃透视，两者挡路。</div>
+          <div className="hint">在地图上拖出水平或竖直中心线，任意小格坐标都能落墙。墙厚向两侧平分；实体墙挡视线，玻璃透视，两者挡路。</div>
         </>}
         {ui.tool === 'archDoor' && <><Row label="门净宽 m"><select value={ui.doorWidth} onChange={e => setUI({ doorWidth: +e.target.value })}>{[2, 3, 4, 5, 6].map(n => <option key={n} value={n}>{n * .25}</option>)}</select></Row><div className="hint">点墙放置关闭的门洞；点已有门开关。也可在检查器操作。</div></>}
         {ui.tool === 'conn' && (
@@ -152,9 +151,9 @@ export function Sidebar() {
           <>
             <Row label="画笔精度"><span className="inline">
               <button className={ui.fine ? '' : 'on'} onClick={() => setUI({ fine: false })}>大格</button>
-              <button className={ui.fine ? 'on' : ''} onClick={() => setUI({ fine: true, showSubgrid: true })}>小格 1/3</button>
+              <button className={ui.fine ? 'on' : ''} onClick={() => setUI({ fine: true, showSubgrid: true })}>小格编辑</button>
             </span></Row>
-            <div className="hint">流程：用「细分为3×3」框选格子（会自动切到小格）。小格里放物件/触发区按 1/3 格吸附，画笔/矩形填充/橡皮改的是子格地形，落到的格子会自动细分；大格画笔会把这一格下的子格覆盖清掉。放完点「大格」回到整格。</div>
+            <div className="hint">小格编辑：画笔/矩形填充/橡皮改的是 1/3 小格地形，物件/触发区落点按 1/3 格吸附；大格画笔会把整格 3×3 一起铺掉。不用先手动细分，任何格子都能直接画。缩得很小时画面会把整格合并成一块底色，避免接缝噪点；放大到小格 ≥4px 自动恢复，小格编辑模式始终显示真实小格。</div>
           </>
         )}
         <Check label="显示子格线" value={ui.showSubgrid} onChange={(v) => setUI({ showSubgrid: v })} />
@@ -230,7 +229,15 @@ export function Sidebar() {
                 if (!confirm(`删除地形「${terrain.name}」？用了它的格子会变空。`)) return;
                 update((d) => {
                   d.terrains = d.terrains.filter((t) => t.id !== terrain.id);
-                  d.maps.forEach((m) => { m.cells = m.cells.map((c) => (c === terrain.id ? '' : c)); });
+                  d.maps.forEach((m) => {
+                    for (let i = 0; i < m.cells.length; i++) if (m.cells[i] === terrain.id) m.cells[i] = '';
+                    const fw = m.width * 3;
+                    for (let key = 0; key < m.fineCells.length; key++) {
+                      if (m.fineCells[key] !== terrain.id) continue;
+                      const x3 = key % fw, y3 = Math.floor(key / fw);
+                      m.fineCells[key] = m.cells[Math.floor(y3 / 3) * m.width + Math.floor(x3 / 3)] ?? '';
+                    }
+                  });
                 });
               }}>删除这个地形</button>
             </div>
@@ -271,11 +278,11 @@ export function Sidebar() {
                   d.materials = (d.materials ?? []).filter((m) => m.id !== material.id);
                   for (const m of d.maps) {
                     for (const [k, v] of Object.entries(m.materialCells ?? {})) if (v === material.id) delete m.materialCells![+k];
-                    for (const [k, v] of Object.entries(m.materialSubCells ?? {})) if (v === material.id) delete m.materialSubCells![+k];
+                    for (const [k, v] of Object.entries(m.fineMaterials ?? {})) if (v === material.id) delete m.fineMaterials![+k];
                     const memories = [m.seen, ...Object.values(m.views).map((L) => L.seen)];
                     for (const mem of memories) {
                       for (const [k, v] of Object.entries(mem.materialCells ?? {})) if (v === material.id) delete mem.materialCells![+k];
-                      for (const [k, v] of Object.entries(mem.materialSubCells ?? {})) if (v === material.id) delete mem.materialSubCells![+k];
+
                     }
                   }
                 });

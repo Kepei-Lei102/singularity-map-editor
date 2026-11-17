@@ -11,7 +11,7 @@ const root = fileURLToPath(new URL('..', import.meta.url));
 const temp = await mkdtemp(join(tmpdir(), 'ts-wall-sub-test-'));
 const bundle = join(temp, 'editor.cjs');
 await build({
-  stdin: { contents: `export * from './src/runtime/actions'; export * from './src/core/defaults'; export * from './src/core/store'; export * from './src/scene/architecture'; export { checkArchitecture } from './src/core/schema';`, resolveDir: root },
+  stdin: { contents: `export * from './src/runtime/actions'; export * from './src/core/defaults'; export * from './src/core/store'; export * from './src/scene/architecture'; export * from './src/scene/terrain'; export { checkArchitecture } from './src/core/schema';`, resolveDir: root },
   outfile: bundle, bundle: true, platform: 'node', format: 'cjs', logLevel: 'silent',
 });
 const storage = () => { const data = new Map(); return { getItem: (k) => data.get(k) ?? null, setItem: (k, v) => data.set(k, v), removeItem: (k) => data.delete(k) }; };
@@ -27,7 +27,6 @@ function fixture() {
   const world = api.emptyWorld();
   const map = api.newMap('测试图', '测试', 0, 10, 10, 'floor', false);
   map.autoFog = false;
-  map.subdivisions = [];
   map.objects = [];
   world.maps = [map];
   api.replaceWorld(world);
@@ -35,44 +34,43 @@ function fixture() {
   return { world, map };
 }
 
-test('放薄墙时自动细分经过的主格，不再要求先手动细分', () => {
+test('放薄墙不再要求先细分，任意小格坐标都能落墙', () => {
   const { map } = fixture();
-  assert.deepEqual(map.subdivisions, []);
   const error = api.addArchitectureWall(map.id, { x: 3, y: 1 }, { x: 3, y: 4 }, 'wall', 120);
   assert.equal(error, null);
   const after = api.findMap(api.getWorld(), map.id);
-  assert.ok(after.subdivisions.length > 0);
-  // 墙穿过 y=1..4 两行，落在这两行对应的主格上
-  assert.ok(after.subdivisions.includes(0));
-  assert.ok(after.subdivisions.includes(10));
+  assert.equal(after.subdivisions, undefined);
+  assert.equal(after.subCells, undefined);
   const wall = api.architectureWalls(after)[0];
   assert.ok(wall);
-  assert.equal(api.wallCovered(after, wall), true);
+  assert.deepEqual(wall.a, { x: 3, y: 1 });
   assert.doesNotThrow(() => api.checkArchitecture(after));
 });
 
-test('玻璃墙同样自动细分', () => {
+test('玻璃墙同样不需要细分', () => {
   const { map } = fixture();
   const error = api.addArchitectureWall(map.id, { x: 6, y: 0 }, { x: 6, y: 9 }, 'glass', 120);
   assert.equal(error, null);
   const after = api.findMap(api.getWorld(), map.id);
-  assert.ok(after.subdivisions.length >= 3);
+  assert.equal(after.subdivisions, undefined);
   assert.doesNotThrow(() => api.checkArchitecture(after));
 });
 
-test('已经细分过的区域不会重复添加', () => {
+test('墙可以跨过任意主格，门洞仍然按小格长度校验', () => {
   const { map } = fixture();
-  assert.equal(api.subdivideRegion(map.id, { x: 0, y: 0, w: 10, h: 10 }), null);
-  const before = api.findMap(api.getWorld(), map.id).subdivisions.length;
-  const error = api.addArchitectureWall(map.id, { x: 3, y: 1 }, { x: 3, y: 4 }, 'wall', 120);
+  const error = api.addArchitectureWall(map.id, { x: 0, y: 3 }, { x: 9, y: 3 }, 'wall', 120);
   assert.equal(error, null);
   const after = api.findMap(api.getWorld(), map.id);
-  assert.equal(after.subdivisions.length, before);
+  const wall = api.architectureWalls(after)[0];
+  assert.equal(api.addArchitectureDoor(map.id, wall.id, 2, 3), null);
+  const withDoor = api.findMap(api.getWorld(), map.id);
+  assert.doesNotThrow(() => api.checkArchitecture(withDoor));
 });
 
-test('非细分墙（普通地形墙）不受影响', () => {
+test('普通地形墙和小格地形互不影响', () => {
   const { map } = fixture();
-  api.paintCells?.(map.id, { x: 1, y: 1, w: 1, h: 1 }, 'wall');
+  api.paintTerrainSubcells(map.id, [[3, 3]], 'wall');
   const after = api.findMap(api.getWorld(), map.id);
-  assert.equal(after.subdivisions.length, 0);
+  assert.equal(after.subdivisions, undefined);
+  assert.equal(api.terrainAtSubcell(after, 3, 3), 'wall');
 });

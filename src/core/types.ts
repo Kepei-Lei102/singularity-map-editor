@@ -198,7 +198,10 @@ export interface GameMap {
   height: number;
   /** 一大格多少厘米。默认 75；只影响尺度和贴墙精度，规则仍按格算。必须是 75 的整倍数或整因数。 */
   cellCm?: number;
+  /** 大格地形底：规则查询和旧存档的基准；小格细节看 fineCells。 */
   cells: string[]; // terrain id，'' = 空
+  /** 小格地形，长度 = width*3 * height*3；key = y3*(width*3)+x3。 */
+  fineCells: string[];
   d100: number[]; // 1 = D100 区域
   /**
    * 每格相对本层地面的高度，单位是「格」（1 格 = 0.75 米）。
@@ -214,16 +217,12 @@ export interface GameMap {
   views: Record<Id, VisionLayer>; // 视野各自独立时，每个玩家角色（pcId）自己的一份迷雾和记忆
   spawn: { x: number; y: number } | null; // 试玩出生点（null = 自动：最北、最居中的门外）
   objects: MapObject[];
-  /** 独立材质层：主格材质 id；没有就不覆写地形颜色。 */
+  /** 独立材质层：主格材质底；没有就不覆写地形颜色。 */
   materialCells?: Record<number, Id>;
-  /** 细分格的材质覆盖；key 和 subCells 一样。 */
-  materialSubCells?: Record<number, Id>;
-  subdivisions?: number[];
-  /** 子格地形覆盖：key = sy3 * width*3 + sx3，仅对细分过的格子生效；没有的退回 cells。 */
-  subCells?: Record<number, string>;
+  /** 小格材质覆盖；key = y3*(width*3)+x3，没有就退回 materialCells。 */
+  fineMaterials?: Record<number, Id>;
   architecture?: Architecture;
   architectureFragments?: ArchitectureFragment[]; // 仅玩家同步的实时可见片段
-  subFog?: Record<number, number>; // key = sy*(width*3)+sx，仅明确细分处
   slidingPuzzles?: SlidingPuzzle[];
   tokens: Token[];
   notes: string;
@@ -251,21 +250,17 @@ export interface SeenObject {
 
 /** 一份迷雾 + 记忆。全队共享时就是地图上的 fog / seen；各自独立时每个人一份。 */
 export interface VisionLayer {
-  subFog?: Record<number, number>;
   fog: number[];
   seen: Memory;
 }
 
 export interface Memory {
   cellRevs?: number[];
-  subRevs?: Record<number, number>;
   architectureRevs?: Record<number, number>;
-  observed?: Record<number, number>; // 子格空间的实际观察版本，空地同样是消失证据
+  observed?: Record<number, number>; // 空间的实际观察版本，空地同样是消失证据
   objectRevs?: Record<Id, number>;
   architecture?: ArchitectureFragment[];
-  subCells?: Record<number, string>;
   materialCells?: Record<number, Id>;
-  materialSubCells?: Record<number, Id>;
   cells: string[]; // 记得的地形，'' = 不记得
   objects: SeenObject[];
 }
@@ -769,7 +764,7 @@ export interface World {
   utterances?: Utterance[] | null;
   /** 只在玩家载荷里：试玩里这个窗口自己的处境——被暂停了？轮到他了吗？ */
   trialFlags?: { paused: boolean; isCurrent: boolean } | null;
-  version: 1;
+  version: 2;
   name: string;
   terrains: Terrain[];
   materials?: Material[];

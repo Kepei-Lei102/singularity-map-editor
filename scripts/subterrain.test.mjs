@@ -11,7 +11,7 @@ const root = fileURLToPath(new URL('..', import.meta.url));
 const temp = await mkdtemp(join(tmpdir(), 'ts-subterrain-'));
 const bundle = join(temp, 'editor.cjs');
 await build({
-  stdin: { contents: `export * from './src/scene/terrain'; export * from './src/scene/architecture'; export * from './src/core/defaults'; export * from './src/core/schema.js'; export * from './src/runtime/actions'; export * from './src/core/store'; export * from './src/runtime/sync';`, resolveDir: root },
+  stdin: { contents: `export * from './src/scene/terrain'; export * from './src/scene/architecture'; export * from './src/core/defaults'; export * from './src/core/grid'; export * from './src/core/schema.js'; export * from './src/runtime/actions'; export * from './src/core/store'; export * from './src/runtime/sync'; export * from './src/scene/memory'; export * from './src/scene/render'; export * from './src/runtime/importRabbithole';`, resolveDir: root },
   outfile: bundle, bundle: true, platform: 'node', format: 'cjs', logLevel: 'silent',
 });
 const storage = () => { const data = new Map(); return { getItem: (k) => data.get(k) ?? null, setItem: (k, v) => data.set(k, v), removeItem: (k) => data.delete(k) }; };
@@ -33,47 +33,44 @@ function fixture() {
   return { world, map };
 }
 
-test('子格地形：先看覆盖，没有退回大格', () => {
-  const { world, map } = fixture();
-  api.subdivideRegion(map.id, { x: 2, y: 2, w: 1, h: 1 });
+test('小格地形：完整数组，读小格；没有覆盖就退回大格底', () => {
+  const { map } = fixture();
   const m = api.findMap(api.getWorld(), map.id);
+  assert.equal(m.fineCells.length, m.width * m.height * 9);
   assert.equal(api.terrainAtSubcell(m, 6, 6), 'floor');
   api.paintTerrainSubcells(map.id, [[6, 6]], 'grass');
   const after = api.findMap(api.getWorld(), map.id);
   assert.equal(api.terrainAtSubcell(after, 6, 6), 'grass');
-  assert.equal(api.terrainAtSubcell(after, 7, 6), 'floor'); // 没覆盖的子格还是大格地形
-  assert.equal(api.terrainAtSubcell(after, 3, 3), 'floor'); // 没细分的格子直接读大格
+  assert.equal(api.terrainAtSubcell(after, 7, 6), 'floor');
+  assert.equal(after.subdivisions, undefined);
+  assert.equal(after.subCells, undefined);
 });
 
-test('小格画笔落在没细分的格子会自动细分，并初始化迷雾/记忆', () => {
+test('小格画笔不需要先细分，也不会产生旧字段', () => {
   const { map } = fixture();
   api.paintTerrainSubcells(map.id, [[21, 21]], 'grass'); // 主格 (7,7)
   const m = api.findMap(api.getWorld(), map.id);
-  assert.ok(m.subdivisions.includes(7 * m.width + 7));
-  const key = api.subKey(m, 21, 21);
-  assert.equal(m.subCells[key], 'grass');
-  assert.equal(m.subFog[key], m.fog[7 * m.width + 7]);
-  assert.equal(m.seen.subCells[key], m.seen.cells[7 * m.width + 7]);
+  assert.equal(api.terrainAtSubcell(m, 21, 21), 'grass');
+  assert.equal(m.cells[7 * m.width + 7], 'floor'); // 大格底仍是规则层的值
+  assert.equal(m.subdivisions, undefined);
+  assert.equal(m.subCells, undefined);
+  assert.equal(m.subFog, undefined);
 });
 
-test('大格画笔会清掉这一格下的子格覆盖', () => {
+test('大格画笔把整格 3×3 小格一起铺成新地形', () => {
   const { map } = fixture();
   api.paintTerrainSubcells(map.id, [[6, 6]], 'grass');
   api.paintTerrainCells(map.id, [[2, 2]], 'rug');
   const m = api.findMap(api.getWorld(), map.id);
   assert.equal(m.cells[2 * m.width + 2], 'rug');
-  assert.equal(api.terrainAtSubcell(m, 6, 6), 'rug');
-  assert.equal(m.subCells[api.subKey(m, 6, 6)], undefined);
+  for (let sy = 6; sy < 9; sy++) for (let sx = 6; sx < 9; sx++) assert.equal(api.terrainAtSubcell(m, sx, sy), 'rug');
 });
 
-test('不可通行的子格地形按 1/3 小格挡路', () => {
+test('不可通行的小格地形按 1/3 小格挡路', () => {
   const { world, map } = fixture();
-  api.subdivideRegion(map.id, { x: 2, y: 2, w: 1, h: 1 });
   api.paintTerrainSubcells(map.id, [[7, 7]], 'wall'); // 主格 (2,2) 的中间小格
   const m = api.findMap(api.getWorld(), map.id);
-  // 从西往东穿过这格：小格墙在 y=2.33..2.67，路径 y=2.2 被扫到
   assert.equal(api.characterPathClear(world, m, { x: 2.2, y: 2.2 }, { x: 3.8, y: 2.2 }), false);
-  // 从上方绕开：y=1.5 碰不到这堵 1/3 小墙
   assert.equal(api.characterPathClear(world, m, { x: 1.5, y: 1.5 }, { x: 3.5, y: 1.5 }), true);
 });
 
@@ -85,79 +82,183 @@ test('空白地形仍然算不可通行（和旧规则一致）', () => {
   assert.equal(api.characterPathClear(world, m, { x: 3.5, y: 3.5 }, { x: 3.5, y: 3.5 }), false);
 });
 
-test('子格地形只能落在细分过的格子里，校验会拒绝', () => {
+test('存档校验要求完整 fineCells，并接受任意小格地形', () => {
   const good = api.emptyWorld();
   const gm = api.newMap('好图', '测试', 0, 10, 10, 'floor', false); gm.objects = [];
-  gm.subdivisions = [4 * 10 + 4];
-  gm.subCells = { [api.subKey(gm, 12, 12)]: 'grass' };
+  gm.fineCells[api.fineKeyOf(gm, 12, 12)] = 'grass';
   good.maps = [gm];
   assert.doesNotThrow(() => api.checkWorld(good));
 
   const bad = api.emptyWorld();
   const bm = api.newMap('坏图', '测试', 0, 10, 10, 'floor', false); bm.objects = [];
-  bm.subCells = { [api.subKey(bm, 0, 0)]: 'grass' }; // 没细分就写子格
+  delete bm.fineCells;
   bad.maps = [bm];
-  assert.throws(() => api.checkWorld(bad), /细分/);
+  assert.throws(() => api.checkWorld(bad), /fineCells/);
 });
 
-test('改地图尺寸时子格地形跟着平移', () => {
+test('改地图尺寸时小格地形跟着平移', () => {
   const { map } = fixture();
   api.paintTerrainSubcells(map.id, [[12, 9]], 'grass'); // 主格 (4,3)
-  api.resizeMap(map.id, 12, 10); // 左边不扩，宽度 +2
+  api.resizeMap(map.id, 12, 10);
   const m = api.findMap(api.getWorld(), map.id);
   assert.equal(api.terrainAtSubcell(m, 12, 9), 'grass');
-  assert.equal(api.terrainAtSubcell(m, 15, 9), 'floor'); // 平移后仍在同一张图，读到新格底色
+  assert.equal(api.terrainAtSubcell(m, 15, 9), 'floor');
 });
 
-test('点亮后记忆里记的是实际子格地形', () => {
+test('点亮后记忆仍按大格记地形', () => {
   const { map } = fixture();
   api.paintTerrainSubcells(map.id, [[6, 6]], 'grass');
   api.giveMapKnowledge(map.id);
   const m = api.findMap(api.getWorld(), map.id);
-  assert.equal(m.seen.subCells[api.subKey(m, 6, 6)], 'grass');
+  assert.equal(m.seen.cells[2 * m.width + 2], 'floor');
+  assert.equal(m.seen.subCells, undefined);
 });
 
-test('玩家同步只带看得见的子格地形', () => {
+test('玩家同步只带看得见的小格地形；变灰后只带大格记忆', () => {
   const { map } = fixture();
   api.update((d) => { const m = api.findMap(d, map.id); m.fog = m.fog.map(() => 1); });
   api.paintTerrainSubcells(map.id, [[6, 6]], 'grass');
   const m = api.findMap(api.getWorld(), map.id);
-  const L = { fog: m.fog, subFog: m.subFog, seen: m.seen };
-  const pm = api.playerMap(m, L);
-  const key = api.subKey(m, 6, 6);
-  assert.equal(pm.subCells[key], 'grass');
-  // 变灰之后，实时子格地形不再发给玩家（玩家只拿记忆里的）
-  api.update((d) => {
-    const mm = api.findMap(d, map.id);
-    mm.subFog[key] = 2; mm.fog[6 * mm.width + 6] = 2;
-  });
-  const m2 = api.findMap(api.getWorld(), map.id);
-  const pm2 = api.playerMap(m2, { fog: m2.fog, subFog: m2.subFog, seen: m2.seen });
-  assert.equal(pm2.subCells[key], undefined);
-  assert.equal(pm2.seen.subCells[key], 'grass');
-
-  // 只出现在子格地形里的材质，也要跟着玩家包一起发出去，不然渲染会变粉
+  const key = api.fineKeyOf(m, 6, 6);
+  const pm = api.playerMap(m, { fog: m.fog, seen: m.seen });
+  assert.equal(pm.fineCells[key], 'grass');
   const pw = api.playerWorld(api.getWorld(), map.id);
   assert.ok(pw.terrains.some((t) => t.id === 'grass'));
+
+  api.update((d) => { const mm = api.findMap(d, map.id); mm.fog[2 * mm.width + 2] = 2; });
+  const m2 = api.findMap(api.getWorld(), map.id);
+  const pm2 = api.playerMap(m2, { fog: m2.fog, seen: m2.seen });
+  assert.equal(pm2.fineCells[key], '');
+  assert.equal(pm2.seen.cells[2 * m2.width + 2], 'floor');
 });
 
-test('旧版取消细分留下的孤儿子格会被清掉，导出不再报错', () => {
-  const world = api.emptyWorld();
-  const m = api.newMap('停车场1F', '现实', 1, 45, 32, 'floor', false);
-  m.objects = [];
-  const keep = 10 * 45 + 10;
-  m.subdivisions = [keep];
+test('v1 存档（粗格 + 稀疏子格）迁移成完整 fineCells，并丢掉旧字段', () => {
+  const w = api.emptyWorld();
+  w.version = 1;
+  const m = api.newMap('旧图', '测试', 0, 10, 10, 'floor', false); m.objects = [];
+  delete m.fineCells;
+  m.subdivisions = [2 * 10 + 2];
   m.subCells = {
-    [api.subKey(m, 30, 30)]: 'grass', // 父格 (10,10)，还在细分列表里
-    [api.subKey(m, 0, 0)]: 'grass',   // 父格 (0,0)，旧版取消细分后残留
+    [api.fineKeyOf(m, 6, 6)]: 'grass', // 父格 (2,2) 在 subdivisions 里，保留
+    [api.fineKeyOf(m, 0, 0)]: 'wall',  // 父格 (0,0) 不在列表里：取消细分后的孤儿键，丢掉
   };
-  m.materialSubCells = { [api.subKey(m, 3, 3)]: 'wood' }; // 父格 (1,1)，同样残留
-  world.maps = [m];
-  assert.throws(() => api.checkWorld(world), /细分/);
+  m.materialSubCells = {
+    [api.fineKeyOf(m, 6, 6)]: 'wood',
+    [api.fineKeyOf(m, 21, 21)]: 'stone', // 父格 (7,7) 不在列表里，丢掉
+  };
+  m.seen.observed = {
+    [api.fineKeyOf(m, 6, 6)]: 7, // 父格 (2,2) 有效
+    [api.fineKeyOf(m, 21, 21)]: 8, // 父格 (7,7) 孤儿
+  };
+  m.seen.architectureRevs = { ...m.seen.observed };
+  m.seen.observed['nope'] = 9; // 坏 key 也要清掉
+  w.maps = [m];
+  const migrated = api.migrateWorld(w);
+  const mm = migrated.maps[0];
+  assert.equal(migrated.version, 2);
+  assert.equal(mm.fineCells.length, mm.width * mm.height * 9);
+  assert.equal(api.terrainAtSubcell(mm, 6, 6), 'grass');
+  assert.equal(api.terrainAtSubcell(mm, 7, 6), 'floor');
+  assert.equal(mm.subdivisions, undefined);
+  assert.equal(api.terrainAtSubcell(mm, 0, 0), 'floor');
+  assert.equal(mm.fineMaterials[api.fineKeyOf(mm, 21, 21)], undefined);
+  assert.equal(mm.seen.observed[api.fineKeyOf(mm, 6, 6)], 7);
+  assert.equal(mm.seen.observed[api.fineKeyOf(mm, 21, 21)], undefined);
+  assert.equal(mm.seen.architectureRevs[api.fineKeyOf(mm, 21, 21)], undefined);
+  assert.equal(mm.seen.observed['nope'], undefined);
+  assert.equal(mm.subCells, undefined);
+  assert.equal(mm.materialSubCells, undefined);
+  assert.doesNotThrow(() => api.checkWorld(migrated, true));
+});
 
-  assert.equal(api.repairOrphanSubcells(world), 2);
-  assert.equal(m.subCells[api.subKey(m, 0, 0)], undefined);
-  assert.equal(m.subCells[api.subKey(m, 30, 30)], 'grass');
-  assert.equal(m.materialSubCells[api.subKey(m, 3, 3)], undefined);
-  assert.doesNotThrow(() => api.checkWorld(world));
+
+test('缩小时小格合并成大格：取多数派地形，没有细节退回大格底', () => {
+  assert.equal(api.FINE_LOD_PX, 4);
+  assert.equal(api.fineLodAt(0.3), true);
+  assert.equal(api.fineLodAt(0.5), false);
+  assert.equal(api.fineLodAt(0.1, true), false);
+  const { map } = fixture();
+  // 标记 5 个小格：多数派是 grass；同格剩下的 4 格仍是 floor。
+  api.paintTerrainSubcells(map.id, [[6, 6], [7, 6], [8, 6], [6, 7], [7, 7]], 'grass');
+  const m = api.findMap(api.getWorld(), map.id);
+  assert.equal(api.aggregateTerrain(m, 2, 2), 'grass');
+  // 3 个 grass 对 6 个 floor：多数派仍是 floor，缩小时不画成一整块草。
+  api.paintTerrainCells(map.id, [[2, 2]], 'floor');
+  api.paintTerrainSubcells(map.id, [[6, 6], [7, 6], [8, 6]], 'grass');
+  const m2 = api.findMap(api.getWorld(), map.id);
+  assert.equal(api.aggregateTerrain(m2, 2, 2), 'floor');
+  assert.equal(api.aggregateTerrain(m2, 1, 1), 'floor');
+});
+
+test('缩小时材质也取多数派，纯色材质不会整层消失', () => {
+  const { map } = fixture();
+  api.paintMaterialSubcells(map.id, [[6, 6], [7, 6], [8, 6], [6, 7], [7, 7]], 'wood');
+  const m = api.findMap(api.getWorld(), map.id);
+  assert.equal(api.aggregateMaterial(m, 2, 2), 'wood');
+  assert.equal(api.aggregateMaterial(m, 1, 1), '');
+});
+
+
+test('铺空白格会同步 3×3 小格，但不抹掉已有小格细节', () => {
+  const world = api.emptyWorld();
+  const map = api.newMap('空白图', '测试', 0, 4, 4, '', false);
+  map.objects = [];
+  world.maps = [map];
+  api.replaceWorld(world);
+  // 大格底为空、但 (1,1) 已有一格草：这不算空白格。
+  api.paintTerrainSubcells(map.id, [[3, 3]], 'grass');
+  api.fillEmptyCells(map.id, 'floor');
+  const m = api.findMap(api.getWorld(), map.id);
+  assert.equal(m.cells[1 * m.width + 1], '');
+  assert.equal(api.terrainAtSubcell(m, 3, 3), 'grass');
+  assert.equal(m.cells[0], 'floor');
+  assert.equal(api.terrainAtSubcell(m, 0, 0), 'floor');
+  assert.equal(m.cells.every((c, i) => c === 'floor' || (i === 1 * m.width + 1 && c === '')), true);
+  assert.equal(m.fineCells.every((c) => c === 'floor' || c === 'grass' || c === ''), true);
+});
+
+test('Rabbithole 导入后 fineCells 跟着 cells 重建，不会整图空白', async () => {
+  const rh = {
+    levels: [{ name: '一楼', rows: 1, cols: 1, cells: { '0,0': {} } }],
+    rooms: [], objects: [], interactives: [], groups: [],
+  };
+  const file = new File([JSON.stringify(rh)], 'map.json', { type: 'application/json' });
+  const { world } = await api.importRabbithole(file);
+  const m = world.maps[0];
+  assert.equal(m.fineCells.length, m.width * m.height * 9);
+  assert.equal(api.terrainAtSubcell(m, 0, 0), 'yard'); // 一楼外圈
+  assert.equal(m.fineCells.every((c) => c === ''), false);
+});
+
+
+test('9 个小格全被擦空时，LOD 不再回退大格底', () => {
+  const { map } = fixture();
+  const all = [];
+  for (let sy = 0; sy < 3; sy++) for (let sx = 0; sx < 3; sx++) all.push([2 * 3 + sx, 2 * 3 + sy]);
+  api.paintTerrainSubcells(map.id, all, null);
+  const m = api.findMap(api.getWorld(), map.id);
+  assert.equal(api.aggregateTerrain(m, 2, 2), '');
+  assert.equal(api.cellFloor(api.getWorld(), m, 2, 2), 'wall');
+});
+
+
+test('parseWorld 拒绝非 1/2 版本、坏 maps 条目和非数组 party', () => {
+  const v3 = api.emptyWorld(); v3.version = 3;
+  assert.throws(() => api.parseWorld(JSON.stringify(v3)), /工程版本/);
+  const badMaps = api.emptyWorld(); badMaps.maps = [null];
+  assert.throws(() => api.parseWorld(JSON.stringify(badMaps)), /maps 列表/);
+  const badParty = api.emptyWorld(); badParty.party = {};
+  assert.throws(() => api.parseWorld(JSON.stringify(badParty)), /party 不是数组/);
+});
+
+
+test('v1 没有 subdivisions 时，observed 孤儿键也不会留下', () => {
+  const w = api.emptyWorld();
+  w.version = 1;
+  const m = api.newMap('旧图', '测试', 0, 4, 4, 'floor', false);
+  delete m.fineCells;
+  m.seen.observed = { [api.fineKeyOf(m, 3, 3)]: 1 };
+  w.maps = [m];
+  const mm = api.migrateWorld(w).maps[0];
+  assert.equal(mm.seen.observed[api.fineKeyOf(mm, 3, 3)], undefined);
 });

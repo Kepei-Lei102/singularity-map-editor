@@ -198,16 +198,13 @@ export function playerWorld(w: World, mapId: string | null = w.playerMapId, pcId
   const labels: Record<string, string> = {};
   if (src) numbering(w, src).forEach((n) => { if (keep.has(n.id)) labels[n.id] = n.label; });
   const usedTerrains = new Set(pm ? [
-    ...pm.cells, ...pm.seen.cells,
-    ...Object.values(pm.subCells ?? {}),
-    ...Object.values(pm.seen.subCells ?? {}),
-    ...Object.values(pm.views).flatMap((L) => [...L.seen.cells, ...Object.values(L.seen.subCells ?? {})]),
+    ...pm.cells, ...pm.seen.cells, ...(pm.fineCells ?? []),
+    ...Object.values(pm.views).flatMap((L) => L.seen.cells),
   ] : []);
   const usedMaterials = new Set(pm ? [
     ...Object.values(pm.materialCells ?? {}),
-    ...Object.values(pm.materialSubCells ?? {}),
+    ...Object.values(pm.fineMaterials ?? {}),
     ...Object.values(pm.seen.materialCells ?? {}),
-    ...Object.values(pm.seen.materialSubCells ?? {}),
   ] : []);
   const clues: PlayerClue[] = valid ? w.maps.flatMap(m => m.objects.flatMap(o => o.secrets.flatMap(s => {
     const r = s.revealed;
@@ -258,19 +255,25 @@ export function playerMap(m: GameMap, L: VisionLayer, pcId?: string): GameMap {
       return false;
     }).map(r => playerSeen(r, pcId, m.objects.find(o => o.id === r.id))),
     architecture: [...clipArchitecture(m, L, 1, L.seen.architecture ?? []), ...clipArchitecture(m, L, 2, L.seen.architecture ?? [])],
-    subCells: Object.fromEntries(Object.entries(L.seen.subCells ?? {}).filter(([key]) => L.subFog?.[+key])),
     materialCells: Object.fromEntries(Object.entries(L.seen.materialCells ?? {}).filter(([key]) => L.fog[+key])),
-    materialSubCells: Object.fromEntries(Object.entries(L.seen.materialSubCells ?? {}).filter(([key]) => L.subFog?.[+key])),
   };
+  const fineRows = m.width * 3;
+  const fineCells = m.fineCells.map((c, key) => {
+    const x3 = key % fineRows, y3 = Math.floor(key / fineRows);
+    return L.fog[Math.floor(y3 / 3) * m.width + Math.floor(x3 / 3)] === 1 ? c : '';
+  });
+  const fineMaterials = Object.fromEntries(Object.entries(m.fineMaterials ?? {}).filter(([key]) => {
+    const k = +key, x3 = k % fineRows, y3 = Math.floor(k / fineRows);
+    return L.fog[Math.floor(y3 / 3) * m.width + Math.floor(x3 / 3)] === 1;
+  }));
   return {
     id: m.id, name: m.name, layer: m.layer, floor: m.floor, width: m.width, height: m.height,
-    fog: [...L.fog], subFog: { ...L.subFog }, seen, views: {}, autoFog: false,
+    fog: [...L.fog], seen, views: {}, autoFog: false,
     architectureFragments: clipArchitecture(m, L),
-    subdivisions: m.subdivisions?.filter(i => L.fog[i]),
     cells: m.cells.map((c, i) => L.fog[i] === 1 ? c : ''),
-    subCells: Object.fromEntries(Object.entries(m.subCells ?? {}).filter(([key]) => L.subFog?.[+key] === 1)),
+    fineCells,
     materialCells: Object.fromEntries(Object.entries(m.materialCells ?? {}).filter(([key]) => L.fog[+key] === 1)),
-    materialSubCells: Object.fromEntries(Object.entries(m.materialSubCells ?? {}).filter(([key]) => L.subFog?.[+key] === 1)),
+    fineMaterials,
     d100: m.d100.map(() => 0), rooms: [], roomCells: m.roomCells.map(() => ''), notes: '', spawn: null,
     tokens: m.tokens.filter(t => { const p = tokenPosition(t); return t.pcId === pcId || fogAt(m, L, p.x, p.y) === 1; }),
     objects: m.objects.filter(o => objectEnabled(m, o) && o.kind === 'object' && !isArchitectureObject(o) && !o.hidden && anyVisible({ ...m, ...L }, o)).map(o => ({

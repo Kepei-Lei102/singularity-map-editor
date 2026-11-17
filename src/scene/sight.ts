@@ -11,7 +11,8 @@ import type { Facing, GameMap, MapObject, Point, Sex, Stance, Token, World } fro
 export type { Facing, Sex, Stance } from '../core/types';
 import { objectEnabled } from '../core/objectData.js';
 import { architectureGeometry, isArchitectureObject, segmentHitsRect } from './architecture';
-import { SUB, subKey } from './terrain';
+import { SUB } from './terrain';
+import { dominantId, fineKey, hasFineDetail } from '../core/grid';
 import { cellLine, gridDist } from '../core/util';
 
 /** 视野预算。规则书：无障碍 15 格 = 1.5，＜1.56，所以第 16 格看不见。 */
@@ -60,9 +61,37 @@ export function cellSightCost(
   eye: number,
 ): Float32Array {
   const coef = new Map(world.terrains.map((t) => [t.id, t.visionCoef]));
+  const terrainById = new Map(world.terrains.map((t) => [t.id, t]));
   const cost = new Float32Array(map.width * map.height);
   for (let i = 0; i < cost.length; i++) {
-    const c = coef.get(map.cells[i]) ?? BASE_CELL_COST;
+    const base = map.cells[i] ?? '';
+    let c = coef.get(base) ?? BASE_CELL_COST;
+    // 有小格细节时，整格衰减只在“非完全挡死”的小格里取多数派：
+    // - base 是墙、9 格全 floor / window → 降回 floor / window 的系数；
+    // - base 是草地、8 草 1 floor → 仍是草地的 2，不会因一个 floor 小格变 0.1；
+    // - base floor + 5/9 小墙、射线穿 floor → floor 的 0.1，墙由 blockers 精确挡。
+    // 完全挡死的小格（visionCoef ≥ FULL_BLOCK）不参与整格系数，交给
+    // sightSubcellBlockers 按 1/3 判；全是挡死小格时才把整格按挡死算。
+    const cx = i % map.width, cy = Math.floor(i / map.width);
+    if (hasFineDetail(map, cx, cy)) {
+      const visible: string[] = [];
+      let known = 0;
+      for (let sy = 0; sy < SUB; sy++) for (let sx = 0; sx < SUB; sx++) {
+        const id = map.fineCells?.[fineKey(map.width, cx * SUB + sx, cy * SUB + sy)] ?? base;
+        const t = terrainById.get(id);
+        if (!t) continue;
+        known++;
+        if ((t.visionCoef ?? 0) < FULL_BLOCK) visible.push(id);
+      }
+      if (visible.length) {
+        const rep = dominantId(visible);
+        c = coef.get(rep) ?? BASE_CELL_COST;
+      } else if (known === SUB * SUB) {
+        // 9 个小格都有地形且全是完全挡死：整格按挡死算。
+        // 若只是“部分小格墙 + 其余空格”，整格仍用 base 系数，墙交给精确遮挡。
+        c = FULL_BLOCK;
+      }
+    }
     cost[i] = Math.max(c, BASE_CELL_COST);
   }
   for (const o of map.objects) {
@@ -172,35 +201,20 @@ export function eyePoint(v: Viewer): Point {
  * 只用于细化遮挡，不参与衰减；整格衰减仍按 cellSightCost。
  */
 export function sightSubcellBlockers(world: World, map: GameMap): Uint8Array | null {
-  const sub = map.subdivisions;
-  if (!sub?.length) return null;
-  // 以前逐个子格调 terrainAtSubcell（里面还有 subdivisions.includes 线性扫描），
-  // 100×100 全细分要 97ms，而且每次 sightToObject 都重来一遍。按主格循环就快两个数量级。
+  // 只有存在小格细节的格子才需要挡死表；整格同地形时交给 cellSightCost。
   const w3 = map.width * SUB;
   const coef = new Map(world.terrains.map((t) => [t.id, t.visionCoef]));
   const out = new Uint8Array(w3 * map.height * SUB);
-  const fine = new Set(sub);
-  const subCells = map.subCells;
+  let any = false;
   for (let cy = 0; cy < map.height; cy++) for (let cx = 0; cx < map.width; cx++) {
-    const idx = cy * map.width + cx;
-    const base = map.cells[idx] ?? '';
-    const baseBlocked = (coef.get(base) ?? 0) >= FULL_BLOCK;
-    if (!fine.has(idx)) {
-      // 没细分的格子：要么 9 个子格全挡，要么全不挡。
-      if (!baseBlocked) continue;
-      for (let sy = 0; sy < SUB; sy++) {
-        const row = (cy * SUB + sy) * w3 + cx * SUB;
-        out.fill(1, row, row + SUB);
-      }
-      continue;
-    }
+    if (!hasFineDetail(map, cx, cy)) continue;
+    any = true;
     for (let sy = 0; sy < SUB; sy++) for (let sx = 0; sx < SUB; sx++) {
-      const k = (cy * SUB + sy) * w3 + cx * SUB + sx;
-      const t = subCells?.[k] ?? base;
-      if ((coef.get(t) ?? 0) >= FULL_BLOCK) out[k] = 1;
+      const id = map.fineCells?.[fineKey(map.width, cx * SUB + sx, cy * SUB + sy)] ?? map.cells[cy * map.width + cx] ?? '';
+      if ((coef.get(id) ?? 0) >= FULL_BLOCK) out[fineKey(map.width, cx * SUB + sx, cy * SUB + sy)] = 1;
     }
   }
-  return out;
+  return any ? out : null;
 }
 
 /** 用现成的挡死表判一次；起点和终点自身不算。 */
@@ -256,7 +270,7 @@ export function visionOf(world: World, map: GameMap, viewer: Viewer): Uint8Array
   for (let y = 0; y < map.height; y++) for (let x = 0; x < map.width; x++) {
     if (gridDist(x - viewer.x, y - viewer.y) > maxCells) continue;
     if (viewer.facing && !inCone(viewer.facing, viewer.x, viewer.y, x, y, cone)) continue;
-    const n = map.subdivisions?.includes(y * map.width + x) ? SUB : 1;
+    const n = hasFineDetail(map, x, y) ? SUB : 1;
     let seen = false;
     for (let sy = 0; sy < n && !seen; sy++) for (let sx = 0; sx < n && !seen; sx++) {
       if (clear({ x: x + (sx + 0.5) / n, y: y + (sy + 0.5) / n })) seen = true;
@@ -264,31 +278,6 @@ export function visionOf(world: World, map: GameMap, viewer: Viewer): Uint8Array
     if (seen) vis[y * map.width + x] = 1;
   }
   return vis;
-}
-
-/** 一个人看得见的细分格。粗格仍由 visionOf 决定；这里只细化“线穿过哪块 1/3”。 */
-export function visionDetailOf(world: World, map: GameMap, viewer: Viewer): { vis: Uint8Array; sub: Record<number, number> } {
-  const vis = visionOf(world, map, viewer);
-  const sub: Record<number, number> = {};
-  const block = sightSubcellBlockers(world, map);
-  if (!map.subdivisions?.length) return { vis, sub };
-  const geometry = architectureGeometry(map);
-  const costOfMap = cellSightCost(world, map, eyeHeight(viewer));
-  const p = eyePoint(viewer);
-  const w3 = map.width * SUB, h3 = map.height * SUB;
-  for (const idx of map.subdivisions) {
-    const x = idx % map.width, y = Math.floor(idx / map.width);
-    for (let sy = 0; sy < SUB; sy++) for (let sx = 0; sx < SUB; sx++) {
-      const x3 = x * SUB + sx, y3 = y * SUB + sy;
-      const target = { x: (x3 + 0.5) / SUB, y: (y3 + 0.5) / SUB };
-      const total = cellSightTotal(costOfMap, map.width, Math.floor(p.x), Math.floor(p.y), Math.floor(target.x), Math.floor(target.y))
-        + wallSightSum(geometry, p, target);
-      const blocked = total > VISION_BUDGET || subcellBlockedWith(block, w3, h3, p, target);
-      // 主格看不见，整格的小格都不算看见；主格看得见再按 1/3 精度细判。
-      sub[subKey(map, x3, y3)] = vis[idx] && !blocked ? 1 : 0;
-    }
-  }
-  return { vis, sub };
 }
 
 /** 队伍视野：各人取并集。 */
@@ -301,17 +290,6 @@ export function partyVisionOf(world: World, map: GameMap, viewers: Viewer[]): Ui
   return out;
 }
 
-/** 队伍视野，细到 1/3 小格。 */
-export function partyVisionDetailOf(world: World, map: GameMap, viewers: Viewer[]): { vis: Uint8Array; sub: Record<number, number> } {
-  const vis = new Uint8Array(map.width * map.height), sub: Record<number, number> = {};
-  for (const v of viewers) {
-    const one = visionDetailOf(world, map, v);
-    for (let i = 0; i < vis.length; i++) if (one.vis[i]) vis[i] = 1;
-    // 0 也要留：迷雾要把「看不见」记成 0，否则记忆那层没法区分「没算过」和「看不见」。
-    for (const [k, val] of Object.entries(one.sub)) sub[+k] = Math.max(sub[+k] ?? 0, val);
-  }
-  return { vis, sub };
-}
 
 /**
  * 一次判定要用的两份表：每格衰减（跟眼睛高度有关）和子格挡死表（只跟地图有关）。

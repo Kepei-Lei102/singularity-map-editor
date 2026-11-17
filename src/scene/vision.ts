@@ -1,9 +1,9 @@
 import type { GameMap, VisionLayer, World } from '../core/types';
 import { current, isDraft } from 'immer';
-import { clipArchitecture, isSubdivided } from './architecture';
+import { clipArchitecture } from './architecture';
 
 export const emptyVision = (n: number): VisionLayer => ({ fog: Array(n).fill(0), seen: { cells: Array(n).fill(''), objects: [] } });
-export const cloneLayer = (L: VisionLayer): VisionLayer => JSON.parse(JSON.stringify({ fog: L.fog, subFog: L.subFog, seen: L.seen }));
+export const cloneLayer = (L: VisionLayer): VisionLayer => JSON.parse(JSON.stringify({ fog: L.fog, seen: L.seen }));
 
 export function visionKey(w: World, pcId: string): string {
   const pc = w.party.find(p => p.id === pcId);
@@ -34,7 +34,7 @@ export function spatialKeys(m: GameMap, r: { x: number; y: number; w: number; h:
 }
 export function spatialFog(m: GameMap, L: VisionLayer, key: number): number {
   const x = key % (m.width * 3), y = Math.floor(key / (m.width * 3));
-  return isSubdivided(m, Math.floor(x / 3), Math.floor(y / 3)) ? L.subFog?.[key] ?? 0 : L.fog[Math.floor(y / 3) * m.width + Math.floor(x / 3)] ?? 0;
+  return L.fog[Math.floor(y / 3) * m.width + Math.floor(x / 3)] ?? 0;
 }
 
 /** Merge knowledge only. Spatial observations include empty space, so seeing a demolition
@@ -43,7 +43,7 @@ export function spatialFog(m: GameMap, L: VisionLayer, key: number): number {
 export function mergeLayers(m: GameMap, layers: VisionLayer[]): VisionLayer {
   if (layers.length === 1) return cloneLayer(layers[0]);
   const out = emptyVision(m.width * m.height);
-  out.subFog = {}; out.seen.subCells = {}; out.seen.cellRevs = []; out.seen.observed = {}; out.seen.objectRevs = {}; out.seen.subRevs = {}; out.seen.architectureRevs = {};
+  out.seen.cellRevs = []; out.seen.observed = {}; out.seen.objectRevs = {}; out.seen.architectureRevs = {};
   const choose = <T,>(items: { rev: number; value: T }[]) => items.sort((a, b) => b.rev - a.rev || JSON.stringify(b.value).localeCompare(JSON.stringify(a.value)))[0];
   for (let i = 0; i < out.fog.length; i++) {
     out.fog[i] = layers.some(L => L.fog[i] === 1) ? 1 : layers.some(L => L.fog[i]) ? 2 : 0;
@@ -66,14 +66,9 @@ export function mergeLayers(m: GameMap, layers: VisionLayer[]): VisionLayer {
       const ax = Math.max(r.x, x / 3), ay = Math.max(r.y, y / 3), bx = Math.min(r.x + r.w, (x + 1) / 3), by = Math.min(r.y + r.h, (y + 1) / 3);
       return bx - ax > 1e-9 && by - ay > 1e-9 ? [{ x: ax, y: ay, w: bx - ax, h: by - ay, material: r.material }] : [];
     });
-    const terrain = choose(known.map(index => ({ rev: layers[index].seen.subRevs?.[key] ?? layers[index].seen.observed?.[key] ?? 0, value: layers[index].seen.subCells?.[key] ?? layers[index].seen.cells[Math.floor(y / 3) * m.width + Math.floor(x / 3)] })));
     const geometry = choose(known.map(index => ({ rev: layers[index].seen.architectureRevs?.[key] ?? layers[index].seen.observed?.[key] ?? 0, value: pieces(index) })));
     out.seen.observed[key] = Math.max(...known.map(index => layers[index].seen.observed?.[key] ?? 0));
     out.seen.architectureRevs[key] = geometry.rev;
-    if (isSubdivided(m, Math.floor(x / 3), Math.floor(y / 3))) {
-      out.subFog[key] = layers.some(L => spatialFog(m, L, key) === 1) ? 1 : 2;
-      out.seen.subCells[key] = terrain.value; out.seen.subRevs[key] = terrain.rev;
-    }
     architecture.push(...geometry.value);
   }
   out.seen.architecture = architecture;
