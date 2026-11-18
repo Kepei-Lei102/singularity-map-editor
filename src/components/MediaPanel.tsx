@@ -93,9 +93,9 @@ export function MediaDock() {
     <div className="dock">
       <div className="dock-head">
         <span>{np.broadcast ? '📡 玩家也在看/听　' : '▶ 仅主持人　'}{np.label || meta.name}</span>
-        {np.broadcast && transfer.players > 0 && <span className="muted">正在传给 {transfer.players} 名玩家</span>}
         <button className="small" onClick={stopMedia}>{np.broadcast ? '停止（玩家也停）' : '关闭'}</button>
       </div>
+      {np.broadcast && transfer.players > 0 && <div className="dock-transfer">正在传素材给 {transfer.players} 名玩家</div>}
       {/* 同步给玩家时主持人这边静音，避免共享屏幕时声音叠两遍 */}
       <MediaView key={np.mediaId + np.broadcast} mediaId={np.mediaId} mime={meta.mime} autoPlay={!np.broadcast} />
     </div>

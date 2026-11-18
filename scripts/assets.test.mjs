@@ -627,7 +627,9 @@ test('asset-start 没带字节数时进度不编百分比', async () => {
   const req = requests[0];
   rec.handle({ type: 'asset-start', requestId: req.requestId, key: 'k' });
   rec.handle({ type: 'asset-chunk', requestId: req.requestId, key: 'k', mime: 'image/png', index: 0, count: 1, data: api.bytesToBase64(Uint8Array.from([1, 2, 3])) });
-  assert.deepEqual(progress, [['k', 0, undefined], ['k', 3, undefined]]);
+  rec.handle({ type: 'asset-end', requestId: req.requestId, key: 'k', bytes: 3 });
+  await tick();
+  assert.deepEqual(progress, [['k', 0, undefined], ['k', 3, undefined], ['k', 3, undefined]]);
 });
 
 
@@ -656,4 +658,30 @@ test('cancel(key) 只取消这个 key，晚到的块不再写、也不报失败'
   await tick();
   assert.deepEqual(saved, ['b']);
   assert.deepEqual(fails, []);
+});
+
+
+test('同批前一个 key 开始传，会给还没轮到的 key 续排队 watchdog', async () => {
+  const requests = [];
+  const fails = [];
+  const saved = [];
+  const rec = api.createAssetReceiver({
+    send: (body) => requests.push(body),
+    load: async () => undefined,
+    save: async (k) => saved.push(k),
+    onFail: (k, r) => fails.push([k, r]),
+    timeoutMs: 0,
+    queueTimeoutMs: 100,
+  });
+  await rec.request(['a', 'b']);
+  const req = requests[0];
+  await new Promise((r) => setTimeout(r, 80)); // a 还没开始，b 的原始 100ms 死线快到了
+  rec.handle({ type: 'asset-start', requestId: req.requestId, key: 'a' });
+  await new Promise((r) => setTimeout(r, 50)); // 已过原始 100ms，但 a start 把 b 续到 ~180ms
+  assert.deepEqual(fails, []);
+  rec.handle({ type: 'asset-start', requestId: req.requestId, key: 'b' });
+  rec.handle({ type: 'asset-chunk', requestId: req.requestId, key: 'b', mime: 'image/png', index: 0, count: 1, data: api.bytesToBase64(Uint8Array.from([1])) });
+  rec.handle({ type: 'asset-end', requestId: req.requestId, key: 'b', bytes: 1 });
+  await tick();
+  assert.deepEqual(saved, ['b']);
 });

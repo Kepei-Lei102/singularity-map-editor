@@ -254,6 +254,19 @@ export function createAssetReceiver(opts: AssetReceiverOptions): AssetReceiver {
     timers.set(key, timer);
   };
 
+  /** 同一批里只要有一个 key 开始传，就把还没开始的 key 的排队死线往后延；
+   *  否则 32 个 key 串行传时，后面几个会在自己还没轮到就排队超时。 */
+  const refreshQueued = (requestId: string) => {
+    if (!queueTimeoutMs) return;
+    const keys = requests.get(requestId);
+    if (!keys) return;
+    for (const key of keys) {
+      const p = pending.get(key);
+      if (!p || p.started) continue;
+      armKeyTimeout(key, requestId, queueTimeoutMs);
+    }
+  };
+
   async function finish(key: string, p: Incoming): Promise<void> {
     if (p.finishing || p.gen !== generation) return;
     p.finishing = true;
@@ -289,7 +302,7 @@ export function createAssetReceiver(opts: AssetReceiverOptions): AssetReceiver {
       return;
     }
     pending.delete(key);
-    opts.onProgress?.(key, p.bytes, p.totalBytes ?? p.bytes);
+    opts.onProgress?.(key, p.bytes, p.totalBytes); // 不知道总大小时不假装 100%
     opts.onReady?.(key);
   }
 
@@ -335,6 +348,7 @@ export function createAssetReceiver(opts: AssetReceiverOptions): AssetReceiver {
       if (typeof body.bytes === 'number' && Number.isFinite(body.bytes) && body.bytes >= 0) p.totalBytes = body.bytes;
       // host 真开始发这个 key 了，排队 watchdog 换成 inactivity timer。
       armKeyTimeout(body.key, body.requestId, timeoutMs);
+      refreshQueued(body.requestId);
       opts.onProgress?.(body.key, 0, p.totalBytes);
       return;
     }
