@@ -685,3 +685,16 @@ test('同批前一个 key 开始传，会给还没轮到的 key 续排队 watchd
   await tick();
   assert.deepEqual(saved, ['b']);
 });
+
+
+test('主持端 load 卡住会按超时当 missing，不吊住整批', async () => {
+  const sent = [];
+  await api.serveAssetRequest({ type: 'asset-request', requestId: 'r-load', keys: ['k'] }, {
+    send: (body) => { sent.push(body); return true; },
+    load: () => new Promise(() => {}),
+    meta: () => ({ mime: 'image/png', size: 1 }),
+    paceMs: 0,
+    loadTimeoutMs: 20,
+  });
+  assert.ok(sent.some((m) => m.type === 'asset-fail' && m.key === 'k' && m.reason === 'missing'));
+});

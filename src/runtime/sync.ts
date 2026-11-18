@@ -63,6 +63,8 @@ type AssetFlow = {
   bytes: number;
   startedAt: number;
   files: Map<string, { sent: number; total?: number }>;
+  plannedKeys: Set<string>;
+  endedKeys: Set<string>;
   failedKeys: Set<string>;
 };
 /** 每条 binding 的每个在途 request 一份；结束/断线/换工程就删。 */
@@ -79,9 +81,21 @@ function beginAssetFlow(binding: string, requestId: string, keys: unknown): void
   const unique = [...new Set((Array.isArray(keys) ? keys : []).filter((k) => typeof k === 'string' && k.length > 0))].slice(0, 32);
   let flows = assetFlows.get(binding);
   if (!flows) { flows = new Map(); assetFlows.set(binding, flows); }
-  flows.set(requestId, { requestId, totalFiles: unique.length, startedFiles: 0, endedFiles: 0, failedFiles: 0, failedStartedFiles: 0, totalBytes: 0, bytes: 0, startedAt: Date.now(), files: new Map(), failedKeys: new Set() });
+  flows.set(requestId, { requestId, totalFiles: unique.length, startedFiles: 0, endedFiles: 0, failedFiles: 0, failedStartedFiles: 0, totalBytes: 0, bytes: 0, startedAt: Date.now(), files: new Map(), plannedKeys: new Set(unique), endedKeys: new Set(), failedKeys: new Set() });
   refreshAssetTransferStats();
 }
+/** 玩家 cancel 后，账本立刻反映：整个请求删掉，单 key 从排队/在途里拿掉。 */
+function cancelAssetFlow(binding: string, requestId: string, key?: string): void {
+  const flow = assetFlows.get(binding)?.get(requestId);
+  if (!flow) return;
+  if (typeof key !== 'string' || !key) { endAssetFlow(binding, requestId); return; }
+  if (!flow.plannedKeys.has(key) || flow.failedKeys.has(key) || flow.endedKeys.has(key)) return;
+  flow.failedKeys.add(key);
+  if (flow.files.has(key)) { flow.files.delete(key); flow.failedStartedFiles++; }
+  else flow.failedFiles++;
+  refreshAssetTransferStats();
+}
+
 function endAssetFlow(binding: string, requestId: string): void {
   const flows = assetFlows.get(binding);
   if (!flows) return;
@@ -93,6 +107,7 @@ function noteAssetBody(binding: string, requestId: string, body: AssetBody): voi
   const flow = assetFlows.get(binding)?.get(requestId);
   if (!flow) return;
   if (body.type === 'asset-start') {
+    if (!flow.plannedKeys.has(body.key) || flow.files.has(body.key)) return;
     flow.startedFiles++;
     const total = typeof body.bytes === 'number' && Number.isFinite(body.bytes) && body.bytes >= 0 ? body.bytes : undefined;
     flow.files.set(body.key, { sent: 0, total });
@@ -105,15 +120,16 @@ function noteAssetBody(binding: string, requestId: string, body: AssetBody): voi
     flow.bytes += n;
   } else if (body.type === 'asset-end') {
     const file = flow.files.get(body.key);
-    if (!file) return;
+    if (!file || flow.endedKeys.has(body.key)) return;
     const actual = typeof body.bytes === 'number' && body.bytes >= 0 ? body.bytes : file.sent;
     flow.bytes += actual - file.sent;
     if (file.total === undefined) flow.totalBytes += actual;
     file.sent = actual;
     file.total = actual;
+    flow.endedKeys.add(body.key);
     flow.endedFiles++;
   } else if (body.type === 'asset-fail') {
-    if (flow.failedKeys.has(body.key)) return;
+    if (!flow.plannedKeys.has(body.key) || flow.failedKeys.has(body.key)) return;
     flow.failedKeys.add(body.key);
     if (flow.files.has(body.key)) flow.failedStartedFiles++;
     else flow.failedFiles++;
@@ -668,6 +684,8 @@ function beginAssetServe(
 ): void {
   const session = assetSessions.get(binding) ?? AssetSession.fresh();
   assetSessions.set(binding, session);
+  // 同 binding 同 requestId 在途时不能再开一条：否则后一条会覆盖账本，旧 serve 的块会串到新请求上。
+  if (session.get(m.requestId) > 0) { rejectAssetRequest(m, binding); return; }
   // 超 refs / 超总量直接回 forbidden，不占引用；玩家收到 fail 会清 pending。
   if (!session.tryAcquire(m.requestId)) { rejectAssetRequest(m, binding); return; }
   if (opts.stats !== false) beginAssetFlow(binding, m.requestId, m.keys);
@@ -714,6 +732,7 @@ export function onAssetCancel(m: Extract<AssetBody, { type: 'asset-cancel' }>, r
   if (!players.has(binding)) return;
   const session = assetSessions.get(binding);
   if (!session?.cancel(m.requestId, m.key)) return; // 迟到/木马 cancel 不留垃圾
+  cancelAssetFlow(binding, m.requestId, m.key);
 }
 
 /** 玩家载荷里的密码请求：只给门名和谁在输，不带作者密码、不带已输入原文。 */

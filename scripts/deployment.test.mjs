@@ -224,6 +224,9 @@ test('asset 账本随连接换代：reset/换工程清空，register 换新账�
   assert.match(sync, /resetPlayerBindings[\s\S]{0,400}assetSessions\.clear\(\)/);
   assert.match(sync, /players\.clear\(\)[\s\S]{0,200}assetSessions\.clear\(\)/);
   assert.match(sync, /registerOnlinePlayer[\s\S]{0,600}assetSessions\.set\(binding, AssetSession\.fresh\(\)\)/);
+  // 同一个 requestId 在途时不能再开一条，否则旧 serve 会串到新账上。
+  assert.match(sync, /session\.get\(m\.requestId\) > 0[\s\S]{0,120}rejectAssetRequest/);
+  assert.match(sync, /if \(!session\?\.cancel\(m\.requestId, m\.key\)\) return;[\s\S]{0,80}cancelAssetFlow\(binding, m\.requestId, m\.key\)/);
   assert.match(sync, /const session = assetSessions\.get\(binding\) \?\? AssetSession\.fresh\(\)/);
   assert.match(sync, /tryAcquire\(m\.requestId\)/);
   assert.match(sync, /\.finally\(\(\) => \{ if \(opts\.stats !== false\) endAssetFlow\(binding, m\.requestId\); session\.release\(m\.requestId\); refreshAssetTransferStats\(\); \}\)/);

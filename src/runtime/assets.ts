@@ -8,6 +8,8 @@ export const ASSET_CHUNK_BYTES = 256 * 1024;
 export const ASSET_MAX_BYTES = 64 * 1024 * 1024;
 export const ASSET_MAX_KEYS = 32;
 export const ASSET_QUEUE_TIMEOUT_MS = 120_000;
+/** 主持端读文件卡住时别把整批吊死；超时就当这份文件没了。 */
+export const ASSET_LOAD_TIMEOUT_MS = 30_000;
 /** 缺文件/被拒/校验失败后先别每帧重问；15 秒后再试一次。 */
 export const ASSET_FAIL_COOLDOWN_MS = 15_000;
 /** 全场共用一个节流钟：一块 45ms，约 22 块/秒，给 world/判定/说话留出每连接 60 条/秒的余量。 */
@@ -71,6 +73,8 @@ export interface ServeAssetOptions {
   meta: (key: string) => { mime: string; size?: number } | undefined;
   paceMs?: number;
   maxBytes?: number;
+  /** 主持端 load 的超时；默认 30 秒，0 表示不设。 */
+  loadTimeoutMs?: number;
   /** 玩家发来 asset-cancel / 世界换掉 allow 时，下一块前停下。 */
   isCancelled?: (key?: string) => boolean;
 }
@@ -83,6 +87,7 @@ export async function serveAssetRequest(
   const keys = [...new Set((Array.isArray(request.keys) ? request.keys : []).filter((k) => typeof k === 'string' && k.length > 0))].slice(0, ASSET_MAX_KEYS);
   const maxBytes = opts.maxBytes ?? ASSET_MAX_BYTES;
   const paceMs = opts.paceMs ?? ASSET_PACE_MS;
+  const loadTimeoutMs = opts.loadTimeoutMs ?? ASSET_LOAD_TIMEOUT_MS;
   const fail = async (key: string, reason: AssetFailReason): Promise<boolean> => {
     // allow 被撤走时不能再说 missing/too-large/read-failed，统一按 forbidden 回。
     const liveReason = opts.meta(key) ? reason : 'forbidden';
@@ -94,7 +99,14 @@ export async function serveAssetRequest(
     if (!candidate) { await fail(key, 'forbidden'); continue; }
     if (typeof candidate.size === 'number' && candidate.size > maxBytes) { await fail(key, 'too-large'); continue; }
     let blob: Blob | undefined;
-    try { blob = await opts.load(key); } catch { await fail(key, 'read-failed'); continue; }
+    try {
+      const loading = opts.load(key);
+      if (loadTimeoutMs) {
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        const timedOut = new Promise<undefined>((resolve) => { timer = setTimeout(() => resolve(undefined), loadTimeoutMs); (timer as unknown as { unref?: () => void }).unref?.(); });
+        try { blob = await Promise.race([loading, timedOut]); } finally { if (timer !== undefined) clearTimeout(timer); }
+      } else blob = await loading;
+    } catch { await fail(key, 'read-failed'); continue; }
     if (!blob) { await fail(key, 'missing'); continue; }
     if (blob.size > maxBytes) { await fail(key, 'too-large'); continue; }
     // load 可能花了几秒：发 start 前再查一次取消/allow，别在玩家已经走了之后才开始。

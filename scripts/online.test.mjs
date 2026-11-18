@@ -197,6 +197,12 @@ test('线上闭环：主持建房、发邀请、玩家加入、hello/world/say �
   offQueueStats();
   await waitFor(() => host.assetTransferStats().players === 0);
 
+  // 玩家 cancel 整个请求：账本要马上收起，不能等 serve 下一次检查。
+  player.send({ type: 'asset-request', requestId: 'r-cancel', keys: ['k1'] });
+  await waitFor(() => host.assetTransferStats().players === 1);
+  player.send({ type: 'asset-cancel', requestId: 'r-cancel' });
+  await waitFor(() => host.assetTransferStats().players === 0);
+
   // 停止广播后，allow 只保留 world 真用到的媒体；这个文件没挂在任何物件上，应该立刻变成 forbidden。
   host.stopMedia();
   await waitFor(() => playerSeen.some((m) => m.type === 'stop'));
