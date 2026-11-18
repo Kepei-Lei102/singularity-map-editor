@@ -40,3 +40,26 @@ test('全局 token 连续发时约 20ms 一块', async () => {
   const gaps = [times[1] - times[0], times[2] - times[1]];
   assert.ok(gaps.every((g) => g >= 10 && g < 200), `gap=${gaps.join(',')}`);
 });
+
+
+test('12 个 binding 各 2 个 job 都能拿到 token', async () => {
+  const pacer = new api.AssetPacer();
+  const counts = new Map();
+  await Promise.all(Array.from({ length: 24 }, (_, i) => {
+    const binding = `b${i % 12}`;
+    return pacer.wait(binding, api.ASSET_PACE_MS).then(() => counts.set(binding, (counts.get(binding) ?? 0) + 1));
+  }));
+  assert.equal(counts.size, 12);
+  for (const [binding, n] of counts) assert.equal(n, 2, binding);
+});
+
+test('同一个 binding 的第二个 job 会让别的 binding 插进来', async () => {
+  const pacer = new api.AssetPacer();
+  const seen = [];
+  await Promise.all([
+    pacer.wait('a', api.ASSET_PACE_MS).then(() => seen.push('a1')),
+    pacer.wait('a', api.ASSET_PACE_MS).then(() => seen.push('a2')),
+    pacer.wait('b', api.ASSET_PACE_MS).then(() => seen.push('b')),
+  ]);
+  assert.deepEqual(seen, ['a1', 'b', 'a2']);
+});

@@ -698,3 +698,19 @@ test('主持端 load 卡住会按超时当 missing，不吊住整批', async () 
   });
   assert.ok(sent.some((m) => m.type === 'asset-fail' && m.key === 'k' && m.reason === 'missing'));
 });
+
+
+test('主持端从 Blob 切片也设上限，arrayBuffer 卡住会 fail 并停这个 key', async () => {
+  const sent = [];
+  const stuck = { size: 1, slice: () => ({ arrayBuffer: () => new Promise(() => {}) }) };
+  await api.serveAssetRequest({ type: 'asset-request', requestId: 'r-slice', keys: ['k'] }, {
+    send: (body) => { sent.push(body); return true; },
+    load: async () => stuck,
+    meta: () => ({ mime: 'image/png', size: 1 }),
+    paceMs: 0,
+    sliceTimeoutMs: 20,
+  });
+  assert.ok(sent.some((m) => m.type === 'asset-start' && m.key === 'k'));
+  assert.ok(sent.some((m) => m.type === 'asset-fail' && m.key === 'k' && m.reason === 'read-failed'));
+  assert.equal(sent.some((m) => m.type === 'asset-end'), false);
+});

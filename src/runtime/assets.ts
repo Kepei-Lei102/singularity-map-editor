@@ -10,6 +10,8 @@ export const ASSET_MAX_KEYS = 32;
 export const ASSET_QUEUE_TIMEOUT_MS = 120_000;
 /** 主持端读文件卡住时别把整批吊死；超时就当这份文件没了。 */
 export const ASSET_LOAD_TIMEOUT_MS = 30_000;
+/** 单块从 Blob 读出来也设上限；卡住就按 read-failed 停这个 key。 */
+export const ASSET_SLICE_TIMEOUT_MS = 15_000;
 /** 缺文件/被拒/校验失败后先别每帧重问；15 秒后再试一次。 */
 export const ASSET_FAIL_COOLDOWN_MS = 15_000;
 /** 单条 binding 的基线间隔：一块 45ms，约 22 块/秒。 */
@@ -130,6 +132,8 @@ export interface ServeAssetOptions {
   binding?: string;
   /** 主持端 load 的超时；默认 30 秒，0 表示不设。 */
   loadTimeoutMs?: number;
+  /** 主持端从 Blob 切片读字节的超时；默认 15 秒，0 表示不设。 */
+  sliceTimeoutMs?: number;
   /** 玩家发来 asset-cancel / 世界换掉 allow 时，下一块前停下。 */
   isCancelled?: (key?: string) => boolean;
 }
@@ -143,6 +147,7 @@ export async function serveAssetRequest(
   const maxBytes = opts.maxBytes ?? ASSET_MAX_BYTES;
   const paceMs = opts.paceMs ?? ASSET_PACE_MS;
   const loadTimeoutMs = opts.loadTimeoutMs ?? ASSET_LOAD_TIMEOUT_MS;
+  const sliceTimeoutMs = opts.sliceTimeoutMs ?? ASSET_SLICE_TIMEOUT_MS;
   const fail = async (key: string, reason: AssetFailReason): Promise<boolean> => {
     // allow 被撤走时不能再说 missing/too-large/read-failed，统一按 forbidden 回。
     const liveReason = opts.meta(key) ? reason : 'forbidden';
@@ -193,7 +198,12 @@ export async function serveAssetRequest(
       const start = index * ASSET_CHUNK_BYTES;
       let chunk: Uint8Array;
       try {
-        chunk = new Uint8Array(await blob.slice(start, Math.min(start + ASSET_CHUNK_BYTES, blob.size)).arrayBuffer());
+        const reading = blob.slice(start, Math.min(start + ASSET_CHUNK_BYTES, blob.size)).arrayBuffer();
+        if (sliceTimeoutMs) {
+          let timer: ReturnType<typeof setTimeout> | undefined;
+          const timedOut = new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error('slice timeout')), sliceTimeoutMs); (timer as unknown as { unref?: () => void }).unref?.(); });
+          try { chunk = new Uint8Array(await Promise.race([reading, timedOut])); } finally { if (timer !== undefined) clearTimeout(timer); }
+        } else chunk = new Uint8Array(await reading);
       } catch { await fail(key, 'read-failed'); completed = false; break; }
       let chunkRevoked = false;
       let chunkFailed = false;
