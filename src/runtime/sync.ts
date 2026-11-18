@@ -14,9 +14,9 @@ import { SESSION, rand, renewSession } from '../core/session';
 import { createLocalTransport } from './transportLocal';
 import { createSwitchTransport, type Transport } from './transport';
 import type { AssetBody, SyncBody, SyncMsg, TrialMoveSignal } from './messages';
-import { serveAssetRequest, assetKeyOf, type ServeAssetOptions } from './assets';
+import { ASSET_QUEUE_TIMEOUT_MS, serveAssetRequest, assetKeyOf, type ServeAssetOptions } from './assets';
 import { getRaw } from './media';
-import { AssetSession } from './assetSessions';
+import { ASSET_MAX_FLOWS, AssetSession } from './assetSessions';
 export type { SyncBody, SyncMsg, TrialMoveSignal } from './messages';
 import { groupBounds } from '../core/grid';
 import { effectiveLayer, emptyVision } from '../scene/vision';
@@ -69,6 +69,15 @@ type AssetFlow = {
 };
 /** 每条 binding 的每个在途 request 一份；结束/断线/换工程就删。 */
 const assetFlows = new Map<string, Map<string, AssetFlow>>();
+/** 每条 binding 的超额请求先排队，等前一条结束再发；直接 forbidden 会让 33–64 个 media 的世界漏图。 */
+const ASSET_MAX_QUEUED_REQUESTS = 8;
+type QueuedAssetRequest = {
+  m: Extract<AssetBody, { type: 'asset-request' }>;
+  load: ServeAssetOptions['load'];
+  meta: ServeAssetOptions['meta'];
+  timer?: ReturnType<typeof setTimeout>;
+};
+const assetRequestQueues = new Map<string, QueuedAssetRequest[]>();
 const assetBindingNames = new Map<string, string>();
 let assetTransferSnapshot: AssetTransferStats = { players: 0, requests: 0, bytes: 0, totalBytes: 0, queued: 0, inFlight: 0, rate: 0, bindings: [] };
 const assetTransferListeners = new Set<() => void>();
@@ -77,8 +86,11 @@ function base64Size(data: string): number {
   const pad = data.endsWith('==') ? 2 : data.endsWith('=') ? 1 : 0;
   return Math.max(0, Math.floor((data.length * 3) / 4) - pad);
 }
+function requestKeys(keys: unknown): string[] {
+  return [...new Set((Array.isArray(keys) ? keys : []).filter((k) => typeof k === 'string' && k.length > 0))].slice(0, 32);
+}
 function beginAssetFlow(binding: string, requestId: string, keys: unknown): void {
-  const unique = [...new Set((Array.isArray(keys) ? keys : []).filter((k) => typeof k === 'string' && k.length > 0))].slice(0, 32);
+  const unique = requestKeys(keys);
   let flows = assetFlows.get(binding);
   if (!flows) { flows = new Map(); assetFlows.set(binding, flows); }
   flows.set(requestId, { requestId, totalFiles: unique.length, startedFiles: 0, endedFiles: 0, failedFiles: 0, failedStartedFiles: 0, totalBytes: 0, bytes: 0, startedAt: Date.now(), files: new Map(), plannedKeys: new Set(unique), endedKeys: new Set(), failedKeys: new Set() });
@@ -217,6 +229,7 @@ export function resetPlayerBindings(): void {
   assetSessions.clear();
   assetRequestLog.clear();
   assetFlows.clear();
+  clearAssetRequestQueues();
   refreshAssetTransferStats();
   saveBindings();
 }
@@ -227,6 +240,7 @@ export function registerOnlinePlayer(binding: string, pcId: string): void {
   const name = getRealWorld().party.find((pc) => pc.id === pcId)?.name;
   if (name) assetBindingNames.set(binding, name); else assetBindingNames.delete(binding);
   assetAllow.delete(binding);
+  clearAssetRequestQueues(binding);
   assetSessions.set(binding, AssetSession.fresh());
   assetRequestLog.delete(binding);
   assetFlows.delete(binding);
@@ -236,6 +250,7 @@ export function registerOnlinePlayer(binding: string, pcId: string): void {
 /** 服务器告诉主持端这个 binding 断了：别留下能继续请求媒体的僵尸入口。 */
 export function unregisterOnlinePlayer(binding: string): void {
   if (!binding) return;
+  clearAssetRequestQueues(binding);
   assetSessions.delete(binding);
   players.delete(binding);
   assetFlows.delete(binding);
@@ -555,7 +570,7 @@ onProjectReplaced(() => {
     transport.sendToPeer(binding, { type: 'clear', __ts: 'ts-map', seq: rand(), from: SESSION, inst: INST, born: BORN });
     transport.dropPeer(binding);
   }
-  players.clear(); assetBindingNames.clear(); saveBindings(); broadcastAsset = null; assetAllow.clear(); assetSessions.clear(); assetRequestLog.clear(); assetFlows.clear(); refreshAssetTransferStats();
+  players.clear(); assetBindingNames.clear(); saveBindings(); broadcastAsset = null; assetAllow.clear(); assetSessions.clear(); assetRequestLog.clear(); assetFlows.clear(); clearAssetRequestQueues(); refreshAssetTransferStats();
 });
 
 let quietUntil = 0; // 编辑器刚启动、还在确认会话标识没撞车时，先不往外推
@@ -662,7 +677,7 @@ function refreshPlayerAssets(): void {
     setPlayerAssets(binding, playerWorld(w, w.playerMapId, p.pcId), true);
   }
 }
-function dropPlayerAssets(binding: string): void { assetAllow.delete(binding); assetSessions.delete(binding); assetRequestLog.delete(binding); assetFlows.delete(binding); assetBindingNames.delete(binding); refreshAssetTransferStats(); }
+function dropPlayerAssets(binding: string): void { clearAssetRequestQueues(binding); assetAllow.delete(binding); assetSessions.delete(binding); assetRequestLog.delete(binding); assetFlows.delete(binding); assetBindingNames.delete(binding); refreshAssetTransferStats(); }
 
 function assetMsg(binding: string, body: AssetBody): boolean {
   return transport.sendToPeer(binding, { ...body, __ts: 'ts-map', seq: rand(), from: SESSION, inst: INST, born: BORN });
@@ -678,6 +693,70 @@ function rejectAssetRequest(m: Extract<AssetBody, { type: 'asset-request' }>, bi
   });
 }
 
+/** 一条 binding 最多 2 条在途 request；再多先排队（最多 8 条），不是直接 forbidden。 */
+function assetFlowHasRoom(binding: string): boolean {
+  const flows = assetFlows.get(binding);
+  return !flows || flows.size < ASSET_MAX_FLOWS;
+}
+
+function clearQueuedAssetRequest(binding: string, requestId: string, key?: string): boolean {
+  const queue = assetRequestQueues.get(binding);
+  if (!queue) return false;
+  const index = queue.findIndex((entry) => entry.m.requestId === requestId);
+  if (index < 0) return false;
+  const entry = queue[index];
+  if (typeof key === 'string' && key) {
+    if (!entry.m.keys.includes(key)) return false;
+    const keys = entry.m.keys.filter((k) => k !== key);
+    if (keys.length) { entry.m = { ...entry.m, keys }; return true; }
+  }
+  queue.splice(index, 1);
+  if (entry.timer !== undefined) clearTimeout(entry.timer);
+  if (!queue.length) assetRequestQueues.delete(binding);
+  return true;
+}
+
+function clearAssetRequestQueues(binding?: string): void {
+  const bindings = binding ? [binding] : [...assetRequestQueues.keys()];
+  for (const key of bindings) {
+    for (const entry of assetRequestQueues.get(key) ?? []) if (entry.timer !== undefined) clearTimeout(entry.timer);
+    assetRequestQueues.delete(key);
+  }
+}
+
+function queueAssetRequest(
+  m: Extract<AssetBody, { type: 'asset-request' }>,
+  binding: string,
+  opts: Pick<ServeAssetOptions, 'load' | 'meta'>,
+): void {
+  const queue = assetRequestQueues.get(binding) ?? [];
+  if (queue.some((entry) => entry.m.requestId === m.requestId) || queue.length >= ASSET_MAX_QUEUED_REQUESTS) {
+    rejectAssetRequest(m, binding);
+    return;
+  }
+  const entry: QueuedAssetRequest = { m, load: opts.load, meta: opts.meta };
+  if (ASSET_QUEUE_TIMEOUT_MS) {
+    entry.timer = setTimeout(() => {
+      clearQueuedAssetRequest(binding, m.requestId);
+      rejectAssetRequest(m, binding);
+    }, ASSET_QUEUE_TIMEOUT_MS);
+    (entry.timer as unknown as { unref?: () => void }).unref?.();
+  }
+  queue.push(entry);
+  assetRequestQueues.set(binding, queue);
+}
+
+function drainAssetRequestQueue(binding: string): void {
+  const queue = assetRequestQueues.get(binding);
+  if (!queue || !queue.length) return;
+  while (queue.length && assetFlowHasRoom(binding)) {
+    const entry = queue.shift()!;
+    if (entry.timer !== undefined) clearTimeout(entry.timer);
+    beginAssetServe(entry.m, binding, { load: entry.load, meta: entry.meta });
+  }
+  if (!queue.length) assetRequestQueues.delete(binding);
+}
+
 function beginAssetServe(
   m: Extract<AssetBody, { type: 'asset-request' }>,
   binding: string,
@@ -687,6 +766,7 @@ function beginAssetServe(
   assetSessions.set(binding, session);
   // 同 binding 同 requestId 在途时不能再开一条：否则后一条会覆盖账本，旧 serve 的块会串到新请求上。
   if (session.get(m.requestId) > 0) { rejectAssetRequest(m, binding); return; }
+  if (opts.stats !== false && !assetFlowHasRoom(binding)) { queueAssetRequest(m, binding, opts); return; }
   // 超 refs / 超总量直接回 forbidden，不占引用；玩家收到 fail 会清 pending。
   if (!session.tryAcquire(m.requestId)) { rejectAssetRequest(m, binding); return; }
   if (opts.stats !== false) beginAssetFlow(binding, m.requestId, m.keys);
@@ -701,7 +781,7 @@ function beginAssetServe(
     load: opts.load,
     meta: opts.meta,
     isCancelled: (key) => session.isCancelled(m.requestId, key),
-  }).finally(() => { if (opts.stats !== false) endAssetFlow(binding, m.requestId); session.release(m.requestId); refreshAssetTransferStats(); });
+  }).finally(() => { if (opts.stats !== false) endAssetFlow(binding, m.requestId); session.release(m.requestId); refreshAssetTransferStats(); drainAssetRequestQueue(binding); });
 }
 
 /** 玩家窗口按 world.media 的存储名来要文件；主持端只发这个 binding 被允许的 key。 */
@@ -732,6 +812,7 @@ export function onAssetCancel(m: Extract<AssetBody, { type: 'asset-cancel' }>, r
   const binding = bindingOf(ref);
   if (!binding) return;
   if (!players.has(binding)) return;
+  clearQueuedAssetRequest(binding, m.requestId, m.key);
   const session = assetSessions.get(binding);
   if (!session?.cancel(m.requestId, m.key)) return; // 迟到/木马 cancel 不留垃圾
   cancelAssetFlow(binding, m.requestId, m.key);

@@ -229,10 +229,14 @@ test('asset 账本随连接换代：reset/换工程清空，register 换新账�
   // 生产接线：reject 和 beginAssetServe 都要把 binding 传给调度器，否则所有玩家挤在一条钟上。
   assert.match(sync, /rejectAssetRequest[\s\S]{0,400}meta: \(\) => undefined,\n    binding,/);
   assert.match(sync, /beginAssetServe[\s\S]{0,900}void serveAssetRequest\(m, \{\n    binding,/);
+  // 每条 binding 最多 2 条在途 request；超额先排队，队列最多 8 条。
+  assert.match(sync, /assetFlowHasRoom[\s\S]{0,300}ASSET_MAX_FLOWS/);
+  assert.match(sync, /assetFlowHasRoom\(binding\)[\s\S]{0,100}queueAssetRequest/);
+  assert.match(sync, /queue\.length >= ASSET_MAX_QUEUED_REQUESTS/);
   assert.match(sync, /if \(!session\?\.cancel\(m\.requestId, m\.key\)\) return;[\s\S]{0,80}cancelAssetFlow\(binding, m\.requestId, m\.key\)/);
   assert.match(sync, /const session = assetSessions\.get\(binding\) \?\? AssetSession\.fresh\(\)/);
   assert.match(sync, /tryAcquire\(m\.requestId\)/);
-  assert.match(sync, /\.finally\(\(\) => \{ if \(opts\.stats !== false\) endAssetFlow\(binding, m\.requestId\); session\.release\(m\.requestId\); refreshAssetTransferStats\(\); \}\)/);
+  assert.match(sync, /\.finally\(\(\) => \{ if \(opts\.stats !== false\) endAssetFlow\(binding, m\.requestId\); session\.release\(m\.requestId\); refreshAssetTransferStats\(\); drainAssetRequestQueue\(binding\); \}\)/);
   // 试玩里只拦 play；stop 必须放行，否则 quiet 延迟的 stop 会卡在 trial 守卫里。
   assert.match(sync, /body\.type === 'play' && getUI\(\)\.trial/);
   assert.doesNotMatch(sync, /\(body\.type === 'play' \|\| body\.type === 'stop'\) && getUI\(\)\.trial/);

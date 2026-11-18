@@ -123,7 +123,7 @@ test('线上闭环：主持建房、发邀请、玩家加入、hello/world/say �
   await waitFor(() => playerSeen.some((m) => m.type === 'world' && m.world.viewerId === 'pc'));
   assert.ok(hostSeen.some((m) => m.type === 'hello' && m.from === joined.binding));
 
-  host.update((d) => { d.media.push({ id: 'm1', name: '图', mime: 'image/png', size: 1, key: 'k1' }); d.media.push({ id: 'm2', name: '本地', mime: 'audio/mpeg', size: 1, key: 'k2' }); });
+  host.update((d) => { d.media.push({ id: 'm1', name: '图', mime: 'image/png', size: 1, key: 'k1' }); d.media.push({ id: 'm2', name: '本地', mime: 'audio/mpeg', size: 1, key: 'k2' });  });
   const seenBefore = playerSeen.length;
   host.playMedia('m1', '图', true);
   await waitFor(() => playerSeen.slice(seenBefore).some((m) => m.type === 'play'));
@@ -133,8 +133,9 @@ test('线上闭环：主持建房、发邀请、玩家加入、hello/world/say �
   assert.equal(played.blob, undefined); // 线上不把 Blob 塞进 relay
 
   // 广播中的 key 应该进了这个 binding 的 allow；真跑一遍分块：主持端从 IndexedDB 读，玩家端拼回并落盘。
-  const bytes = new Uint8Array([1, 2, 3, 4, 5]);
+  const bytes = new Uint8Array(1_048_576).fill(7);
   await host.putRaw('k1', new Blob([bytes], { type: 'image/png' }));
+  await host.putRaw('k2', new Blob([new Uint8Array([6])], { type: 'audio/mpeg' }));
   const readyKeys = [];
   const assetFails = [];
   const assetProgress = [];
@@ -186,6 +187,46 @@ test('线上闭环：主持建房、发邀请、玩家加入、hello/world/say �
   assert.ok(assetMsgs.some((m) => m.type === 'asset-chunk' && m.key === 'k1'));
   assert.ok(assetMsgs.some((m) => m.type === 'asset-end' && m.key === 'k1' && m.bytes === bytes.length));
   offAssets();
+
+  // 同一条 binding 第三条在途请求先排队；前两条结束后，第三条仍要传完，不能直接漏图。
+  const capBefore = playerSeen.length;
+  const capIds = new Set(['r-cap1', 'r-cap2', 'r-cap3']);
+  player.send({ type: 'asset-request', requestId: 'r-cap1', keys: ['k1'] });
+  player.send({ type: 'asset-request', requestId: 'r-cap2', keys: ['k1'] });
+  player.send({ type: 'asset-request', requestId: 'r-cap3', keys: ['k1'] });
+  await waitFor(() => {
+    const ended = new Set(playerSeen.slice(capBefore).filter((m) => m.type === 'asset-end' && capIds.has(m.requestId)).map((m) => m.requestId));
+    return ended.size === 3;
+  });
+  assert.equal(playerSeen.slice(capBefore).some((m) => m.type === 'asset-fail' && m.requestId === 'r-cap3'), false);
+  await waitFor(() => host.assetTransferStats().players === 0);
+
+  // 队列上限 8：2 条在途 + 8 条排队 = 10 条能进；第 11/12 条才 forbidden。
+  const queueBefore = playerSeen.length;
+  const queueIds = Array.from({ length: 12 }, (_, i) => `r-q${i}`);
+  for (const requestId of queueIds) player.send({ type: 'asset-request', requestId, keys: ['k1'] });
+  await waitFor(() => {
+    const ended = new Set(playerSeen.slice(queueBefore).filter((m) => m.type === 'asset-end' && queueIds.includes(m.requestId)).map((m) => m.requestId));
+    const failed = new Set(playerSeen.slice(queueBefore).filter((m) => m.type === 'asset-fail' && queueIds.includes(m.requestId)).map((m) => m.requestId));
+    return ended.size >= 10 && failed.size === 2;
+  }, 5000);
+  await waitFor(() => host.assetTransferStats().players === 0);
+
+  // 排队中的请求被单 key cancel：只拿掉 k2，剩下的 k1 仍要传完，不能整条被删。
+  const singleBefore = playerSeen.length;
+  player.send({ type: 'asset-request', requestId: 'r-hold1', keys: ['k1'] });
+  player.send({ type: 'asset-request', requestId: 'r-hold2', keys: ['k1'] });
+  player.send({ type: 'asset-request', requestId: 'r-single', keys: ['k1', 'k2'] });
+  await waitFor(() => host.assetTransferStats().requests === 2);
+  player.send({ type: 'asset-cancel', requestId: 'r-single', key: 'k2' });
+  await waitFor(() => {
+    const msgs = playerSeen.slice(singleBefore);
+    return msgs.some((m) => m.type === 'asset-end' && m.requestId === 'r-single' && m.key === 'k1');
+  }, 6000);
+  await waitFor(() => host.assetTransferStats().players === 0);
+  const singleMsgs = playerSeen.slice(singleBefore);
+  assert.equal(singleMsgs.some((m) => m.type === 'asset-end' && m.requestId === 'r-single' && m.key === 'k2'), false);
+  assert.equal(singleMsgs.some((m) => m.type === 'asset-fail' && m.requestId === 'r-single'), false);
 
   // 一条请求里两个 key：前一个 start 后，后一个还在队列里，dock 应该看得到 queued=1。
   const queueStats = [];

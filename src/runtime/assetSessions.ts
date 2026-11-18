@@ -7,6 +7,8 @@ export type AssetCancelEntry = { all: boolean; keys: Set<string> };
 export const ASSET_MAX_REFS = 4;
 export const ASSET_MAX_ACTIVE = 64;
 export const ASSET_MAX_CANCEL_KEYS = 64;
+/** 每条 binding 同时在途的 request 数；再多就回 forbidden，避免一个人占多份全局预算。 */
+export const ASSET_MAX_FLOWS = 2;
 
 export class AssetSession {
   private active = new Map<string, number>();

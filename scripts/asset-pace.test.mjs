@@ -63,3 +63,15 @@ test('同一个 binding 的第二个 job 会让别的 binding 插进来', async 
   ]);
   assert.deepEqual(seen, ['a1', 'b', 'a2']);
 });
+
+
+test('两个 binding 同时 ready 时选上次发得更早的，不是 FIFO', async () => {
+  const pacer = new api.AssetPacer();
+  const seen = [];
+  await pacer.wait('b', 0).then(() => seen.push('b1'));
+  await pacer.wait('a', 0).then(() => seen.push('a1'));
+  const pa = pacer.wait('a', 0).then(() => seen.push('a2'));
+  const pb = pacer.wait('b', 0).then(() => seen.push('b2'));
+  await Promise.all([pa, pb]);
+  assert.deepEqual(seen, ['b1', 'a1', 'b2', 'a2']);
+});
