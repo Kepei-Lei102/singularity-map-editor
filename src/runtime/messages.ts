@@ -7,7 +7,7 @@ export type AssetFailReason = 'missing' | 'forbidden' | 'too-large' | 'read-fail
 /** 线上房间按需搬媒体：请求只带存储名，分块走现有 relay，服务器不解析。 */
 export type AssetBody =
   | { type: 'asset-request'; requestId: string; keys: string[] }
-  | { type: 'asset-start'; requestId: string; key: string }
+  | { type: 'asset-start'; requestId: string; key: string; bytes?: number }
   | { type: 'asset-chunk'; requestId: string; key: string; mime: string; index: number; count: number; data: string }
   | { type: 'asset-end'; requestId: string; key: string; bytes: number }
   | { type: 'asset-fail'; requestId: string; key: string; reason: AssetFailReason }

@@ -106,7 +106,8 @@ export async function serveAssetRequest(
     const started = await paced(() => {
       if (opts.isCancelled?.(key)) { startAborted = true; return false; }
       if (!opts.meta(key)) { startRevoked = true; return false; }
-      return opts.send({ type: 'asset-start', requestId: request.requestId, key });
+      // bytes 让玩家端能显示进度；旧玩家端会忽略这个可选字段。
+      return opts.send({ type: 'asset-start', requestId: request.requestId, key, bytes: blob.size });
     }, paceMs);
     if (!started) {
       // 这个 key 的 allow 在窗口里被撤：回 forbidden 后继续处理同批后面的 key。
@@ -172,6 +173,8 @@ export interface AssetReceiverOptions {
   save?: (key: string, blob: Blob) => Promise<void>;
   onReady?: (key: string) => void;
   onFail?: (key: string, reason: AssetFailReason) => void;
+  /** 已收到多少字节/总共多少；start 时 total 可能未知。 */
+  onProgress?: (key: string, received: number, total?: number) => void;
   maxBytes?: number;
   /** 0 表示不设超时；默认 30 秒 inactivity。 */
   timeoutMs?: number;
@@ -187,6 +190,7 @@ interface Incoming {
   mime: string;
   parts: Uint8Array[];
   bytes: number;
+  totalBytes?: number;
   finishing: boolean;
 }
 
@@ -196,6 +200,8 @@ export interface AssetReceiver {
   /** 用户明确点重试：绕过一次失败冷却，其他规则和 request 一样。 */
   retry(keys: string[]): Promise<void>;
   handle(body: AssetBody): void;
+  /** 只取消这几个 key 的在途请求（stop/切媒体时用），不标记失败。 */
+  cancel(keys: string[]): void;
   reset(): void;
 }
 
@@ -283,6 +289,7 @@ export function createAssetReceiver(opts: AssetReceiverOptions): AssetReceiver {
       return;
     }
     pending.delete(key);
+    opts.onProgress?.(key, p.bytes, p.totalBytes ?? p.bytes);
     opts.onReady?.(key);
   }
 
@@ -325,8 +332,10 @@ export function createAssetReceiver(opts: AssetReceiverOptions): AssetReceiver {
       if (!p || p.requestId !== body.requestId) return;
       if (p.started) return; // 重复 start 不能把 inactivity 无限往后推
       p.started = true;
+      if (typeof body.bytes === 'number' && Number.isFinite(body.bytes) && body.bytes >= 0) p.totalBytes = body.bytes;
       // host 真开始发这个 key 了，排队 watchdog 换成 inactivity timer。
       armKeyTimeout(body.key, body.requestId, timeoutMs);
+      opts.onProgress?.(body.key, 0, p.totalBytes);
       return;
     }
     if (body.type === 'asset-fail') {
@@ -355,6 +364,7 @@ export function createAssetReceiver(opts: AssetReceiverOptions): AssetReceiver {
       p.parts[body.index] = chunk;
       p.bytes += chunk.length;
       armKeyTimeout(body.key, body.requestId, timeoutMs);
+      opts.onProgress?.(body.key, p.bytes, p.totalBytes);
       return;
     }
     if (body.type === 'asset-end') {
@@ -374,6 +384,17 @@ export function createAssetReceiver(opts: AssetReceiverOptions): AssetReceiver {
     }
   }
 
+  function cancel(keys: string[]): void {
+    for (const key of [...new Set((Array.isArray(keys) ? keys : []).filter((k) => typeof k === 'string' && k.length > 0))]) {
+      const p = pending.get(key);
+      if (!p) continue;
+      pending.delete(key);
+      clearKeyTimer(key);
+      forget(p.requestId, key);
+      opts.send({ type: 'asset-cancel', requestId: p.requestId, key });
+    }
+  }
+
   function reset(): void {
     generation++;
     for (const requestId of [...requests.keys()]) opts.send({ type: 'asset-cancel', requestId });
@@ -387,5 +408,5 @@ export function createAssetReceiver(opts: AssetReceiverOptions): AssetReceiver {
     requesting.clear();
   }
 
-  return { request, retry, handle, reset };
+  return { request, retry, handle, cancel, reset };
 }

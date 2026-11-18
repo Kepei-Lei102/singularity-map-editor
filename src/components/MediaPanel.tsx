@@ -60,9 +60,18 @@ export function MediaPanel() {
   );
 }
 
-export function MediaView({ mediaId, blob, mime, autoPlay, onEnded }: { mediaId: string; blob?: Blob; mime: string; autoPlay: boolean; onEnded?: () => void }) {
+export type MediaProgress = { received: number; total?: number };
+
+/** 进度文字只在总大小已知时给百分比；未知时还是普通的「载入中…」。 */
+export function mediaProgressText(progress?: MediaProgress): string {
+  if (!progress || !progress.total || progress.total <= 0) return '载入中…';
+  const pct = Math.max(0, Math.min(100, Math.floor((progress.received / progress.total) * 100)));
+  return `载入中… ${pct}%`;
+}
+
+export function MediaView({ mediaId, blob, mime, autoPlay, onEnded, progress }: { mediaId: string; blob?: Blob; mime: string; autoPlay: boolean; onEnded?: () => void; progress?: MediaProgress }) {
   const url = useBlobUrl(mediaId, blob);
-  if (!url) return <div className="muted">载入中…</div>;
+  if (!url) return <div className="muted">{mediaProgressText(progress)}</div>;
   if (mime.startsWith('video')) return <video src={url} controls autoPlay={autoPlay} onEnded={onEnded} />;
   if (mime.startsWith('audio')) return <audio src={url} controls autoPlay={autoPlay} onEnded={onEnded} />;
   if (mime.startsWith('image')) return <img src={url} />;

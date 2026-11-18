@@ -12,7 +12,7 @@ import { DiceTray, type DiceTrayRecord } from './DiceTray';
 import { hpOf } from '../rules/combat';
 import { damageLanded, damageLost } from '../runtime/trial';
 
-export type PlayerMedia = { mediaId: string; label: string; mime: string; blob?: Blob; failed?: boolean };
+export type PlayerMedia = { mediaId: string; label: string; mime: string; blob?: Blob; failed?: boolean; progress?: { received: number; total?: number } };
 
 /** 线上播放拿到的是内容 key，没有 Blob：交给宿主按 key 去要文件。 */
 export function requestPlayMedia(receiver: AssetReceiver | null, online: boolean, mediaId: string, blob?: Blob): void {
@@ -37,7 +37,7 @@ export function PlayerMediaOverlay({ media, armed, onRetry, onEnded }: {
       ) : (
         <>
           {media.mime.startsWith('audio') && <span>♪ {media.label}</span>}
-          <MediaView key={media.mediaId} mediaId={media.mediaId} blob={media.blob} mime={media.mime} autoPlay onEnded={onEnded} />
+          <MediaView key={media.mediaId} mediaId={media.mediaId} blob={media.blob} mime={media.mime} autoPlay onEnded={onEnded} progress={media.progress} />
         </>
       )}
     </div>
@@ -48,6 +48,8 @@ export function PlayerMediaOverlay({ media, armed, onRetry, onEnded }: {
 export function PlayerView() {
   const [world, setWorld] = useState<World | null>(null);
   const [media, setMedia] = useState<PlayerMedia | null>(null);
+  const mediaRef = useRef<PlayerMedia | null>(null);
+  useEffect(() => { mediaRef.current = media; }, [media]);
   const [armed, setArmed] = useState(false);
   const [nums, setNums] = useState(false);
   const [dismissed, setDismissed] = useState<string | null>(null);
@@ -145,11 +147,15 @@ export function PlayerView() {
       else if (m.type === 'clear') { assets.current?.reset(); applyMediaIndex(null); setWorld(null); setMedia(null); setFocus(null); setCast(null); setPending(null); setRolled(null); setCodeRequest(null); setCodeSent(false); setCodeText(''); setCodeFeedback(null); }
       else if (m.type === 'move-result') setMoveNote(m.ok ? (m.kind === 'prompt' ? { ok: true, msg: m.msg } : null) : { ok: false, msg: m.msg });
       else if (m.type === 'play') {
-        setMedia({ mediaId: m.mediaId, label: m.label, mime: m.mime, blob: m.blob, failed: false });
+        if (mediaRef.current) assets.current?.cancel([mediaRef.current.mediaId]);
+        setMedia({ mediaId: m.mediaId, label: m.label, mime: m.mime, blob: m.blob, failed: false, progress: undefined });
         // 线上没有 blob：按内容 key 向主持端要文件；本地窗口直接读同源库。
         requestPlayMedia(assets.current, onlineNow, m.mediaId, m.blob);
       }
-      else if (m.type === 'stop') setMedia(null);
+      else if (m.type === 'stop') {
+        if (mediaRef.current) assets.current?.cancel([mediaRef.current.mediaId]);
+        setMedia(null);
+      }
     };
     document.title = '奇点之后 · 玩家视角';
     ensureOnlinePlayer()
@@ -163,6 +169,7 @@ export function PlayerView() {
             setMedia((cur) => (cur?.mediaId === key ? { ...cur, failed: false } : cur));
           },
           onFail: (key) => setMedia((cur) => (cur?.mediaId === key ? { ...cur, failed: true } : cur)),
+          onProgress: (key, received, total) => setMedia((cur) => (cur?.mediaId === key ? { ...cur, progress: { received, total } } : cur)),
         });
         assets.current = receiver;
         setOnline(isOnline);
@@ -397,7 +404,7 @@ export function PlayerView() {
         <DiceTray persona="player" sides={judgment.roll.sides} disabled displayResult={judgment.roll} onResult={() => {}} />
       </aside>}
       <PlayerMediaOverlay media={media} armed={armed}
-        onRetry={() => { if (!media) return; setMedia({ ...media, failed: false }); void assets.current?.retry([media.mediaId]); }}
+        onRetry={() => { if (!media) return; setMedia({ ...media, failed: false, progress: undefined }); void assets.current?.retry([media.mediaId]); }}
         onEnded={() => { if (media && !media.mime.startsWith('image')) setMedia(null); }} />
       {held && (
         <div className="player-hold">

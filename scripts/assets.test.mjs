@@ -54,7 +54,9 @@ test('主持端按 key 分块发，玩家拼回并校验内容哈希', async () 
   assert.equal(chunks.length, 2);
   assert.equal(chunks[0].index, 0);
   assert.equal(chunks[0].count, 2);
-  assert.ok(sent.some((m) => m.type === 'asset-start' && m.key === key));
+  const start = sent.find((m) => m.type === 'asset-start' && m.key === key);
+  assert.ok(start);
+  assert.equal(start.bytes, blob.size); // 旧玩家端会忽略这个可选字段
   assert.ok(sent.some((m) => m.type === 'asset-end' && m.key === key && m.bytes === blob.size));
 
   for (const m of sent) rec.handle(m);
@@ -588,4 +590,70 @@ test('end 的节流窗口里 allow 被撤：不发 end，发 forbidden', async (
   });
   assert.equal(sent.some((m) => m.type === 'asset-end'), false);
   assert.ok(sent.some((m) => m.type === 'asset-fail' && m.reason === 'forbidden'));
+});
+
+
+test('接收端按 asset-start 的总字节数报进度', async () => {
+  const requests = [];
+  const progress = [];
+  const ready = [];
+  const rec = api.createAssetReceiver({
+    send: (body) => requests.push(body),
+    load: async () => undefined,
+    save: async () => {},
+    onProgress: (key, received, total) => progress.push([key, received, total]),
+    onReady: (key) => ready.push(key),
+  });
+  await rec.request(['k']);
+  const req = requests[0];
+  rec.handle({ type: 'asset-start', requestId: req.requestId, key: 'k', bytes: 3 });
+  rec.handle({ type: 'asset-chunk', requestId: req.requestId, key: 'k', mime: 'image/png', index: 0, count: 1, data: api.bytesToBase64(Uint8Array.from([1, 2, 3])) });
+  rec.handle({ type: 'asset-end', requestId: req.requestId, key: 'k', bytes: 3 });
+  await tick();
+  assert.deepEqual(progress, [['k', 0, 3], ['k', 3, 3], ['k', 3, 3]]);
+  assert.deepEqual(ready, ['k']);
+});
+
+test('asset-start 没带字节数时进度不编百分比', async () => {
+  const requests = [];
+  const progress = [];
+  const rec = api.createAssetReceiver({
+    send: (body) => requests.push(body),
+    load: async () => undefined,
+    save: async () => {},
+    onProgress: (key, received, total) => progress.push([key, received, total]),
+  });
+  await rec.request(['k']);
+  const req = requests[0];
+  rec.handle({ type: 'asset-start', requestId: req.requestId, key: 'k' });
+  rec.handle({ type: 'asset-chunk', requestId: req.requestId, key: 'k', mime: 'image/png', index: 0, count: 1, data: api.bytesToBase64(Uint8Array.from([1, 2, 3])) });
+  assert.deepEqual(progress, [['k', 0, undefined], ['k', 3, undefined]]);
+});
+
+
+test('cancel(key) 只取消这个 key，晚到的块不再写、也不报失败', async () => {
+  const requests = [];
+  const saved = [];
+  const fails = [];
+  const rec = api.createAssetReceiver({
+    send: (body) => requests.push(body),
+    load: async () => undefined,
+    save: async (k) => saved.push(k),
+    onFail: (k, r) => fails.push([k, r]),
+  });
+  await rec.request(['a', 'b']);
+  const req = requests[0];
+  rec.handle({ type: 'asset-start', requestId: req.requestId, key: 'a' });
+  rec.handle({ type: 'asset-start', requestId: req.requestId, key: 'b' });
+  rec.cancel(['a']);
+  assert.ok(requests.some((m) => m.type === 'asset-cancel' && m.key === 'a'));
+  assert.equal(requests.filter((m) => m.type === 'asset-cancel').length, 1);
+  rec.handle({ type: 'asset-chunk', requestId: req.requestId, key: 'a', mime: 'image/png', index: 0, count: 1, data: api.bytesToBase64(Uint8Array.from([9])) });
+  rec.handle({ type: 'asset-end', requestId: req.requestId, key: 'a', bytes: 1 });
+  rec.handle({ type: 'asset-fail', requestId: req.requestId, key: 'a', reason: 'missing' });
+  rec.handle({ type: 'asset-chunk', requestId: req.requestId, key: 'b', mime: 'image/png', index: 0, count: 1, data: api.bytesToBase64(Uint8Array.from([1])) });
+  rec.handle({ type: 'asset-end', requestId: req.requestId, key: 'b', bytes: 1 });
+  await tick();
+  assert.deepEqual(saved, ['b']);
+  assert.deepEqual(fails, []);
 });

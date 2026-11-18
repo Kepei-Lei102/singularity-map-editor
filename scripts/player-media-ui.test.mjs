@@ -98,6 +98,16 @@ test('没有 blob 的线上媒体显示载入中，成功后渲染图片', () =>
   assert.match(img.getAttribute('src') ?? '', /^blob:/);
 });
 
+test('已知总字节数时显示百分比，不是光秃秃的载入中', () => {
+  const container = mount(api.React.createElement(api.PlayerMediaOverlay, {
+    media: { mediaId: 'k-progress', label: '图', mime: 'image/png', progress: { received: 1, total: 4 } },
+    armed: true,
+    onRetry: () => {},
+    onEnded: () => {},
+  }));
+  assert.match(container.textContent ?? '', /载入中… 25%/);
+});
+
 test('play→按 key 请求只发生在线上、且没有 blob 时', () => {
   const calls = [];
   const receiver = {

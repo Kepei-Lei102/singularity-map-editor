@@ -137,6 +137,7 @@ test('线上闭环：主持建房、发邀请、玩家加入、hello/world/say �
   await host.putRaw('k1', new Blob([bytes], { type: 'image/png' }));
   const readyKeys = [];
   const assetFails = [];
+  const assetProgress = [];
   const assets = player.createAssetReceiver({
     send: player.send,
     load: async () => undefined, // 模拟另一个浏览器：玩家本地没有这份文件，必须先请求
@@ -146,12 +147,14 @@ test('线上闭环：主持建房、发邀请、玩家加入、hello/world/say �
     },
     onReady: (k) => readyKeys.push(k),
     onFail: (k, r) => assetFails.push([k, r]),
+    onProgress: (k, received, total) => assetProgress.push([k, received, total]),
   });
   const offAssets = player.listenAsPlayer((m) => { if (player.isAssetMessage(m)) assets.handle(m); }, { online: true, binding: joined.binding });
   const assetSeenBefore = playerSeen.length;
   void assets.retry(['k1']);
   await waitFor(() => readyKeys.includes('k1'));
   assert.deepEqual(assetFails, []);
+  assert.ok(assetProgress.some(([k, received, total]) => k === 'k1' && received === bytes.length && total === bytes.length));
   globalThis.__setIDBSide('player');
   const raw = await player.getRaw('k1');
   globalThis.__setIDBSide('host');
