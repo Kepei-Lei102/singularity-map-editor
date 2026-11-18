@@ -167,6 +167,10 @@ test('线上闭环：主持建房、发邀请、玩家加入、hello/world/say �
   assert.equal(liveStats.queued, 0);
   assert.equal(liveStats.bindings.length, 1);
   assert.equal(liveStats.bindings[0].binding, joined.binding);
+  assert.equal(liveStats.bindings[0].pcId, 'pc');
+  assert.equal(liveStats.bindings[0].name, '甲');
+  assert.equal(liveStats.inFlight, 1);
+  assert.equal(liveStats.bindings[0].inFlight, 1);
   assert.ok(liveStats.bindings[0].bytes > 0);
   assert.ok(liveStats.rate > 0);
   await waitFor(() => host.assetTransferStats().players === 0);
@@ -188,6 +192,8 @@ test('线上闭环：主持建房、发邀请、玩家加入、hello/world/say �
   const offQueueStats = host.subscribeAssetTransferStats(() => queueStats.push(host.assetTransferStats()));
   player.send({ type: 'asset-request', requestId: 'r-queued', keys: ['k1', 'k2'] });
   await waitFor(() => queueStats.some((st) => st.queued === 1 && st.players === 1));
+  // k2 forbidden 后要从排队里拿掉，不能一直算 queued。
+  await waitFor(() => queueStats.some((st) => st.queued === 0 && st.players === 1));
   offQueueStats();
   await waitFor(() => host.assetTransferStats().players === 0);
 

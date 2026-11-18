@@ -98,8 +98,12 @@ export function MediaDock() {
       </div>
       {np.broadcast && transfer.players > 0 && (
         <div className="dock-transfer">
-          正在传素材给 {transfer.players} 名玩家
+          {(() => {
+            const names = transfer.bindings.length <= 3 ? transfer.bindings.map((b) => b.name || b.pcId).filter(Boolean) : [];
+            return names.length ? `正在传素材给 ${names.join('、')}（${transfer.players} 名）` : `正在传素材给 ${transfer.players} 名玩家`;
+          })()}
           {transfer.totalBytes > 0 ? ` · ${fmtBytes(transfer.bytes)} / ${fmtBytes(transfer.totalBytes)}` : transfer.bytes > 0 ? ` · 已发 ${fmtBytes(transfer.bytes)}` : ''}
+          {transfer.inFlight > 0 ? ` · ${transfer.inFlight} 个传输中` : ''}
           {transfer.queued > 0 ? ` · ${transfer.queued} 个排队` : ''}
           {transfer.rate > 0 ? ` · 均速 ${fmtBytes(transfer.rate)}/s` : ''}
         </div>

@@ -223,7 +223,7 @@ test('asset 账本随连接换代：reset/换工程清空，register 换新账�
   const sync = await readFile(join(root, 'src/runtime/sync.ts'), 'utf8');
   assert.match(sync, /resetPlayerBindings[\s\S]{0,400}assetSessions\.clear\(\)/);
   assert.match(sync, /players\.clear\(\)[\s\S]{0,200}assetSessions\.clear\(\)/);
-  assert.match(sync, /registerOnlinePlayer[\s\S]{0,300}assetSessions\.set\(binding, AssetSession\.fresh\(\)\)/);
+  assert.match(sync, /registerOnlinePlayer[\s\S]{0,600}assetSessions\.set\(binding, AssetSession\.fresh\(\)\)/);
   assert.match(sync, /const session = assetSessions\.get\(binding\) \?\? AssetSession\.fresh\(\)/);
   assert.match(sync, /tryAcquire\(m\.requestId\)/);
   assert.match(sync, /\.finally\(\(\) => \{ if \(opts\.stats !== false\) endAssetFlow\(binding, m\.requestId\); session\.release\(m\.requestId\); refreshAssetTransferStats\(\); \}\)/);

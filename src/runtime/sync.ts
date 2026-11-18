@@ -41,13 +41,14 @@ let broadcastAsset: { key: string; mime: string; size: number } | null = null;
 const assetSessions = new Map<string, AssetSession>();
 const assetRequestLog = new Map<string, number[]>();
 /** 主持端 dock 用的聚合数：几个玩家、几条 serve、已发/总量/排队/均速。 */
-export type AssetTransferBinding = { binding: string; bytes: number; totalBytes: number; queued: number; rate: number };
+export type AssetTransferBinding = { binding: string; pcId?: string; name?: string; bytes: number; totalBytes: number; queued: number; inFlight: number; rate: number };
 export type AssetTransferStats = {
   players: number;
   requests: number;
   bytes: number;
   totalBytes: number;
   queued: number;
+  inFlight: number;
   rate: number;
   bindings: AssetTransferBinding[];
 };
@@ -55,14 +56,19 @@ type AssetFlow = {
   requestId: string;
   totalFiles: number;
   startedFiles: number;
+  endedFiles: number;
+  failedFiles: number;
+  failedStartedFiles: number;
   totalBytes: number;
   bytes: number;
   startedAt: number;
   files: Map<string, { sent: number; total?: number }>;
+  failedKeys: Set<string>;
 };
 /** 每条 binding 的每个在途 request 一份；结束/断线/换工程就删。 */
 const assetFlows = new Map<string, Map<string, AssetFlow>>();
-let assetTransferSnapshot: AssetTransferStats = { players: 0, requests: 0, bytes: 0, totalBytes: 0, queued: 0, rate: 0, bindings: [] };
+const assetBindingNames = new Map<string, string>();
+let assetTransferSnapshot: AssetTransferStats = { players: 0, requests: 0, bytes: 0, totalBytes: 0, queued: 0, inFlight: 0, rate: 0, bindings: [] };
 const assetTransferListeners = new Set<() => void>();
 /** base64 里真正解出来的字节数；不要用 data.length，服务端消息会多算 pad。 */
 function base64Size(data: string): number {
@@ -73,7 +79,7 @@ function beginAssetFlow(binding: string, requestId: string, keys: unknown): void
   const unique = [...new Set((Array.isArray(keys) ? keys : []).filter((k) => typeof k === 'string' && k.length > 0))].slice(0, 32);
   let flows = assetFlows.get(binding);
   if (!flows) { flows = new Map(); assetFlows.set(binding, flows); }
-  flows.set(requestId, { requestId, totalFiles: unique.length, startedFiles: 0, totalBytes: 0, bytes: 0, startedAt: Date.now(), files: new Map() });
+  flows.set(requestId, { requestId, totalFiles: unique.length, startedFiles: 0, endedFiles: 0, failedFiles: 0, failedStartedFiles: 0, totalBytes: 0, bytes: 0, startedAt: Date.now(), files: new Map(), failedKeys: new Set() });
   refreshAssetTransferStats();
 }
 function endAssetFlow(binding: string, requestId: string): void {
@@ -105,45 +111,56 @@ function noteAssetBody(binding: string, requestId: string, body: AssetBody): voi
     if (file.total === undefined) flow.totalBytes += actual;
     file.sent = actual;
     file.total = actual;
+    flow.endedFiles++;
+  } else if (body.type === 'asset-fail') {
+    if (flow.failedKeys.has(body.key)) return;
+    flow.failedKeys.add(body.key);
+    if (flow.files.has(body.key)) flow.failedStartedFiles++;
+    else flow.failedFiles++;
   }
   refreshAssetTransferStats();
 }
 function refreshAssetTransferStats(): void {
   const now = Date.now();
   const bindings: AssetTransferBinding[] = [];
-  let players = 0;
+  let playerCount = 0;
   let requests = 0;
   let bytes = 0;
   let totalBytes = 0;
   let queued = 0;
+  let inFlight = 0;
   let earliest = Infinity;
   for (const [binding, flows] of assetFlows) {
     if (!flows.size) continue;
     let bBytes = 0;
     let bTotal = 0;
     let bQueued = 0;
+    let bInFlight = 0;
     let bStart = Infinity;
     for (const flow of flows.values()) {
       bBytes += flow.bytes;
       bTotal += flow.totalBytes;
-      bQueued += Math.max(0, flow.totalFiles - flow.startedFiles);
+      bQueued += Math.max(0, flow.totalFiles - flow.startedFiles - flow.failedFiles);
+      bInFlight += Math.max(0, flow.startedFiles - flow.endedFiles - flow.failedStartedFiles);
       bStart = Math.min(bStart, flow.startedAt);
     }
-    players++;
+    playerCount++;
     requests += flows.size;
     bytes += bBytes;
     totalBytes += bTotal;
     queued += bQueued;
+    inFlight += bInFlight;
     earliest = Math.min(earliest, bStart);
-    bindings.push({ binding, bytes: bBytes, totalBytes: bTotal, queued: bQueued, rate: bBytes / Math.max(1, (now - bStart) / 1000) });
+    const pcId = players.get(binding)?.pcId;
+    bindings.push({ binding, pcId, name: assetBindingNames.get(binding), bytes: bBytes, totalBytes: bTotal, queued: bQueued, inFlight: bInFlight, rate: bBytes / Math.max(1, (now - bStart) / 1000) });
   }
   const rate = earliest === Infinity ? 0 : bytes / Math.max(1, (now - earliest) / 1000);
   const prev = assetTransferSnapshot;
-  const same = prev.players === players && prev.requests === requests && prev.bytes === bytes && prev.totalBytes === totalBytes &&
-    prev.queued === queued && prev.rate === rate && prev.bindings.length === bindings.length &&
-    bindings.every((b, i) => { const p = prev.bindings[i]; return p && p.binding === b.binding && p.bytes === b.bytes && p.totalBytes === b.totalBytes && p.queued === b.queued && p.rate === b.rate; });
+  const same = prev.players === playerCount && prev.requests === requests && prev.bytes === bytes && prev.totalBytes === totalBytes &&
+    prev.queued === queued && prev.inFlight === inFlight && prev.rate === rate && prev.bindings.length === bindings.length &&
+    bindings.every((b, i) => { const p = prev.bindings[i]; return p && p.binding === b.binding && p.bytes === b.bytes && p.totalBytes === b.totalBytes && p.queued === b.queued && p.inFlight === b.inFlight && p.rate === b.rate; });
   if (same) return;
-  assetTransferSnapshot = { players, requests, bytes, totalBytes, queued, rate, bindings };
+  assetTransferSnapshot = { players: playerCount, requests, bytes, totalBytes, queued, inFlight, rate, bindings };
   for (const fn of [...assetTransferListeners]) { try { fn(); } catch { /* 一个订阅者坏掉别拖住其他订阅者 */ } }
 }
 export function subscribeAssetTransferStats(fn: () => void): () => void {
@@ -178,6 +195,7 @@ export function resetPlayerBindings(): void {
     transport.dropPeer(binding);
   }
   players.clear();
+  assetBindingNames.clear();
   broadcastAsset = null;
   assetAllow.clear();
   assetSessions.clear();
@@ -190,6 +208,8 @@ export function resetPlayerBindings(): void {
 export function registerOnlinePlayer(binding: string, pcId: string): void {
   if (!binding || !pcId) return;
   players.set(binding, { pcId, context: projectContext() });
+  const name = getRealWorld().party.find((pc) => pc.id === pcId)?.name;
+  if (name) assetBindingNames.set(binding, name); else assetBindingNames.delete(binding);
   assetAllow.delete(binding);
   assetSessions.set(binding, AssetSession.fresh());
   assetRequestLog.delete(binding);
@@ -203,6 +223,7 @@ export function unregisterOnlinePlayer(binding: string): void {
   assetSessions.delete(binding);
   players.delete(binding);
   assetFlows.delete(binding);
+  assetBindingNames.delete(binding);
   refreshAssetTransferStats();
   saveBindings();
   dropPlayerAssets(binding);
@@ -518,7 +539,7 @@ onProjectReplaced(() => {
     transport.sendToPeer(binding, { type: 'clear', __ts: 'ts-map', seq: rand(), from: SESSION, inst: INST, born: BORN });
     transport.dropPeer(binding);
   }
-  players.clear(); saveBindings(); broadcastAsset = null; assetAllow.clear(); assetSessions.clear(); assetRequestLog.clear(); assetFlows.clear(); refreshAssetTransferStats();
+  players.clear(); assetBindingNames.clear(); saveBindings(); broadcastAsset = null; assetAllow.clear(); assetSessions.clear(); assetRequestLog.clear(); assetFlows.clear(); refreshAssetTransferStats();
 });
 
 let quietUntil = 0; // 编辑器刚启动、还在确认会话标识没撞车时，先不往外推
@@ -625,7 +646,7 @@ function refreshPlayerAssets(): void {
     setPlayerAssets(binding, playerWorld(w, w.playerMapId, p.pcId), true);
   }
 }
-function dropPlayerAssets(binding: string): void { assetAllow.delete(binding); assetSessions.delete(binding); assetRequestLog.delete(binding); assetFlows.delete(binding); refreshAssetTransferStats(); }
+function dropPlayerAssets(binding: string): void { assetAllow.delete(binding); assetSessions.delete(binding); assetRequestLog.delete(binding); assetFlows.delete(binding); assetBindingNames.delete(binding); refreshAssetTransferStats(); }
 
 function assetMsg(binding: string, body: AssetBody): boolean {
   return transport.sendToPeer(binding, { ...body, __ts: 'ts-map', seq: rand(), from: SESSION, inst: INST, born: BORN });
