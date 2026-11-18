@@ -4,7 +4,7 @@ import { playerObject } from '../scene/identity';
 import { effectiveLayer } from '../scene/vision';
 import { objectEnabled } from '../core/objectData.js';
 import { beginSandbox, endSandbox, getUI, getWorld, setUI, toast, update, worldContext, type UIState } from '../core/store';
-import { addMark, autoReveal, cancelPendingPlay, checkEnterTriggers, findMap, ioBusy } from './actions';
+import { addMark, autoReveal, cancelPendingPlay, checkEnterTriggers, findMap, ioBusy, stopMedia } from './actions';
 import type { CodeFeedback, Delta, Facing, GameMap, Id, JumpCheckRecord, JumpRequest, MapObject, PC, PendingCodeAttempt, PendingJudgment, PhysicalEvent, Stance, Token, World } from '../core/types';
 import { gridDist, uid } from '../core/util';
 import { blocksMovement, ROUND_MINUTES } from '../scene/perception';
@@ -148,9 +148,12 @@ export function startTrial() {
   if (!findMap(getWorld(), mapId)) return;
   // 试玩是另一个世界：外面还等着的判定不能带进去（结算会写进沙盒，结束试玩就丢了）。
   if (getUI().pendingJudgment) { closePendingJudgment(); toast('开始试玩，之前等着的判定已取消'); }
+  // 正在给玩家广播的媒体先停掉：试玩里的 send(stop) 会被拦，不能等进试玩后再停。
+  const before = getUI().nowPlaying;
+  if (before?.broadcast) { stopMedia(); playingBefore = null; }
+  else playingBefore = before;
   beginSandbox();
   cancelPendingPlay();
-  playingBefore = getUI().nowPlaying;
   setUI({ trial: { mapId, players: [], current: 0, combat: false, moved: {}, turned: {}, turn: 1, msg: '', markSymbol: '!', markText: '', markMode: false }, selection: null, pendingConn: null });
   const p = placePlayer(mapId);
   if (!p) return endTrial();

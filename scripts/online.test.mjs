@@ -24,12 +24,55 @@ after(async () => {
 const storage = () => { const m = new Map(); return { getItem: (k) => m.get(k) ?? null, setItem: (k, v) => m.set(k, v), removeItem: (k) => m.delete(k) }; };
 globalThis.localStorage = storage();
 globalThis.sessionStorage = storage();
+// 最小内存版 IndexedDB：线上测试要真跑一遍 asset 分块落盘，不装 fake-indexeddb。
+// host/player 用两套库，模拟两个浏览器；测试里显式切 __setIDBSide。
+function makeFakeIDB() {
+  const stores = new Map();
+  const db = {
+    createObjectStore(name) { if (!stores.has(name)) stores.set(name, new Map()); },
+    transaction(name) {
+      const data = stores.get(name) ?? new Map();
+      stores.set(name, data);
+      const t = { oncomplete: null, onerror: null, onabort: null, error: null };
+      const req = (fn) => {
+        const r = { result: undefined, error: null };
+        setTimeout(() => {
+          try { r.result = fn(); } catch (e) { r.error = e; }
+          setTimeout(() => t.oncomplete?.(), 0);
+        }, 0);
+        return r;
+      };
+      const store = {
+        get: (key) => req(() => data.get(key)),
+        put: (value, key) => req(() => { data.set(key, value); return key; }),
+        delete: (key) => req(() => { data.delete(key); return undefined; }),
+      };
+      t.objectStore = () => store;
+      return t;
+    },
+    close() {},
+    openRequest() {
+      const req = { result: db, error: null, onupgradeneeded: null, onsuccess: null, onerror: null };
+      setTimeout(() => { req.onupgradeneeded?.(); req.onsuccess?.(); }, 0);
+      return req;
+    },
+  };
+  return db;
+}
+function installFakeIndexedDB() {
+  const host = makeFakeIDB();
+  const player = makeFakeIDB();
+  let side = 'host';
+  globalThis.__setIDBSide = (next) => { side = next; };
+  globalThis.indexedDB = { open: () => (side === 'player' ? player : host).openRequest() };
+}
+installFakeIndexedDB();
 globalThis.BroadcastChannel = class { postMessage() {} addEventListener() {} removeEventListener() {} close() {} };
 globalThis.window = { setTimeout: () => 0, setInterval: () => 0, addEventListener: () => {}, removeEventListener: () => {}, opener: null, open: () => null };
 const load = async (name, role, search) => {
   const file = join(temp, name);
   await build({
-    stdin: { contents: `export * from './src/runtime/onlineRoom'; export * from './src/runtime/sync'; export * from './src/core/defaults'; export * from './src/core/store'; export * from './src/runtime/actions';`, resolveDir: root },
+    stdin: { contents: `export * from './src/runtime/onlineRoom'; export * from './src/runtime/sync'; export * from './src/core/defaults'; export * from './src/core/store'; export * from './src/runtime/actions'; export * from './src/runtime/media'; export * from './src/runtime/assets';`, resolveDir: root },
     outfile: file, bundle: true, platform: 'node', format: 'cjs', logLevel: 'silent',
     define: { 'import.meta.env': JSON.stringify({ VITE_APP_ROLE: role }) },
   });
@@ -87,12 +130,36 @@ test('线上闭环：主持建房、发邀请、玩家加入、hello/world/say �
   assert.equal(played.mediaId, 'k1'); // 内容 key，玩家拿它去走 asset 分块
   assert.equal(played.blob, undefined); // 线上不把 Blob 塞进 relay
 
-  // 广播中的 key 应该进了这个 binding 的 allow；没有 IndexedDB 时读不到文件，但原因不能是 forbidden。
+  // 广播中的 key 应该进了这个 binding 的 allow；真跑一遍分块：主持端从 IndexedDB 读，玩家端拼回并落盘。
+  const bytes = new Uint8Array([1, 2, 3, 4, 5]);
+  await host.putRaw('k1', new Blob([bytes], { type: 'image/png' }));
+  const readyKeys = [];
+  const assetFails = [];
+  const assets = player.createAssetReceiver({
+    send: player.send,
+    load: async () => undefined, // 模拟另一个浏览器：玩家本地没有这份文件，必须先请求
+    save: async (key, blob) => {
+      globalThis.__setIDBSide('player');
+      try { await player.putRaw(key, blob); } finally { globalThis.__setIDBSide('host'); }
+    },
+    onReady: (k) => readyKeys.push(k),
+    onFail: (k, r) => assetFails.push([k, r]),
+  });
+  const offAssets = player.listenAsPlayer((m) => { if (player.isAssetMessage(m)) assets.handle(m); }, { online: true, binding: joined.binding });
   const assetSeenBefore = playerSeen.length;
-  player.send({ type: 'asset-request', requestId: 'r1', keys: ['k1'] });
-  await waitFor(() => playerSeen.slice(assetSeenBefore).some((m) => m.type === 'asset-fail' && m.key === 'k1'));
-  const assetFail = playerSeen.slice(assetSeenBefore).find((m) => m.type === 'asset-fail' && m.key === 'k1');
-  assert.notEqual(assetFail.reason, 'forbidden');
+  void assets.retry(['k1']);
+  await waitFor(() => readyKeys.includes('k1'));
+  assert.deepEqual(assetFails, []);
+  globalThis.__setIDBSide('player');
+  const raw = await player.getRaw('k1');
+  globalThis.__setIDBSide('host');
+  assert.ok(raw);
+  assert.deepEqual([...new Uint8Array(await raw.arrayBuffer())], [...bytes]);
+  const assetMsgs = playerSeen.slice(assetSeenBefore);
+  assert.ok(assetMsgs.some((m) => m.type === 'asset-start' && m.key === 'k1'));
+  assert.ok(assetMsgs.some((m) => m.type === 'asset-chunk' && m.key === 'k1'));
+  assert.ok(assetMsgs.some((m) => m.type === 'asset-end' && m.key === 'k1' && m.bytes === bytes.length));
+  offAssets();
 
   // 停止广播后，allow 只保留 world 真用到的媒体；这个文件没挂在任何物件上，应该立刻变成 forbidden。
   host.stopMedia();

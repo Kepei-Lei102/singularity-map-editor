@@ -207,7 +207,8 @@ test('线上广播播放接线：播放走 retry，切回仅主持人先停广�
   const player = await readFile(join(root, 'src/components/PlayerView.tsx'), 'utf8');
   const actions = await readFile(join(root, 'src/runtime/actions.ts'), 'utf8');
   // 失败冷却里的再次 play 必须走 retry，否则普通 request 会被 15 秒冷却静默吃掉，永久载入中。
-  assert.match(player, /m\.type === 'play'[\s\S]{0,500}assets\.current\.retry\(\[m\.mediaId\]\)/);
+  assert.match(player, /m\.type === 'play'[\s\S]{0,500}requestPlayMedia\(assets\.current, onlineNow, m\.mediaId, m\.blob\)/);
+  assert.match(player, /export function requestPlayMedia[\s\S]{0,200}receiver\.retry\(\[mediaId\]\)/);
   // 广播中切「▶ 仅主持人」先发 stop，allow 才会收走，玩家才停得下来。
   assert.match(actions, /!broadcast && previous\?\.broadcast[\s\S]{0,80}stopMedia\(\)/);
   // 本地读文件是异步的：读完切到线上时不能再把 Blob 发进 ws。

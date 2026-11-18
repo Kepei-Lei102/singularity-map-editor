@@ -12,10 +12,42 @@ import { DiceTray, type DiceTrayRecord } from './DiceTray';
 import { hpOf } from '../rules/combat';
 import { damageLanded, damageLost } from '../runtime/trial';
 
+export type PlayerMedia = { mediaId: string; label: string; mime: string; blob?: Blob; failed?: boolean };
+
+/** 线上播放拿到的是内容 key，没有 Blob：交给宿主按 key 去要文件。 */
+export function requestPlayMedia(receiver: AssetReceiver | null, online: boolean, mediaId: string, blob?: Blob): void {
+  if (online && receiver && !blob) void receiver.retry([mediaId]);
+}
+
+/** 玩家端媒体浮层：载入中、失败重试、成功后的视频/音频/图片/PDF。 */
+export function PlayerMediaOverlay({ media, armed, onRetry, onEnded }: {
+  media: PlayerMedia | null;
+  armed: boolean;
+  onRetry: () => void;
+  onEnded: () => void;
+}) {
+  if (!media || !armed) return null;
+  return (
+    <div className={media.mime.startsWith('audio') ? 'player-audio' : 'player-media'}>
+      {media.failed ? (
+        <div className="player-media-error">
+          <span>媒体没传过来。</span>
+          <button className="small" onClick={onRetry}>重试</button>
+        </div>
+      ) : (
+        <>
+          {media.mime.startsWith('audio') && <span>♪ {media.label}</span>}
+          <MediaView key={media.mediaId} mediaId={media.mediaId} blob={media.blob} mime={media.mime} autoPlay onEnded={onEnded} />
+        </>
+      )}
+    </div>
+  );
+}
+
 /** 玩家窗口：主持人共享这个窗口的屏幕给玩家。只显示玩家该看到的东西。 */
 export function PlayerView() {
   const [world, setWorld] = useState<World | null>(null);
-  const [media, setMedia] = useState<{ mediaId: string; label: string; mime: string; blob?: Blob; failed?: boolean } | null>(null);
+  const [media, setMedia] = useState<PlayerMedia | null>(null);
   const [armed, setArmed] = useState(false);
   const [nums, setNums] = useState(false);
   const [dismissed, setDismissed] = useState<string | null>(null);
@@ -115,7 +147,7 @@ export function PlayerView() {
       else if (m.type === 'play') {
         setMedia({ mediaId: m.mediaId, label: m.label, mime: m.mime, blob: m.blob, failed: false });
         // 线上没有 blob：按内容 key 向主持端要文件；本地窗口直接读同源库。
-        if (onlineNow && assets.current && !m.blob) void assets.current.retry([m.mediaId]);
+        requestPlayMedia(assets.current, onlineNow, m.mediaId, m.blob);
       }
       else if (m.type === 'stop') setMedia(null);
     };
@@ -364,22 +396,9 @@ export function PlayerView() {
           : `D${judgment.roll.sides} = ${judgment.roll.value === 100 ? '000' : judgment.roll.value}`}</strong><p>{judgment.ruling || '等待见证者解释判定'}</p>
         <DiceTray persona="player" sides={judgment.roll.sides} disabled displayResult={judgment.roll} onResult={() => {}} />
       </aside>}
-      {media && armed && (
-        <div className={media.mime.startsWith('audio') ? 'player-audio' : 'player-media'}>
-          {media.failed ? (
-            <div className="player-media-error">
-              <span>媒体没传过来。</span>
-              <button className="small" onClick={() => { setMedia({ ...media, failed: false }); void assets.current?.retry([media.mediaId]); }}>重试</button>
-            </div>
-          ) : (
-            <>
-              {media.mime.startsWith('audio') && <span>♪ {media.label}</span>}
-              <MediaView key={media.mediaId} mediaId={media.mediaId} blob={media.blob} mime={media.mime} autoPlay
-                onEnded={() => !media.mime.startsWith('image') && setMedia(null)} />
-            </>
-          )}
-        </div>
-      )}
+      <PlayerMediaOverlay media={media} armed={armed}
+        onRetry={() => { if (!media) return; setMedia({ ...media, failed: false }); void assets.current?.retry([media.mediaId]); }}
+        onEnded={() => { if (media && !media.mime.startsWith('image')) setMedia(null); }} />
       {held && (
         <div className="player-hold">
           <div className="player-hold-title">{focus?.label ?? '有人正在发动技能'}</div>

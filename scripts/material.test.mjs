@@ -11,7 +11,7 @@ const root = fileURLToPath(new URL('..', import.meta.url));
 const temp = await mkdtemp(join(tmpdir(), 'ts-material-'));
 const bundle = join(temp, 'editor.cjs');
 await build({
-  stdin: { contents: `export * from './src/scene/material'; export * from './src/scene/terrain'; export * from './src/scene/memory'; export * from './src/core/defaults'; export * from './src/core/grid'; export * from './src/core/schema.js'; export * from './src/runtime/actions'; export * from './src/core/store'; export * from './src/runtime/sync'; export * from './src/scene/render'; export * from './src/scene/vision';`, resolveDir: root },
+  stdin: { contents: `export * from './src/scene/material'; export * from './src/scene/terrain'; export * from './src/scene/memory'; export * from './src/core/defaults'; export * from './src/core/grid'; export * from './src/core/schema.js'; export * from './src/runtime/actions'; export * from './src/core/store'; export * from './src/runtime/sync'; export * from './src/scene/render'; export * from './src/scene/vision'; export * from './src/runtime/trial';`, resolveDir: root },
   outfile: bundle, bundle: true, platform: 'node', format: 'cjs', logLevel: 'silent',
 });
 const storage = () => { const data = new Map(); return { getItem: (k) => data.get(k) ?? null, setItem: (k, v) => data.set(k, v), removeItem: (k) => data.delete(k) }; };
@@ -617,4 +617,15 @@ test('上传孤儿删除前检查同一标签页的引用', async () => {
     globalThis.indexedDB = oldIdb;
     globalThis.confirm = oldConfirm;
   }
+});
+
+
+test('开始试玩会先停掉广播，结束后不自动恢复广播', () => {
+  const { map } = fixture('pc');
+  map.spawn = { x: 1, y: 1 };
+  api.setUI({ mapId: map.id, nowPlaying: { mediaId: 'm-broadcast', label: '广播', broadcast: true } });
+  api.startTrial();
+  assert.equal(api.getUI().nowPlaying, null);
+  api.endTrial();
+  assert.equal(api.getUI().nowPlaying, null);
 });

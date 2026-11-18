@@ -554,3 +554,38 @@ test('retry 绕过一次失败冷却', async () => {
   await rec.retry(['k']);
   assert.equal(requests.filter((m) => m.type === 'asset-request').length, 2);
 });
+
+
+test('第一块发出前 allow 在节流窗口被撤：不发 chunk，发 forbidden', async () => {
+  let allowed = true;
+  const sent = [];
+  await api.serveAssetRequest({ type: 'asset-request', requestId: 'r-chunk-window', keys: ['k'] }, {
+    send: (body) => {
+      sent.push(body);
+      if (body.type === 'asset-start') setTimeout(() => { allowed = false; }, 0);
+      return true;
+    },
+    load: async () => new Blob([pattern(3)]),
+    meta: () => (allowed ? { mime: 'image/png' } : undefined),
+    paceMs: 50,
+  });
+  assert.equal(sent.some((m) => m.type === 'asset-chunk'), false);
+  assert.ok(sent.some((m) => m.type === 'asset-fail' && m.reason === 'forbidden'));
+});
+
+test('end 的节流窗口里 allow 被撤：不发 end，发 forbidden', async () => {
+  let allowed = true;
+  const sent = [];
+  await api.serveAssetRequest({ type: 'asset-request', requestId: 'r-end-allow-window', keys: ['k'] }, {
+    send: (body) => {
+      sent.push(body);
+      if (body.type === 'asset-chunk') setTimeout(() => { allowed = false; }, 0);
+      return true;
+    },
+    load: async () => new Blob([pattern(3)]),
+    meta: () => (allowed ? { mime: 'image/png' } : undefined),
+    paceMs: 50,
+  });
+  assert.equal(sent.some((m) => m.type === 'asset-end'), false);
+  assert.ok(sent.some((m) => m.type === 'asset-fail' && m.reason === 'forbidden'));
+});

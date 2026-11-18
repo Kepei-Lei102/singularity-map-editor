@@ -39,6 +39,8 @@ let broadcastAsset: { key: string; mime: string; size: number } | null = null;
 interface AssetCancelEntry { all: boolean; keys: Set<string> }
 const assetCancels = new Map<string, Map<string, AssetCancelEntry>>();
 const assetActive = new Map<string, Map<string, number>>();
+/** 每 binding 的 generation：register/drop 后旧 serve 的 finally 不能减到新 serve 的引用。 */
+const assetEpoch = new Map<string, number>();
 const assetRequestLog = new Map<string, number[]>();
 const bindingsKey = () => `ts-player-bindings-${SESSION}`;
 try {
@@ -82,11 +84,13 @@ export function registerOnlinePlayer(binding: string, pcId: string): void {
   assetCancels.delete(binding);
   assetActive.delete(binding);
   assetRequestLog.delete(binding);
+  bumpAssetEpoch(binding);
   saveBindings();
 }
 /** 服务器告诉主持端这个 binding 断了：别留下能继续请求媒体的僵尸入口。 */
 export function unregisterOnlinePlayer(binding: string): void {
   if (!binding) return;
+  bumpAssetEpoch(binding);
   players.delete(binding);
   saveBindings();
   dropPlayerAssets(binding);
@@ -402,7 +406,7 @@ onProjectReplaced(() => {
     transport.sendToPeer(binding, { type: 'clear', __ts: 'ts-map', seq: rand(), from: SESSION, inst: INST, born: BORN });
     transport.dropPeer(binding);
   }
-  players.clear(); saveBindings(); broadcastAsset = null; assetAllow.clear(); assetCancels.clear(); assetActive.clear(); assetRequestLog.clear();
+  players.clear(); saveBindings(); broadcastAsset = null; assetAllow.clear(); assetCancels.clear(); assetActive.clear(); assetRequestLog.clear(); assetEpoch.clear();
 });
 
 let quietUntil = 0; // 编辑器刚启动、还在确认会话标识没撞车时，先不往外推
@@ -412,8 +416,8 @@ export function send(body: SyncBody, to?: string) {
     window.setTimeout(() => send(body, to), quietUntil - Date.now() + 5);
     return;
   }
-  // 试玩期间不推播放；下面按绑定分别发送沙盒或真正的世界。
-  if ((body.type === 'play' || body.type === 'stop') && getUI().trial) return;
+  // 试玩期间不推新的播放；stop 仍要放行，否则试玩开始前延迟的 stop 会被拦，玩家停不下来。
+  if (body.type === 'play' && getUI().trial) return;
   const msg = (out: SyncBody): SyncMsg => ({ ...out, __ts: 'ts-map', seq: rand(), from: SESSION, inst: INST, born: BORN, ...(to ? { to } : {}) });
   if (body.type === 'world' || body.type === 'play' || body.type === 'stop' || body.type === 'clear') {
     if (body.type === 'play') {
@@ -482,6 +486,8 @@ export function pcIdForBinding(binding: string): string | null {
   return players.get(binding)?.pcId ?? null;
 }
 
+function bumpAssetEpoch(binding: string): void { assetEpoch.set(binding, (assetEpoch.get(binding) ?? 0) + 1); }
+
 /** 这条消息该发到哪一类窗口：试玩里的判定只发给试玩窗口，真实世界的判定只发给真实窗口。 */
 function sameContextWindow(entry: { trialContext?: string }): boolean {
   return (entry.trialContext ?? null) === (getUI().trial ? worldContext() : null);
@@ -509,23 +515,37 @@ function refreshPlayerAssets(): void {
     setPlayerAssets(binding, playerWorld(w, w.playerMapId, p.pcId), true);
   }
 }
-function dropPlayerAssets(binding: string): void { assetAllow.delete(binding); assetCancels.delete(binding); assetActive.delete(binding); assetRequestLog.delete(binding); }
+function dropPlayerAssets(binding: string): void { assetAllow.delete(binding); assetCancels.delete(binding); assetActive.delete(binding); assetRequestLog.delete(binding); bumpAssetEpoch(binding); }
 
 function assetMsg(binding: string, body: AssetBody): boolean {
   return transport.sendToPeer(binding, { ...body, __ts: 'ts-map', seq: rand(), from: SESSION, inst: INST, born: BORN });
 }
 
-/** 同一 requestId 最多并存 4 个 serve；再多当恶意重复请求丢掉。 */
+/** 同一 requestId 最多并存 4 个 serve；全 binding 最多 64 个在途 serve。再多直接回 forbidden，不占引用。 */
 const ASSET_MAX_REFS = 4;
+const ASSET_MAX_ACTIVE = 64;
+const ASSET_MAX_CANCEL_REQS = ASSET_MAX_ACTIVE;
+
+/** 拒绝也不留 active：最多 32 条 forbidden 在节流钟里发完，玩家收到后清 pending。 */
+function rejectAssetRequest(m: Extract<AssetBody, { type: 'asset-request' }>, binding: string): void {
+  void serveAssetRequest(m, {
+    send: (body) => (players.has(binding) ? assetMsg(binding, body) : false),
+    load: async () => undefined,
+    meta: () => undefined,
+  });
+}
 
 function beginAssetServe(
   m: Extract<AssetBody, { type: 'asset-request' }>,
   binding: string,
   opts: Pick<ServeAssetOptions, 'load' | 'meta'>,
 ): void {
+  const epoch = assetEpoch.get(binding) ?? -1;
   const active = assetActive.get(binding) ?? new Map<string, number>();
   const refs = active.get(m.requestId) ?? 0;
-  if (refs >= ASSET_MAX_REFS) return;
+  let total = 0;
+  for (const n of active.values()) total += n;
+  if (refs >= ASSET_MAX_REFS || total >= ASSET_MAX_ACTIVE) { rejectAssetRequest(m, binding); return; }
   active.set(m.requestId, refs + 1);
   assetActive.set(binding, active);
   void serveAssetRequest(m, {
@@ -537,6 +557,8 @@ function beginAssetServe(
       return !!entry && (entry.all || (!!key && entry.keys.has(key)));
     },
   }).finally(() => {
+    // register/drop/reset 后这个 binding 已经换代：旧 serve 的 finally 不能碰新引用。
+    if ((assetEpoch.get(binding) ?? -1) !== epoch) return;
     const act = assetActive.get(binding);
     if (act) {
       const left = (act.get(m.requestId) ?? 1) - 1;
@@ -581,7 +603,7 @@ export function onAssetCancel(m: Extract<AssetBody, { type: 'asset-cancel' }>, r
   if (!players.has(binding)) return;
   if (!(assetActive.get(binding)?.get(m.requestId) ?? 0)) return; // 迟到/木马 cancel 不留垃圾
   const byReq = assetCancels.get(binding) ?? new Map<string, AssetCancelEntry>();
-  if (!byReq.has(m.requestId) && byReq.size >= 64) return;
+  if (!byReq.has(m.requestId) && byReq.size >= ASSET_MAX_CANCEL_REQS) return;
   const entry = byReq.get(m.requestId) ?? { all: false, keys: new Set<string>() };
   if (typeof m.key === 'string' && m.key) {
     if (entry.keys.size < 64) entry.keys.add(m.key);

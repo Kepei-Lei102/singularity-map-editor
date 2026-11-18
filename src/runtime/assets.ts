@@ -127,24 +127,39 @@ export async function serveAssetRequest(
       try {
         chunk = new Uint8Array(await blob.slice(start, Math.min(start + ASSET_CHUNK_BYTES, blob.size)).arrayBuffer());
       } catch { await fail(key, 'read-failed'); completed = false; break; }
-      const ok = await paced(() => opts.send({
-        type: 'asset-chunk', requestId: request.requestId, key, mime, index, count, data: bytesToBase64(chunk),
-      }), paceMs);
-      if (!ok) return;
+      let chunkRevoked = false;
+      let chunkFailed = false;
+      const ok = await paced(() => {
+        // 节流等待期间 allow/cancel 都可能到；发出前再看一眼。
+        if (opts.isCancelled?.(key)) return false;
+        if (!opts.meta(key)) { chunkRevoked = true; return false; }
+        const sent = opts.send({ type: 'asset-chunk', requestId: request.requestId, key, mime, index, count, data: bytesToBase64(chunk) });
+        if (!sent) chunkFailed = true;
+        return sent;
+      }, paceMs);
+      if (!ok) {
+        if (chunkRevoked) { await fail(key, 'forbidden'); completed = false; break; }
+        if (chunkFailed) return;
+        completed = false; break; // 单个 key 取消，只停这个 key，同批后面的还能继续
+      }
     }
     if (!completed) continue;
     // 最后一块之后 allow 也可能刚被撤；end 前再查一次，避免把已无权文件标完。
     if (!opts.meta(key)) { await fail(key, 'forbidden'); continue; }
     if (opts.isCancelled?.(key)) continue;
     let endCanceled = false;
+    let endRevoked = false;
     const ok = await paced(() => {
-      // 节流等待期间 cancel 也可能到；进发送前再查一次。
+      // 节流等待期间 cancel/allow 都可能变；进发送前再查一次。
       if (opts.isCancelled?.(key)) { endCanceled = true; return false; }
+      if (!opts.meta(key)) { endRevoked = true; return false; }
       return opts.send({ type: 'asset-end', requestId: request.requestId, key, bytes: blob.size });
     }, paceMs);
     if (!ok) {
-      // 单个 key 被取消只跳过这个 key；send 本身失败才停整批。
+      // 单个 key 被取消/没权限只跳过这个 key；send 本身失败才停整批。
+      if (endRevoked) await fail(key, 'forbidden');
       if (endCanceled) continue;
+      if (endRevoked) continue;
       return;
     }
   }
