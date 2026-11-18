@@ -194,6 +194,8 @@ test('线上闭环：主持建房、发邀请、玩家加入、hello/world/say �
   const rateAt = Date.now();
   assert.equal(host.rateFromSamples([{ at: rateAt - 1000, bytes: 0 }, { at: rateAt, bytes: 1000 }], rateAt), 1000);
   assert.equal(host.rateFromSamples([{ at: rateAt - 1000, bytes: 0 }, { at: rateAt, bytes: 1000 }], rateAt + 1000), 500);
+  assert.equal(host.rateFromSamples([{ at: rateAt - 1000, bytes: 0 }, { at: rateAt, bytes: 1000 }], rateAt + 1900), 500);
+  assert.equal(host.rateFromSamples([{ at: rateAt - 1000, bytes: 0 }, { at: rateAt, bytes: 1000 }], rateAt + 2001), 0);
   assert.equal(host.rateFromSamples([{ at: rateAt - 1000, bytes: 0 }, { at: rateAt, bytes: 1000 }], rateAt + 2500), 0);
   offStats();
   globalThis.__setIDBSide('player');

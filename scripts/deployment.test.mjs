@@ -253,7 +253,8 @@ test('asset 账本随连接换代：reset/换工程清空，register 换新账�
   assert.match(sync, /scheduleAssetRateTick/);
   assert.match(mediaPanel, /ASSET_STATS_UI_MS = 150/);
   assert.match(mediaPanel, /const transfer = useThrottledAssetTransferStats\(\)/);
-  assert.match(mediaPanel, /setStats\(assetTransferStats\(\)\); \}, ASSET_STATS_UI_MS/);
+  assert.match(mediaPanel, /setStats\(snapshot\(\)\); \}, delayMs/);
+  assert.match(mediaPanel, /if \(timer !== undefined\) window\.clearTimeout\(timer\)/);
   assert.match(mediaPanel, /近 2 秒/);
   // 试玩里只拦 play；stop 必须放行，否则 quiet 延迟的 stop 会卡在 trial 守卫里。
   assert.match(sync, /body\.type === 'play' && getUI\(\)\.trial/);

@@ -82,17 +82,22 @@ export function MediaView({ mediaId, blob, mime, autoPlay, onEnded, progress }: 
 }
 
 const ASSET_STATS_UI_MS = 150;
-/** 素材一块 45ms 就推一次账本；Dock 只是给人看的，150ms 合并一次，别整块重渲染。 */
-function useThrottledAssetTransferStats(): AssetTransferStats {
-  const [stats, setStats] = useState<AssetTransferStats>(assetTransferStats);
+/** 素材一块 45ms 就推一次账本；Dock 只是给人看的，150ms 合并一次，别整块重渲染。
+ *  订阅/快照/间隔可注入，测试才能在没有真实线上流的情况下验证合并行为。 */
+export function useThrottledAssetTransferStats(
+  subscribe: (fn: () => void) => () => void = subscribeAssetTransferStats,
+  snapshot: () => AssetTransferStats = assetTransferStats,
+  delayMs = ASSET_STATS_UI_MS,
+): AssetTransferStats {
+  const [stats, setStats] = useState<AssetTransferStats>(() => snapshot());
   useEffect(() => {
     let timer: number | undefined;
-    const off = subscribeAssetTransferStats(() => {
+    const off = subscribe(() => {
       if (timer !== undefined) return;
-      timer = window.setTimeout(() => { timer = undefined; setStats(assetTransferStats()); }, ASSET_STATS_UI_MS);
+      timer = window.setTimeout(() => { timer = undefined; setStats(snapshot()); }, delayMs);
     });
     return () => { off(); if (timer !== undefined) window.clearTimeout(timer); };
-  }, []);
+  }, [subscribe, snapshot, delayMs]);
   return stats;
 }
 
