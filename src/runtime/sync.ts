@@ -62,6 +62,7 @@ type AssetFlow = {
   totalBytes: number;
   bytes: number;
   startedAt: number;
+  samples: { at: number; bytes: number }[];
   files: Map<string, { sent: number; total?: number }>;
   plannedKeys: Set<string>;
   endedKeys: Set<string>;
@@ -78,6 +79,9 @@ type QueuedAssetRequest = {
   timer?: ReturnType<typeof setTimeout>;
 };
 const assetRequestQueues = new Map<string, QueuedAssetRequest[]>();
+/** 速率只算最近 2 秒；长时间没新块就回 0，不拿累计平均冒充实时。 */
+export const ASSET_RATE_WINDOW_MS = 2_000;
+const ASSET_RATE_TICK_MS = 500;
 const assetBindingNames = new Map<string, string>();
 let assetTransferSnapshot: AssetTransferStats = { players: 0, requests: 0, bytes: 0, totalBytes: 0, queued: 0, inFlight: 0, rate: 0, bindings: [] };
 const assetTransferListeners = new Set<() => void>();
@@ -93,8 +97,9 @@ function beginAssetFlow(binding: string, requestId: string, keys: unknown): void
   const unique = requestKeys(keys);
   let flows = assetFlows.get(binding);
   if (!flows) { flows = new Map(); assetFlows.set(binding, flows); }
-  flows.set(requestId, { requestId, totalFiles: unique.length, startedFiles: 0, endedFiles: 0, failedFiles: 0, failedStartedFiles: 0, totalBytes: 0, bytes: 0, startedAt: Date.now(), files: new Map(), plannedKeys: new Set(unique), endedKeys: new Set(), failedKeys: new Set() });
+  flows.set(requestId, { requestId, totalFiles: unique.length, startedFiles: 0, endedFiles: 0, failedFiles: 0, failedStartedFiles: 0, totalBytes: 0, bytes: 0, startedAt: Date.now(), samples: [], files: new Map(), plannedKeys: new Set(unique), endedKeys: new Set(), failedKeys: new Set() });
   refreshAssetTransferStats();
+  scheduleAssetRateTick();
 }
 /** 玩家 cancel 后，账本立刻反映：整个请求删掉，单 key 从排队/在途里拿掉。 */
 function cancelAssetFlow(binding: string, requestId: string, key?: string): void {
@@ -115,6 +120,32 @@ function endAssetFlow(binding: string, requestId: string): void {
   if (!flows.size) assetFlows.delete(binding);
   refreshAssetTransferStats();
 }
+function noteFlowSample(flow: AssetFlow): void {
+  const now = Date.now();
+  const last = flow.samples[flow.samples.length - 1];
+  if (last && last.at === now) { last.bytes = flow.bytes; return; }
+  flow.samples.push({ at: now, bytes: flow.bytes });
+  const cutoff = now - ASSET_RATE_WINDOW_MS;
+  while (flow.samples.length > 2 && flow.samples[1].at < cutoff) flow.samples.shift();
+}
+
+/** 纯函数：按最近 2 秒窗口算平均速率；超过 2 秒没新采样就回 0。
+ *  分母取 max(窗口起点, 采样起点) 到现在的秒数，避免“两次采样只隔 1 秒”被当成 1 秒速率。 */
+export function rateFromSamples(samples: { at: number; bytes: number }[], now: number): number {
+  if (samples.length < 2) return 0;
+  const last = samples[samples.length - 1];
+  if (now - last.at > ASSET_RATE_WINDOW_MS) return 0;
+  const cutoff = now - ASSET_RATE_WINDOW_MS;
+  let base = samples[0];
+  for (const sample of samples) { if (sample.at > cutoff) break; base = sample; }
+  const seconds = Math.min(ASSET_RATE_WINDOW_MS / 1000, Math.max(0, (now - base.at) / 1000));
+  return seconds > 0 ? Math.max(0, (last.bytes - base.bytes) / seconds) : 0;
+}
+
+function flowRate(flow: AssetFlow, now: number): number {
+  return rateFromSamples(flow.samples, now);
+}
+
 function noteAssetBody(binding: string, requestId: string, body: AssetBody): void {
   const flow = assetFlows.get(binding)?.get(requestId);
   if (!flow) return;
@@ -124,12 +155,14 @@ function noteAssetBody(binding: string, requestId: string, body: AssetBody): voi
     const total = typeof body.bytes === 'number' && Number.isFinite(body.bytes) && body.bytes >= 0 ? body.bytes : undefined;
     flow.files.set(body.key, { sent: 0, total });
     if (total !== undefined) flow.totalBytes += total;
+    noteFlowSample(flow);
   } else if (body.type === 'asset-chunk') {
     const file = flow.files.get(body.key);
     if (!file) return;
     const n = base64Size(body.data);
     file.sent += n;
     flow.bytes += n;
+    noteFlowSample(flow);
   } else if (body.type === 'asset-end') {
     const file = flow.files.get(body.key);
     if (!file || flow.endedKeys.has(body.key)) return;
@@ -140,6 +173,7 @@ function noteAssetBody(binding: string, requestId: string, body: AssetBody): voi
     file.total = actual;
     flow.endedKeys.add(body.key);
     flow.endedFiles++;
+    noteFlowSample(flow);
   } else if (body.type === 'asset-fail') {
     if (!flow.plannedKeys.has(body.key) || flow.failedKeys.has(body.key)) return;
     flow.failedKeys.add(body.key);
@@ -148,6 +182,18 @@ function noteAssetBody(binding: string, requestId: string, body: AssetBody): voi
   }
   refreshAssetTransferStats();
 }
+let assetRateTimer: ReturnType<typeof setTimeout> | undefined;
+function scheduleAssetRateTick(): void {
+  if (assetRateTimer !== undefined || !assetFlows.size) return;
+  assetRateTimer = setTimeout(() => {
+    assetRateTimer = undefined;
+    if (!assetFlows.size) return;
+    refreshAssetTransferStats();
+    scheduleAssetRateTick();
+  }, ASSET_RATE_TICK_MS);
+  (assetRateTimer as unknown as { unref?: () => void }).unref?.();
+}
+
 function refreshAssetTransferStats(): void {
   const now = Date.now();
   const bindings: AssetTransferBinding[] = [];
@@ -157,20 +203,20 @@ function refreshAssetTransferStats(): void {
   let totalBytes = 0;
   let queued = 0;
   let inFlight = 0;
-  let earliest = Infinity;
+  let rate = 0;
   for (const [binding, flows] of assetFlows) {
     if (!flows.size) continue;
     let bBytes = 0;
     let bTotal = 0;
     let bQueued = 0;
     let bInFlight = 0;
-    let bStart = Infinity;
+    let bRate = 0;
     for (const flow of flows.values()) {
       bBytes += flow.bytes;
       bTotal += flow.totalBytes;
       bQueued += Math.max(0, flow.totalFiles - flow.startedFiles - flow.failedFiles);
       bInFlight += Math.max(0, flow.startedFiles - flow.endedFiles - flow.failedStartedFiles);
-      bStart = Math.min(bStart, flow.startedAt);
+      bRate += flowRate(flow, now);
     }
     playerCount++;
     requests += flows.size;
@@ -178,11 +224,10 @@ function refreshAssetTransferStats(): void {
     totalBytes += bTotal;
     queued += bQueued;
     inFlight += bInFlight;
-    earliest = Math.min(earliest, bStart);
+    rate += bRate;
     const pcId = players.get(binding)?.pcId;
-    bindings.push({ binding, pcId, name: assetBindingNames.get(binding), bytes: bBytes, totalBytes: bTotal, queued: bQueued, inFlight: bInFlight, rate: bBytes / Math.max(1, (now - bStart) / 1000) });
+    bindings.push({ binding, pcId, name: assetBindingNames.get(binding), bytes: bBytes, totalBytes: bTotal, queued: bQueued, inFlight: bInFlight, rate: bRate });
   }
-  const rate = earliest === Infinity ? 0 : bytes / Math.max(1, (now - earliest) / 1000);
   const prev = assetTransferSnapshot;
   const same = prev.players === playerCount && prev.requests === requests && prev.bytes === bytes && prev.totalBytes === totalBytes &&
     prev.queued === queued && prev.inFlight === inFlight && prev.rate === rate && prev.bindings.length === bindings.length &&

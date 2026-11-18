@@ -221,6 +221,7 @@ test('线上广播播放接线：播放走 retry，切回仅主持人先停广�
 
 test('asset 账本随连接换代：reset/换工程清空，register 换新账本，serve 归还捕获实例', async () => {
   const sync = await readFile(join(root, 'src/runtime/sync.ts'), 'utf8');
+  const mediaPanel = await readFile(join(root, 'src/components/MediaPanel.tsx'), 'utf8');
   assert.match(sync, /resetPlayerBindings[\s\S]{0,400}assetSessions\.clear\(\)/);
   assert.match(sync, /players\.clear\(\)[\s\S]{0,200}assetSessions\.clear\(\)/);
   assert.match(sync, /registerOnlinePlayer[\s\S]{0,600}assetSessions\.set\(binding, AssetSession\.fresh\(\)\)/);
@@ -237,6 +238,14 @@ test('asset 账本随连接换代：reset/换工程清空，register 换新账�
   assert.match(sync, /const session = assetSessions\.get\(binding\) \?\? AssetSession\.fresh\(\)/);
   assert.match(sync, /tryAcquire\(m\.requestId\)/);
   assert.match(sync, /\.finally\(\(\) => \{ if \(opts\.stats !== false\) endAssetFlow\(binding, m\.requestId\); session\.release\(m\.requestId\); refreshAssetTransferStats\(\); drainAssetRequestQueue\(binding\); \}\)/);
+  // 速率按最近 2 秒算；Dock 订阅 150ms 合并一次，别每块重渲染。
+  assert.match(sync, /ASSET_RATE_WINDOW_MS = 2_000/);
+  assert.match(sync, /flowRate\(flow, now\)/);
+  assert.match(sync, /scheduleAssetRateTick/);
+  assert.match(mediaPanel, /ASSET_STATS_UI_MS = 150/);
+  assert.match(mediaPanel, /const transfer = useThrottledAssetTransferStats\(\)/);
+  assert.match(mediaPanel, /setStats\(assetTransferStats\(\)\); \}, ASSET_STATS_UI_MS/);
+  assert.match(mediaPanel, /近 2 秒/);
   // 试玩里只拦 play；stop 必须放行，否则 quiet 延迟的 stop 会卡在 trial 守卫里。
   assert.match(sync, /body\.type === 'play' && getUI\(\)\.trial/);
   assert.doesNotMatch(sync, /\(body\.type === 'play' \|\| body\.type === 'stop'\) && getUI\(\)\.trial/);

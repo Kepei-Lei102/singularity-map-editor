@@ -1,6 +1,6 @@
-import { useSyncExternalStore } from 'react';
+import { useEffect, useState, useSyncExternalStore } from 'react';
 import { cleanupMedia, deleteMedia, offerDeleteOrphanBlob, stopMedia, playMedia } from '../runtime/actions';
-import { assetTransferStats, isOnlineTransport, subscribeAssetTransferStats, subscribeTransportKind } from '../runtime/sync';
+import { assetTransferStats, isOnlineTransport, subscribeAssetTransferStats, subscribeTransportKind, type AssetTransferStats } from '../runtime/sync';
 import { storeBlobStatus, useBlobUrl } from '../runtime/media';
 import { toast, update, useUI, useWorld, worldContext } from '../core/store';
 import { uid } from '../core/util';
@@ -81,11 +81,26 @@ export function MediaView({ mediaId, blob, mime, autoPlay, onEnded, progress }: 
   return <a href={url} target="_blank">打开文件</a>;
 }
 
+const ASSET_STATS_UI_MS = 150;
+/** 素材一块 45ms 就推一次账本；Dock 只是给人看的，150ms 合并一次，别整块重渲染。 */
+function useThrottledAssetTransferStats(): AssetTransferStats {
+  const [stats, setStats] = useState<AssetTransferStats>(assetTransferStats);
+  useEffect(() => {
+    let timer: number | undefined;
+    const off = subscribeAssetTransferStats(() => {
+      if (timer !== undefined) return;
+      timer = window.setTimeout(() => { timer = undefined; setStats(assetTransferStats()); }, ASSET_STATS_UI_MS);
+    });
+    return () => { off(); if (timer !== undefined) window.clearTimeout(timer); };
+  }, []);
+  return stats;
+}
+
 /** 主持人这边正在播放的媒体。 */
 export function MediaDock() {
   const ui = useUI();
   const w = useWorld();
-  const transfer = useSyncExternalStore(subscribeAssetTransferStats, assetTransferStats, assetTransferStats);
+  const transfer = useThrottledAssetTransferStats();
   const np = ui.nowPlaying;
   if (!np) return null;
   const meta = w.media.find((m) => m.id === np.mediaId);
@@ -105,7 +120,7 @@ export function MediaDock() {
           {transfer.totalBytes > 0 ? ` · ${fmtBytes(transfer.bytes)} / ${fmtBytes(transfer.totalBytes)}` : transfer.bytes > 0 ? ` · 已发 ${fmtBytes(transfer.bytes)}` : ''}
           {transfer.inFlight > 0 ? ` · ${transfer.inFlight} 个传输中` : ''}
           {transfer.queued > 0 ? ` · ${transfer.queued} 个排队` : ''}
-          {transfer.rate > 0 ? ` · 全场均速 ${fmtBytes(transfer.rate)}/s` : ''}
+          {transfer.rate > 0 ? ` · 近 2 秒 ${fmtBytes(transfer.rate)}/s` : ''}
         </div>
       )}
       {/* 同步给玩家时主持人这边静音，避免共享屏幕时声音叠两遍 */}
