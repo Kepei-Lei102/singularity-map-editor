@@ -12,8 +12,11 @@ export const ASSET_QUEUE_TIMEOUT_MS = 120_000;
 export const ASSET_LOAD_TIMEOUT_MS = 30_000;
 /** 缺文件/被拒/校验失败后先别每帧重问；15 秒后再试一次。 */
 export const ASSET_FAIL_COOLDOWN_MS = 15_000;
-/** 全场共用一个节流钟：一块 45ms，约 22 块/秒，给 world/判定/说话留出每连接 60 条/秒的余量。 */
+/** 单条 binding 的基线间隔：一块 45ms，约 22 块/秒。 */
 export const ASSET_PACE_MS = 45;
+/** 全局 token：一块 20ms，约 50 块/秒，给 world/判定/说话留出每连接 60 条/秒的余量。
+ *  12 个玩家一起拉时按 binding 轮转，不会让一个人独占全局预算。 */
+export const ASSET_GLOBAL_TOKEN_MS = 20;
 const MAX_CHUNKS = Math.ceil(ASSET_MAX_BYTES / ASSET_CHUNK_BYTES);
 const HASHED_KEY = /^v:[0-9a-f]{40}$/;
 
@@ -56,13 +59,63 @@ export function base64ToBytes(data: string): Uint8Array {
   return out;
 }
 
-/** 主持端的发送端：约 22 块/秒的全局节流，给 world/判定/说话留出同一个连接的余量。 */
-let nextAssetAt = 0;
-async function paced<T>(fn: () => T, paceMs: number): Promise<T> {
-  const now = Date.now();
-  const at = Math.max(now, nextAssetAt);
-  nextAssetAt = at + Math.max(0, paceMs);
-  if (at > now) await new Promise<void>((resolve) => setTimeout(resolve, at - now));
+/**
+ * 主持端发送调度：每个 binding 至少隔 paceMs 一块；全局每 ASSET_GLOBAL_TOKEN_MS 只发一块。
+ * 等 token 的 binding 按“上次发得最早”轮转，避免 12 个玩家时某个 binding 把队列占满。
+ */
+export class AssetPacer {
+  private queue: { binding: string; paceMs: number; resolve: () => void }[] = [];
+  private last = new Map<string, number>();
+  private nextGlobal = 0;
+  private timer: ReturnType<typeof setTimeout> | undefined;
+
+  wait(binding: string, paceMs: number): Promise<void> {
+    return new Promise((resolve) => {
+      this.queue.push({ binding: binding || '', paceMs: Math.max(0, paceMs), resolve });
+      this.pump();
+    });
+  }
+
+  private readyAt(job: { binding: string; paceMs: number }): number {
+    return (this.last.get(job.binding) ?? 0) + job.paceMs;
+  }
+
+  private pump(): void {
+    if (!this.queue.length) return;
+    const now = Date.now();
+    if (now < this.nextGlobal) { this.arm(this.nextGlobal - now); return; }
+    const ready = this.queue.filter((job) => this.readyAt(job) <= now);
+    if (!ready.length) {
+      let at = Infinity;
+      for (const job of this.queue) at = Math.min(at, this.readyAt(job));
+      this.arm(Math.max(0, at - now));
+      return;
+    }
+    // 上次最早发的那条 binding 先走；没发过的 binding 优先。
+    let chosen = ready[0];
+    let chosenLast = this.last.get(chosen.binding) ?? -Infinity;
+    for (const job of ready) {
+      const last = this.last.get(job.binding) ?? -Infinity;
+      if (last < chosenLast) { chosen = job; chosenLast = last; }
+    }
+    const index = this.queue.indexOf(chosen);
+    if (index >= 0) this.queue.splice(index, 1);
+    this.last.set(chosen.binding, now);
+    this.nextGlobal = now + ASSET_GLOBAL_TOKEN_MS;
+    chosen.resolve();
+    if (this.queue.length) this.arm(this.nextGlobal - Date.now());
+  }
+
+  private arm(ms: number): void {
+    if (this.timer !== undefined) return;
+    this.timer = setTimeout(() => { this.timer = undefined; this.pump(); }, Math.max(0, ms));
+  }
+}
+const assetPacer = new AssetPacer();
+
+async function paced<T>(binding: string | undefined, fn: () => T, paceMs: number): Promise<T> {
+  if (paceMs <= 0) return fn();
+  await assetPacer.wait(binding ?? '', paceMs);
   return fn();
 }
 
@@ -73,6 +126,8 @@ export interface ServeAssetOptions {
   meta: (key: string) => { mime: string; size?: number } | undefined;
   paceMs?: number;
   maxBytes?: number;
+  /** 发送调度按 binding 分：同一个人不会把全局 token 占满。 */
+  binding?: string;
   /** 主持端 load 的超时；默认 30 秒，0 表示不设。 */
   loadTimeoutMs?: number;
   /** 玩家发来 asset-cancel / 世界换掉 allow 时，下一块前停下。 */
@@ -91,7 +146,7 @@ export async function serveAssetRequest(
   const fail = async (key: string, reason: AssetFailReason): Promise<boolean> => {
     // allow 被撤走时不能再说 missing/too-large/read-failed，统一按 forbidden 回。
     const liveReason = opts.meta(key) ? reason : 'forbidden';
-    return paced(() => opts.send({ type: 'asset-fail', requestId: request.requestId, key, reason: liveReason }), paceMs);
+    return paced(opts.binding, () => opts.send({ type: 'asset-fail', requestId: request.requestId, key, reason: liveReason }), paceMs);
   };
   for (const key of keys) {
     if (opts.isCancelled?.(key)) continue;
@@ -115,7 +170,7 @@ export async function serveAssetRequest(
     // 文件确实存在、要开始发了，才让玩家把“排队 watchdog”换成这个 key 的 inactivity timer。
     let startAborted = false;
     let startRevoked = false;
-    const started = await paced(() => {
+    const started = await paced(opts.binding, () => {
       if (opts.isCancelled?.(key)) { startAborted = true; return false; }
       if (!opts.meta(key)) { startRevoked = true; return false; }
       // bytes 让玩家端能显示进度；旧玩家端会忽略这个可选字段。
@@ -142,7 +197,7 @@ export async function serveAssetRequest(
       } catch { await fail(key, 'read-failed'); completed = false; break; }
       let chunkRevoked = false;
       let chunkFailed = false;
-      const ok = await paced(() => {
+      const ok = await paced(opts.binding, () => {
         // 节流等待期间 allow/cancel 都可能到；发出前再看一眼。
         if (opts.isCancelled?.(key)) return false;
         if (!opts.meta(key)) { chunkRevoked = true; return false; }
@@ -162,7 +217,7 @@ export async function serveAssetRequest(
     if (opts.isCancelled?.(key)) continue;
     let endCanceled = false;
     let endRevoked = false;
-    const ok = await paced(() => {
+    const ok = await paced(opts.binding, () => {
       // 节流等待期间 cancel/allow 都可能变；进发送前再查一次。
       if (opts.isCancelled?.(key)) { endCanceled = true; return false; }
       if (!opts.meta(key)) { endRevoked = true; return false; }

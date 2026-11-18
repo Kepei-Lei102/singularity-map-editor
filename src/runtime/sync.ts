@@ -674,6 +674,7 @@ function rejectAssetRequest(m: Extract<AssetBody, { type: 'asset-request' }>, bi
     send: (body) => (players.has(binding) ? assetMsg(binding, body) : false),
     load: async () => undefined,
     meta: () => undefined,
+    binding,
   });
 }
 
@@ -691,6 +692,7 @@ function beginAssetServe(
   if (opts.stats !== false) beginAssetFlow(binding, m.requestId, m.keys);
   else refreshAssetTransferStats();
   void serveAssetRequest(m, {
+    binding,
     send: (body) => {
       const ok = players.has(binding) ? assetMsg(binding, body) : false;
       if (ok && opts.stats !== false) noteAssetBody(binding, m.requestId, body);
