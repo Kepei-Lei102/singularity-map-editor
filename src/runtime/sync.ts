@@ -14,7 +14,7 @@ import { SESSION, rand, renewSession } from '../core/session';
 import { createLocalTransport } from './transportLocal';
 import { createSwitchTransport, type Transport } from './transport';
 import type { AssetBody, SyncBody, SyncMsg, TrialMoveSignal } from './messages';
-import { ASSET_QUEUE_TIMEOUT_MS, serveAssetRequest, assetKeyOf, type ServeAssetOptions } from './assets';
+import { ASSET_FLOW_IDLE_TIMEOUT_MS, ASSET_QUEUE_TIMEOUT_MS, serveAssetRequest, assetKeyOf, type ServeAssetOptions } from './assets';
 import { getRaw } from './media';
 import { ASSET_MAX_FLOWS, AssetSession } from './assetSessions';
 export type { SyncBody, SyncMsg, TrialMoveSignal } from './messages';
@@ -735,6 +735,7 @@ function rejectAssetRequest(m: Extract<AssetBody, { type: 'asset-request' }>, bi
     load: async () => undefined,
     meta: () => undefined,
     binding,
+    flowTimeoutMs: 0,
   });
 }
 
@@ -826,6 +827,11 @@ function beginAssetServe(
     load: opts.load,
     meta: opts.meta,
     isCancelled: (key) => session.isCancelled(m.requestId, key),
+    flowTimeoutMs: ASSET_FLOW_IDLE_TIMEOUT_MS,
+    onFlowTimeout: () => {
+      session.cancel(m.requestId);
+      if (opts.stats !== false) endAssetFlow(binding, m.requestId);
+    },
   }).finally(() => { if (opts.stats !== false) endAssetFlow(binding, m.requestId); session.release(m.requestId); refreshAssetTransferStats(); drainAssetRequestQueue(binding); });
 }
 

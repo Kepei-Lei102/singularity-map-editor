@@ -12,6 +12,8 @@ export const ASSET_QUEUE_TIMEOUT_MS = 120_000;
 export const ASSET_LOAD_TIMEOUT_MS = 30_000;
 /** 单块从 Blob 读出来也设上限；卡住就按 read-failed 停这个 key。 */
 export const ASSET_SLICE_TIMEOUT_MS = 15_000;
+/** 整条请求 60 秒没成功发出一块就收掉；正常 45ms 一块，不会误杀。 */
+export const ASSET_FLOW_IDLE_TIMEOUT_MS = 60_000;
 /** 缺文件/被拒/校验失败后先别每帧重问；15 秒后再试一次。 */
 export const ASSET_FAIL_COOLDOWN_MS = 15_000;
 /** 单条 binding 的基线间隔：一块 45ms，约 22 块/秒。 */
@@ -136,6 +138,10 @@ export interface ServeAssetOptions {
   sliceTimeoutMs?: number;
   /** 玩家发来 asset-cancel / 世界换掉 allow 时，下一块前停下。 */
   isCancelled?: (key?: string) => boolean;
+  /** 整条请求多久没有成功发出一块就停；默认 60 秒，0 表示不设。 */
+  flowTimeoutMs?: number;
+  /** watchdog 触发时收尾；sync 用它 cancel + 收账本。 */
+  onFlowTimeout?: () => void;
 }
 
 /** 主持端把一个请求逐块发完。失败只发 asset-fail，不把主机路径、文件名或错误栈带出去。 */
@@ -148,98 +154,140 @@ export async function serveAssetRequest(
   const paceMs = opts.paceMs ?? ASSET_PACE_MS;
   const loadTimeoutMs = opts.loadTimeoutMs ?? ASSET_LOAD_TIMEOUT_MS;
   const sliceTimeoutMs = opts.sliceTimeoutMs ?? ASSET_SLICE_TIMEOUT_MS;
-  const fail = async (key: string, reason: AssetFailReason): Promise<boolean> => {
-    // allow 被撤走时不能再说 missing/too-large/read-failed，统一按 forbidden 回。
-    const liveReason = opts.meta(key) ? reason : 'forbidden';
-    return paced(opts.binding, () => opts.send({ type: 'asset-fail', requestId: request.requestId, key, reason: liveReason }), paceMs);
+  const flowTimeoutMs = opts.flowTimeoutMs ?? ASSET_FLOW_IDLE_TIMEOUT_MS;
+  let flowTimer: ReturnType<typeof setTimeout> | undefined;
+  let flowAborted = false;
+  const armFlowWatchdog = (): void => {
+    if (!flowTimeoutMs) return;
+    if (flowTimer !== undefined) clearTimeout(flowTimer);
+    flowTimer = setTimeout(() => {
+      flowTimer = undefined;
+      if (flowAborted) return;
+      flowAborted = true;
+      try { opts.onFlowTimeout?.(); } catch { /* 收尾本身失败也不能把 serve 卡住 */ }
+    }, flowTimeoutMs);
+    (flowTimer as unknown as { unref?: () => void }).unref?.();
   };
-  for (const key of keys) {
-    if (opts.isCancelled?.(key)) continue;
-    const candidate = opts.meta(key);
-    if (!candidate) { await fail(key, 'forbidden'); continue; }
-    if (typeof candidate.size === 'number' && candidate.size > maxBytes) { await fail(key, 'too-large'); continue; }
-    let blob: Blob | undefined;
-    try {
-      const loading = opts.load(key);
-      if (loadTimeoutMs) {
-        let timer: ReturnType<typeof setTimeout> | undefined;
-        const timedOut = new Promise<undefined>((resolve) => { timer = setTimeout(() => resolve(undefined), loadTimeoutMs); (timer as unknown as { unref?: () => void }).unref?.(); });
-        try { blob = await Promise.race([loading, timedOut]); } finally { if (timer !== undefined) clearTimeout(timer); }
-      } else blob = await loading;
-    } catch { await fail(key, 'read-failed'); continue; }
-    if (!blob) { await fail(key, 'missing'); continue; }
-    if (blob.size > maxBytes) { await fail(key, 'too-large'); continue; }
-    // load 可能花了几秒：发 start 前再查一次取消/allow，别在玩家已经走了之后才开始。
-    if (opts.isCancelled?.(key)) continue;
-    if (!opts.meta(key)) { await fail(key, 'forbidden'); continue; }
-    // 文件确实存在、要开始发了，才让玩家把“排队 watchdog”换成这个 key 的 inactivity timer。
-    let startAborted = false;
-    let startRevoked = false;
-    const started = await paced(opts.binding, () => {
-      if (opts.isCancelled?.(key)) { startAborted = true; return false; }
-      if (!opts.meta(key)) { startRevoked = true; return false; }
-      // bytes 让玩家端能显示进度；旧玩家端会忽略这个可选字段。
-      return opts.send({ type: 'asset-start', requestId: request.requestId, key, bytes: blob.size });
-    }, paceMs);
-    if (!started) {
-      // 这个 key 的 allow 在窗口里被撤：回 forbidden 后继续处理同批后面的 key。
-      if (startRevoked) { await fail(key, 'forbidden'); continue; }
-      if (startAborted) continue;
-      return;
-    }
-    const mime = candidate.mime || 'application/octet-stream';
-    const count = Math.max(1, Math.ceil(blob.size / ASSET_CHUNK_BYTES));
-    let completed = true;
-    for (let index = 0; index < count; index++) {
-      // world 更新可能把 key 收走；发到一半权限没了/玩家取消就停，剩下的不发。
-      if (opts.isCancelled?.(key)) { completed = false; break; }
-      const live = opts.meta(key);
-      if (!live) { await fail(key, 'forbidden'); completed = false; break; }
-      const start = index * ASSET_CHUNK_BYTES;
-      let chunk: Uint8Array;
+  const stopFlowWatchdog = (): void => { if (flowTimer !== undefined) { clearTimeout(flowTimer); flowTimer = undefined; } };
+  armFlowWatchdog();
+  try {
+    const fail = async (key: string, reason: AssetFailReason): Promise<boolean> => {
+      if (flowAborted) return false;
+      // allow 被撤走时不能再说 missing/too-large/read-failed，统一按 forbidden 回。
+      const liveReason = opts.meta(key) ? reason : 'forbidden';
+      const sent = await paced(opts.binding, () => {
+        if (flowAborted) return false;
+        return opts.send({ type: 'asset-fail', requestId: request.requestId, key, reason: liveReason });
+      }, paceMs);
+      if (sent) armFlowWatchdog();
+      return sent;
+    };
+    for (const key of keys) {
+      if (flowAborted) break;
+      if (opts.isCancelled?.(key)) continue;
+      const candidate = opts.meta(key);
+      if (!candidate) { await fail(key, 'forbidden'); continue; }
+      if (typeof candidate.size === 'number' && candidate.size > maxBytes) { await fail(key, 'too-large'); continue; }
+      let blob: Blob | undefined;
       try {
-        const reading = blob.slice(start, Math.min(start + ASSET_CHUNK_BYTES, blob.size)).arrayBuffer();
-        if (sliceTimeoutMs) {
+        const loading = opts.load(key);
+        if (loadTimeoutMs) {
           let timer: ReturnType<typeof setTimeout> | undefined;
-          const timedOut = new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error('slice timeout')), sliceTimeoutMs); (timer as unknown as { unref?: () => void }).unref?.(); });
-          try { chunk = new Uint8Array(await Promise.race([reading, timedOut])); } finally { if (timer !== undefined) clearTimeout(timer); }
-        } else chunk = new Uint8Array(await reading);
-      } catch { await fail(key, 'read-failed'); completed = false; break; }
-      let chunkRevoked = false;
-      let chunkFailed = false;
+          const timedOut = new Promise<undefined>((resolve) => { timer = setTimeout(() => resolve(undefined), loadTimeoutMs); (timer as unknown as { unref?: () => void }).unref?.(); });
+          try { blob = await Promise.race([loading, timedOut]); } finally { if (timer !== undefined) clearTimeout(timer); }
+        } else blob = await loading;
+      } catch { if (flowAborted) break; await fail(key, 'read-failed'); continue; }
+      if (flowAborted) break;
+      if (!blob) { await fail(key, 'missing'); continue; }
+      if (blob.size > maxBytes) { await fail(key, 'too-large'); continue; }
+      // load 可能花了几秒：发 start 前再查一次取消/allow，别在玩家已经走了之后才开始。
+      if (opts.isCancelled?.(key)) continue;
+      if (!opts.meta(key)) { await fail(key, 'forbidden'); continue; }
+      // 文件确实存在、要开始发了，才让玩家把“排队 watchdog”换成这个 key 的 inactivity timer。
+      let startAborted = false;
+      let startRevoked = false;
+      let startTimedOut = false;
+      const started = await paced(opts.binding, () => {
+        if (flowAborted) { startTimedOut = true; return false; }
+        if (opts.isCancelled?.(key)) { startAborted = true; return false; }
+        if (!opts.meta(key)) { startRevoked = true; return false; }
+        // bytes 让玩家端能显示进度；旧玩家端会忽略这个可选字段。
+        return opts.send({ type: 'asset-start', requestId: request.requestId, key, bytes: blob.size });
+      }, paceMs);
+      if (!started) {
+        if (startTimedOut) break;
+        // 这个 key 的 allow 在窗口里被撤：回 forbidden 后继续处理同批后面的 key。
+        if (startRevoked) { await fail(key, 'forbidden'); continue; }
+        if (startAborted) continue;
+        return;
+      }
+      armFlowWatchdog();
+      const mime = candidate.mime || 'application/octet-stream';
+      const count = Math.max(1, Math.ceil(blob.size / ASSET_CHUNK_BYTES));
+      let completed = true;
+      for (let index = 0; index < count; index++) {
+        if (flowAborted) { completed = false; break; }
+        // world 更新可能把 key 收走；发到一半权限没了/玩家取消就停，剩下的不发。
+        if (opts.isCancelled?.(key)) { completed = false; break; }
+        const live = opts.meta(key);
+        if (!live) { await fail(key, 'forbidden'); completed = false; break; }
+        const start = index * ASSET_CHUNK_BYTES;
+        let chunk: Uint8Array;
+        try {
+          const reading = blob.slice(start, Math.min(start + ASSET_CHUNK_BYTES, blob.size)).arrayBuffer();
+          if (sliceTimeoutMs) {
+            let timer: ReturnType<typeof setTimeout> | undefined;
+            const timedOut = new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error('slice timeout')), sliceTimeoutMs); (timer as unknown as { unref?: () => void }).unref?.(); });
+            try { chunk = new Uint8Array(await Promise.race([reading, timedOut])); } finally { if (timer !== undefined) clearTimeout(timer); }
+          } else chunk = new Uint8Array(await reading);
+        } catch { if (flowAborted) { completed = false; break; } await fail(key, 'read-failed'); completed = false; break; }
+        if (flowAborted) { completed = false; break; }
+        let chunkAborted = false;
+        let chunkRevoked = false;
+        let chunkFailed = false;
+        const ok = await paced(opts.binding, () => {
+          // 节流等待期间 allow/cancel 都可能到；发出前再看一眼。
+          if (flowAborted) { chunkAborted = true; return false; }
+          if (opts.isCancelled?.(key)) return false;
+          if (!opts.meta(key)) { chunkRevoked = true; return false; }
+          const sent = opts.send({ type: 'asset-chunk', requestId: request.requestId, key, mime, index, count, data: bytesToBase64(chunk) });
+          if (!sent) chunkFailed = true;
+          return sent;
+        }, paceMs);
+        if (!ok) {
+          if (chunkAborted) { completed = false; break; }
+          if (chunkRevoked) { await fail(key, 'forbidden'); completed = false; break; }
+          if (chunkFailed) return;
+          completed = false; break; // 单个 key 取消，只停这个 key，同批后面的还能继续
+        }
+        armFlowWatchdog();
+      }
+      if (!completed) { if (flowAborted) break; continue; }
+      // 最后一块之后 allow 也可能刚被撤；end 前再查一次，避免把已无权文件标完。
+      if (!opts.meta(key)) { await fail(key, 'forbidden'); continue; }
+      if (opts.isCancelled?.(key)) continue;
+      let endCanceled = false;
+      let endRevoked = false;
+      let endTimedOut = false;
       const ok = await paced(opts.binding, () => {
-        // 节流等待期间 allow/cancel 都可能到；发出前再看一眼。
-        if (opts.isCancelled?.(key)) return false;
-        if (!opts.meta(key)) { chunkRevoked = true; return false; }
-        const sent = opts.send({ type: 'asset-chunk', requestId: request.requestId, key, mime, index, count, data: bytesToBase64(chunk) });
-        if (!sent) chunkFailed = true;
-        return sent;
+        // 节流等待期间 cancel/allow 都可能变；进发送前再查一次。
+        if (flowAborted) { endTimedOut = true; return false; }
+        if (opts.isCancelled?.(key)) { endCanceled = true; return false; }
+        if (!opts.meta(key)) { endRevoked = true; return false; }
+        return opts.send({ type: 'asset-end', requestId: request.requestId, key, bytes: blob.size });
       }, paceMs);
       if (!ok) {
-        if (chunkRevoked) { await fail(key, 'forbidden'); completed = false; break; }
-        if (chunkFailed) return;
-        completed = false; break; // 单个 key 取消，只停这个 key，同批后面的还能继续
+        if (endTimedOut) break;
+        // 单个 key 被取消/没权限只跳过这个 key；send 本身失败才停整批。
+        if (endRevoked) await fail(key, 'forbidden');
+        if (endCanceled) continue;
+        if (endRevoked) continue;
+        return;
       }
+      armFlowWatchdog();
     }
-    if (!completed) continue;
-    // 最后一块之后 allow 也可能刚被撤；end 前再查一次，避免把已无权文件标完。
-    if (!opts.meta(key)) { await fail(key, 'forbidden'); continue; }
-    if (opts.isCancelled?.(key)) continue;
-    let endCanceled = false;
-    let endRevoked = false;
-    const ok = await paced(opts.binding, () => {
-      // 节流等待期间 cancel/allow 都可能变；进发送前再查一次。
-      if (opts.isCancelled?.(key)) { endCanceled = true; return false; }
-      if (!opts.meta(key)) { endRevoked = true; return false; }
-      return opts.send({ type: 'asset-end', requestId: request.requestId, key, bytes: blob.size });
-    }, paceMs);
-    if (!ok) {
-      // 单个 key 被取消/没权限只跳过这个 key；send 本身失败才停整批。
-      if (endRevoked) await fail(key, 'forbidden');
-      if (endCanceled) continue;
-      if (endRevoked) continue;
-      return;
-    }
+  } finally {
+    stopFlowWatchdog();
   }
 }
 

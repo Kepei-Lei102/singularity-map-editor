@@ -236,6 +236,9 @@ test('asset 账本随连接换代：reset/换工程清空，register 换新账�
   assert.match(sync, /queue\.length >= ASSET_MAX_QUEUED_REQUESTS/);
   assert.match(sync, /if \(!session\?\.cancel\(m\.requestId, m\.key\)\) return;[\s\S]{0,80}cancelAssetFlow\(binding, m\.requestId, m\.key\)/);
   assert.match(sync, /const session = assetSessions\.get\(binding\) \?\? AssetSession\.fresh\(\)/);
+  // 整条 flow 的 60 秒空闲 watchdog：到点 cancel + 收账本，serve 自己收尾。
+  assert.match(sync, /flowTimeoutMs: ASSET_FLOW_IDLE_TIMEOUT_MS/);
+  assert.match(sync, /onFlowTimeout: \(\) => \{[\s\S]{0,80}session\.cancel\(m\.requestId\)/);
   assert.match(sync, /tryAcquire\(m\.requestId\)/);
   assert.match(sync, /\.finally\(\(\) => \{ if \(opts\.stats !== false\) endAssetFlow\(binding, m\.requestId\); session\.release\(m\.requestId\); refreshAssetTransferStats\(\); drainAssetRequestQueue\(binding\); \}\)/);
   // 速率按最近 2 秒算；Dock 订阅 150ms 合并一次，别每块重渲染。

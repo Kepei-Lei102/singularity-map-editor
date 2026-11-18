@@ -370,6 +370,40 @@ test('load 后、start 前 cancel 不再发 start，也不发 fail', async () =>
   assert.deepEqual(sent, []);
 });
 
+test('整条 flow 卡住：watchdog 触发后不再发 start', async () => {
+  let timedOut = 0;
+  let release;
+  const sent = [];
+  const task = api.serveAssetRequest({ type: 'asset-request', requestId: 'r-flow-hang', keys: ['k'] }, {
+    send: (body) => { sent.push(body); return true; },
+    load: () => new Promise((r) => { release = r; }),
+    meta: () => ({ mime: 'image/png' }),
+    paceMs: 0,
+    flowTimeoutMs: 20,
+    onFlowTimeout: () => { timedOut++; },
+  });
+  await new Promise((r) => setTimeout(r, 30));
+  assert.equal(timedOut, 1);
+  release(new Blob([pattern(3)]));
+  await task;
+  assert.deepEqual(sent, []);
+});
+
+test('watchdog 每发一块就续命，正常两块不会被误杀', async () => {
+  let timedOut = 0;
+  const sent = [];
+  await api.serveAssetRequest({ type: 'asset-request', requestId: 'r-flow-alive', keys: ['k'] }, {
+    send: (body) => { sent.push(body); return true; },
+    load: async () => new Blob([pattern(api.ASSET_CHUNK_BYTES + 137)]),
+    meta: () => ({ mime: 'image/png' }),
+    paceMs: 30,
+    flowTimeoutMs: 80,
+    onFlowTimeout: () => { timedOut++; },
+  });
+  assert.equal(timedOut, 0);
+  assert.equal(sent.filter((m) => m.type === 'asset-end').length, 1);
+});
+
 test('最后一块后、end 的节流窗口里 cancel，不再发 end', async () => {
   let cancelled = false;
   const sent = [];
@@ -509,6 +543,10 @@ test('start 的 paced 窗口里 allow 撤掉：只拒绝这个 key，同批后�
 });
 
 test('start 的 paced 窗口里 cancel 掉 a：a 不 start，同批 b 继续', async () => {
+  // 单独跑也要把全局节流钟推到未来，否则 a 的 start 可能在 5ms cancel 前就发出去了。
+  await api.serveAssetRequest({ type: 'asset-request', requestId: 'warm-start-cancel', keys: ['w'] }, {
+    send: () => true, load: async () => new Blob([pattern(1)]), meta: () => ({ mime: 'image/png' }), paceMs: 40,
+  });
   let canceled = false;
   const sent = [];
   const task = api.serveAssetRequest({ type: 'asset-request', requestId: 'r-start-cancel', keys: ['a', 'b'] }, {
