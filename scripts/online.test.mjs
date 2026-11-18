@@ -139,6 +139,7 @@ test('线上闭环：主持建房、发邀请、玩家加入、hello/world/say �
   const assetFails = [];
   const assetProgress = [];
   const hostTransferDuring = [];
+  const hostStatsSamples = [];
   let statEvents = 0;
   const assets = player.createAssetReceiver({
     send: player.send,
@@ -149,7 +150,7 @@ test('线上闭环：主持建房、发邀请、玩家加入、hello/world/say �
     },
     onReady: (k) => readyKeys.push(k),
     onFail: (k, r) => assetFails.push([k, r]),
-    onProgress: (k, received, total) => { assetProgress.push([k, received, total]); hostTransferDuring.push(host.assetTransferStats().players); },
+    onProgress: (k, received, total) => { assetProgress.push([k, received, total]); const st = host.assetTransferStats(); hostTransferDuring.push(st.players); hostStatsSamples.push(st); },
   });
   const offAssets = player.listenAsPlayer((m) => { if (player.isAssetMessage(m)) assets.handle(m); }, { online: true, binding: joined.binding });
   const offStats = host.subscribeAssetTransferStats(() => { statEvents++; });
@@ -159,6 +160,15 @@ test('线上闭环：主持建房、发邀请、玩家加入、hello/world/say �
   assert.deepEqual(assetFails, []);
   assert.ok(assetProgress.some(([k, received, total]) => k === 'k1' && received === bytes.length && total === bytes.length));
   assert.ok(hostTransferDuring.some((n) => n === 1)); // 玩家收到时主持端 dock 能看到 1 个在传
+  const liveStats = hostStatsSamples.find((st) => st.bytes > 0);
+  assert.ok(liveStats);
+  assert.equal(liveStats.players, 1);
+  assert.equal(liveStats.totalBytes, bytes.length);
+  assert.equal(liveStats.queued, 0);
+  assert.equal(liveStats.bindings.length, 1);
+  assert.equal(liveStats.bindings[0].binding, joined.binding);
+  assert.ok(liveStats.bindings[0].bytes > 0);
+  assert.ok(liveStats.rate > 0);
   await waitFor(() => host.assetTransferStats().players === 0);
   assert.ok(statEvents >= 2);
   offStats();
@@ -172,6 +182,14 @@ test('线上闭环：主持建房、发邀请、玩家加入、hello/world/say �
   assert.ok(assetMsgs.some((m) => m.type === 'asset-chunk' && m.key === 'k1'));
   assert.ok(assetMsgs.some((m) => m.type === 'asset-end' && m.key === 'k1' && m.bytes === bytes.length));
   offAssets();
+
+  // 一条请求里两个 key：前一个 start 后，后一个还在队列里，dock 应该看得到 queued=1。
+  const queueStats = [];
+  const offQueueStats = host.subscribeAssetTransferStats(() => queueStats.push(host.assetTransferStats()));
+  player.send({ type: 'asset-request', requestId: 'r-queued', keys: ['k1', 'k2'] });
+  await waitFor(() => queueStats.some((st) => st.queued === 1 && st.players === 1));
+  offQueueStats();
+  await waitFor(() => host.assetTransferStats().players === 0);
 
   // 停止广播后，allow 只保留 world 真用到的媒体；这个文件没挂在任何物件上，应该立刻变成 forbidden。
   host.stopMedia();

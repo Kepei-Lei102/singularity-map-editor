@@ -7,6 +7,7 @@ import { uid } from '../core/util';
 import { Section } from './fields';
 
 const isPdf = (mime: string) => mime === 'application/pdf';
+const fmtBytes = (n: number) => n >= 1024 * 1024 ? `${(n / (1024 * 1024)).toFixed(1)} MB` : n >= 1024 ? `${Math.round(n / 1024)} KB` : `${Math.round(n)} B`;
 const kindOf = (mime: string) => (mime.startsWith('video') ? '视频' : mime.startsWith('audio') ? '音频' : mime.startsWith('image') ? '图片' : isPdf(mime) ? 'PDF' : '文件');
 
 export function MediaPanel() {
@@ -95,7 +96,14 @@ export function MediaDock() {
         <span>{np.broadcast ? '📡 玩家也在看/听　' : '▶ 仅主持人　'}{np.label || meta.name}</span>
         <button className="small" onClick={stopMedia}>{np.broadcast ? '停止（玩家也停）' : '关闭'}</button>
       </div>
-      {np.broadcast && transfer.players > 0 && <div className="dock-transfer">正在传素材给 {transfer.players} 名玩家</div>}
+      {np.broadcast && transfer.players > 0 && (
+        <div className="dock-transfer">
+          正在传素材给 {transfer.players} 名玩家
+          {transfer.totalBytes > 0 ? ` · ${fmtBytes(transfer.bytes)} / ${fmtBytes(transfer.totalBytes)}` : transfer.bytes > 0 ? ` · 已发 ${fmtBytes(transfer.bytes)}` : ''}
+          {transfer.queued > 0 ? ` · ${transfer.queued} 个排队` : ''}
+          {transfer.rate > 0 ? ` · 均速 ${fmtBytes(transfer.rate)}/s` : ''}
+        </div>
+      )}
       {/* 同步给玩家时主持人这边静音，避免共享屏幕时声音叠两遍 */}
       <MediaView key={np.mediaId + np.broadcast} mediaId={np.mediaId} mime={meta.mime} autoPlay={!np.broadcast} />
     </div>
