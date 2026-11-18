@@ -77,6 +77,32 @@ test('已缓存的 key 不再请求；超过 32 个 key 分批', async () => {
   assert.deepEqual(requests.map((m) => m.keys.length), [32, 8]);
 });
 
+test('65/200 个 key 继续按 32 个一批拆', async () => {
+  for (const [n, expected] of [[65, [32, 32, 1]], [200, [32, 32, 32, 32, 32, 32, 8]]]) {
+    const requests = [];
+    const rec = api.createAssetReceiver({ send: (body) => requests.push(body), load: async () => undefined, save: async () => {}, timeoutMs: 0 });
+    await rec.request(Array.from({ length: n }, (_, i) => `k${i}`));
+    assert.deepEqual(requests.map((m) => m.keys.length), expected, `${n} keys`);
+  }
+});
+
+test('32 个 key 全 load 超时：fail 续 watchdog，不会误杀整条流', async () => {
+  let timedOut = 0;
+  const sent = [];
+  const keys = Array.from({ length: 32 }, (_, i) => `k${i}`);
+  await api.serveAssetRequest({ type: 'asset-request', requestId: 'r-32-fail', keys }, {
+    send: (body) => { sent.push(body); return true; },
+    load: () => new Promise(() => {}),
+    meta: () => ({ mime: 'image/png' }),
+    paceMs: 0,
+    loadTimeoutMs: 10,
+    flowTimeoutMs: 50,
+    onFlowTimeout: () => { timedOut++; },
+  });
+  assert.equal(timedOut, 0);
+  assert.equal(sent.filter((m) => m.type === 'asset-fail' && m.reason === 'missing').length, 32);
+});
+
 test('主持端拒绝不在允许集合里的 key，缺文件/超大/读失败各有 fail', async () => {
   const cases = [
     ['forbidden', undefined, new Blob(['x']), undefined, {}],

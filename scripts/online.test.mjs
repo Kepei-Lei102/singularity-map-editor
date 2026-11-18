@@ -26,6 +26,15 @@ globalThis.localStorage = storage();
 globalThis.sessionStorage = storage();
 // 最小内存版 IndexedDB：线上测试要真跑一遍 asset 分块落盘，不装 fake-indexeddb。
 // host/player 用两套库，模拟两个浏览器；测试里显式切 __setIDBSide。
+const heldIDBKeys = new Set();
+const heldIDBRequests = new Map();
+globalThis.__holdIDB = (key) => { heldIDBKeys.add(key); };
+globalThis.__releaseIDB = (key) => {
+  heldIDBKeys.delete(key);
+  const run = heldIDBRequests.get(key);
+  heldIDBRequests.delete(key);
+  run?.();
+};
 function makeFakeIDB() {
   const stores = new Map();
   const db = {
@@ -34,18 +43,20 @@ function makeFakeIDB() {
       const data = stores.get(name) ?? new Map();
       stores.set(name, data);
       const t = { oncomplete: null, onerror: null, onabort: null, error: null };
-      const req = (fn) => {
+      const req = (fn, key) => {
         const r = { result: undefined, error: null };
-        setTimeout(() => {
+        const run = () => {
           try { r.result = fn(); } catch (e) { r.error = e; }
           setTimeout(() => t.oncomplete?.(), 0);
-        }, 0);
+        };
+        if (typeof key === 'string' && heldIDBKeys.has(key)) heldIDBRequests.set(key, run);
+        else setTimeout(run, 0);
         return r;
       };
       const store = {
-        get: (key) => req(() => data.get(key)),
-        put: (value, key) => req(() => { data.set(key, value); return key; }),
-        delete: (key) => req(() => { data.delete(key); return undefined; }),
+        get: (key) => req(() => data.get(key), key),
+        put: (value, key) => req(() => { data.set(key, value); return key; }, key),
+        delete: (key) => req(() => { data.delete(key); return undefined; }, key),
       };
       t.objectStore = () => store;
       return t;
@@ -192,6 +203,23 @@ test('线上闭环：主持建房、发邀请、玩家加入、hello/world/say �
   assert.ok(assetMsgs.some((m) => m.type === 'asset-end' && m.key === 'k1' && m.bytes === bytes.length));
   offAssets();
 
+  // 整条 flow watchdog：load 卡住时 60 秒（测试里压到 25ms）收掉账本，释放后也不再发块。
+  const realTimer = globalThis.setTimeout;
+  try {
+    globalThis.setTimeout = (fn, ms, ...args) => realTimer(fn, ms === 60_000 ? 25 : ms, ...args);
+    globalThis.__holdIDB('k1');
+    const hangBefore = playerSeen.length;
+    player.send({ type: 'asset-request', requestId: 'r-flow-hang', keys: ['k1'] });
+    await waitFor(() => host.assetTransferStats().players === 1);
+    await waitFor(() => host.assetTransferStats().players === 0);
+    globalThis.__releaseIDB('k1');
+    await new Promise((r) => realTimer(r, 30));
+    assert.equal(playerSeen.slice(hangBefore).some((m) => m.requestId === 'r-flow-hang'), false);
+  } finally {
+    globalThis.__releaseIDB('k1');
+    globalThis.setTimeout = realTimer;
+  }
+
   // 同一条 binding 第三条在途请求先排队；前两条结束后，第三条仍要传完，不能直接漏图。
   const capBefore = playerSeen.length;
   const capIds = new Set(['r-cap1', 'r-cap2', 'r-cap3']);
@@ -215,6 +243,44 @@ test('线上闭环：主持建房、发邀请、玩家加入、hello/world/say �
     return ended.size >= 10 && failed.size === 2;
   }, 5000);
   await waitFor(() => host.assetTransferStats().players === 0);
+
+  // 排队 watchdog：两条 active 占着，第三条排队超过 120 秒（测试压到 25ms）要回 forbidden，不能一直挂着。
+  const queueTimerReal = globalThis.setTimeout;
+  try {
+    globalThis.setTimeout = (fn, ms, ...args) => queueTimerReal(fn, ms === 120_000 ? 25 : ms, ...args);
+    const timeoutBefore = playerSeen.length;
+    player.send({ type: 'asset-request', requestId: 'r-timeout-active1', keys: ['k1'] });
+    player.send({ type: 'asset-request', requestId: 'r-timeout-active2', keys: ['k1'] });
+    player.send({ type: 'asset-request', requestId: 'r-timeout-queued', keys: ['k1'] });
+    await waitFor(() => playerSeen.slice(timeoutBefore).some((m) => m.type === 'asset-fail' && m.requestId === 'r-timeout-queued' && m.reason === 'forbidden'));
+    await waitFor(() => host.assetTransferStats().players === 0);
+    await new Promise((r) => queueTimerReal(r, 80));
+    await waitFor(() => host.assetTransferStats().requests === 0);
+    assert.equal(playerSeen.slice(timeoutBefore).some((m) => m.requestId === 'r-timeout-queued' && (m.type === 'asset-start' || m.type === 'asset-end')), false, '队列 timer reject 后不能又被 drain 启动');
+  } finally {
+    globalThis.setTimeout = queueTimerReal;
+  }
+
+  // 同一个 requestId 在途时再来一条：不能开第二条，直接回 forbidden。
+  const dupBefore = playerSeen.length;
+  player.send({ type: 'asset-request', requestId: 'r-dup', keys: ['k1'] });
+  player.send({ type: 'asset-request', requestId: 'r-dup', keys: ['k1'] });
+  await waitFor(() => playerSeen.slice(dupBefore).some((m) => m.type === 'asset-fail' && m.requestId === 'r-dup' && m.reason === 'forbidden'));
+  await waitFor(() => host.assetTransferStats().players === 0);
+  const dupMsgs = playerSeen.slice(dupBefore);
+  assert.equal(dupMsgs.filter((m) => m.type === 'asset-start' && m.requestId === 'r-dup').length, 1, '第一条 r-dup 只能开一次');
+  assert.equal(dupMsgs.some((m) => m.type === 'asset-end' && m.requestId === 'r-dup'), true, '第一条 r-dup 要正常传完');
+
+  // 排队中的整条请求 cancel：直接从队列拿掉，不启动、不发 fail，也不影响 active 的两条。
+  const wholeBefore = playerSeen.length;
+  player.send({ type: 'asset-request', requestId: 'r-qcancel-hold1', keys: ['k1'] });
+  player.send({ type: 'asset-request', requestId: 'r-qcancel-hold2', keys: ['k1'] });
+  player.send({ type: 'asset-request', requestId: 'r-qcancel', keys: ['k1'] });
+  await waitFor(() => host.assetTransferStats().requests === 2);
+  player.send({ type: 'asset-cancel', requestId: 'r-qcancel' });
+  await waitFor(() => host.assetTransferStats().players === 0);
+  await new Promise((r) => setTimeout(r, 30));
+  assert.equal(playerSeen.slice(wholeBefore).some((m) => m.requestId === 'r-qcancel'), false);
 
   // 排队中的请求被单 key cancel：只拿掉 k2，剩下的 k1 仍要传完，不能整条被删。
   const singleBefore = playerSeen.length;
