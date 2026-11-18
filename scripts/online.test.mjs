@@ -31,9 +31,9 @@ const heldIDBRequests = new Map();
 globalThis.__holdIDB = (key) => { heldIDBKeys.add(key); };
 globalThis.__releaseIDB = (key) => {
   heldIDBKeys.delete(key);
-  const run = heldIDBRequests.get(key);
+  const runs = heldIDBRequests.get(key) ?? [];
   heldIDBRequests.delete(key);
-  run?.();
+  for (const run of runs) run();
 };
 function makeFakeIDB() {
   const stores = new Map();
@@ -49,7 +49,11 @@ function makeFakeIDB() {
           try { r.result = fn(); } catch (e) { r.error = e; }
           setTimeout(() => t.oncomplete?.(), 0);
         };
-        if (typeof key === 'string' && heldIDBKeys.has(key)) heldIDBRequests.set(key, run);
+        if (typeof key === 'string' && heldIDBKeys.has(key)) {
+          const runs = heldIDBRequests.get(key) ?? [];
+          runs.push(run);
+          heldIDBRequests.set(key, runs);
+        }
         else setTimeout(run, 0);
         return r;
       };
@@ -365,4 +369,72 @@ test('线上闭环：主持建房、发邀请、玩家加入、hello/world/say �
   await host.closeOnlineHostRoom();
   await waitFor(() => closed.includes('host-closed'));
   assert.equal(sessionStorage.getItem('ts-online-player'), null);
+});
+
+test('watchdog 收掉 active 后队列继续；reset 清掉排队请求', async () => {
+  const server = await startServer({ port: 0, host: '127.0.0.1', playerOrigin: 'http://localhost:5179', allowNoOrigin: true });
+  servers.push(server);
+  const url = `ws://127.0.0.1:${server.port}`;
+
+  const host = await load('host2.cjs', 'host', '');
+  const w = host.emptyWorld();
+  w.party = [{ id: 'pc', name: '甲', tags: [], color: '#fff' }];
+  host.replaceWorld(w);
+  w.maps[0].spawn = { x: 1, y: 1 };
+  host.setUI({ mapId: w.maps[0].id });
+  const localWindow = { closed: false, messages: [], postMessage(data) { this.messages.push(data); } };
+  globalThis.window.open = () => localWindow;
+  host.openPlayerWindow('pc');
+  const created = await host.createOnlineHostRoom(url);
+  const joinUrl = await host.inviteOnlinePlayer('pc');
+  const u = new URL(joinUrl);
+  const player = await load('player2.cjs', 'player', u.search);
+  const joined = await player.joinOnlinePlayer(u.searchParams.get('room'), u.searchParams.get('invite'), url);
+  await waitFor(() => host.pcIdForBinding(joined.binding) === 'pc');
+  host.listenAsEditor(() => host.send({ type: 'world', world: host.getWorld() }));
+  const playerSeen = [];
+  player.listenAsPlayer((m) => playerSeen.push(m), { online: true, binding: joined.binding });
+  await waitFor(() => playerSeen.some((m) => m.type === 'world' && m.world.viewerId === 'pc'));
+
+  host.update((d) => { d.media.push({ id: 'm1', name: '图', mime: 'image/png', size: 1_048_576, key: 'k1' }); });
+  await host.putRaw('k1', new Blob([new Uint8Array(1_048_576).fill(9)], { type: 'image/png' }));
+  const playBefore = playerSeen.length;
+  host.playMedia('m1', '图', true);
+  await waitFor(() => playerSeen.slice(playBefore).some((m) => m.type === 'play'));
+
+  // 两条 load 卡住的 active 被 watchdog 收掉；第三条排队，旧 serve 释放后要继续。
+  const abortTimer = globalThis.setTimeout;
+  const abortBefore = playerSeen.length;
+  try {
+    globalThis.setTimeout = (fn, ms, ...args) => abortTimer(fn, ms === 60_000 ? 100 : ms, ...args);
+    globalThis.__holdIDB('k1');
+    player.send({ type: 'asset-request', requestId: 'r-abort1', keys: ['k1'] });
+    player.send({ type: 'asset-request', requestId: 'r-abort2', keys: ['k1'] });
+    player.send({ type: 'asset-request', requestId: 'r-abort-queued', keys: ['k1'] });
+    await waitFor(() => host.assetTransferStats().requests === 2);
+    await waitFor(() => host.assetTransferStats().requests === 0);
+    globalThis.setTimeout = abortTimer;
+  } finally {
+    globalThis.__releaseIDB('k1');
+    globalThis.setTimeout = abortTimer;
+  }
+  await waitFor(() => playerSeen.slice(abortBefore).some((m) => m.type === 'asset-end' && m.requestId === 'r-abort-queued'), 6000);
+  const abortMsgs = playerSeen.slice(abortBefore);
+  assert.equal(abortMsgs.some((m) => (m.requestId === 'r-abort1' || m.requestId === 'r-abort2') && (m.type === 'asset-start' || m.type === 'asset-end')), false);
+  await waitFor(() => host.assetTransferStats().requests === 0);
+
+  // reset 同时清 active 账本和排队请求：不能留下一条会在后面启动的请求。
+  const resetBefore = playerSeen.length;
+  player.send({ type: 'asset-request', requestId: 'r-reset1', keys: ['k1'] });
+  player.send({ type: 'asset-request', requestId: 'r-reset2', keys: ['k1'] });
+  player.send({ type: 'asset-request', requestId: 'r-reset-queued', keys: ['k1'] });
+  await waitFor(() => host.assetTransferStats().requests === 2);
+  host.resetPlayerBindings();
+  await waitFor(() => host.assetTransferStats().players === 0);
+  await new Promise((r) => setTimeout(r, 120));
+  assert.equal(host.assetTransferStats().requests, 0);
+  assert.equal(playerSeen.slice(resetBefore).some((m) => m.requestId === 'r-reset-queued'), false);
+
+  await host.closeOnlineHostRoom();
+  assert.ok(created.roomId);
 });

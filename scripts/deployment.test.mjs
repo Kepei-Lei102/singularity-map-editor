@@ -222,8 +222,12 @@ test('线上广播播放接线：播放走 retry，切回仅主持人先停广�
 test('asset 账本随连接换代：reset/换工程清空，register 换新账本，serve 归还捕获实例', async () => {
   const sync = await readFile(join(root, 'src/runtime/sync.ts'), 'utf8');
   const mediaPanel = await readFile(join(root, 'src/components/MediaPanel.tsx'), 'utf8');
+  const assets = await readFile(join(root, 'src/runtime/assets.ts'), 'utf8');
   assert.match(sync, /resetPlayerBindings[\s\S]{0,400}assetSessions\.clear\(\)/);
   assert.match(sync, /players\.clear\(\)[\s\S]{0,200}assetSessions\.clear\(\)/);
+  // reset 和 drop 都必须清排队请求，否则断线/换房间后队列会留到下一次事件。
+  assert.match(sync, /export function resetPlayerBindings\(\): void \{[\s\S]{0,600}clearAssetRequestQueues\(\)/);
+  assert.match(sync, /function dropPlayerAssets\(binding: string\): void \{ clearAssetRequestQueues\(binding\)/);
   assert.match(sync, /registerOnlinePlayer[\s\S]{0,600}assetSessions\.set\(binding, AssetSession\.fresh\(\)\)/);
   // 同一个 requestId 在途时不能再开一条，否则旧 serve 会串到新账上。
   assert.match(sync, /session\.get\(m\.requestId\) > 0[\s\S]{0,120}rejectAssetRequest/);
@@ -238,6 +242,8 @@ test('asset 账本随连接换代：reset/换工程清空，register 换新账�
   assert.match(sync, /const session = assetSessions\.get\(binding\) \?\? AssetSession\.fresh\(\)/);
   // 整条 flow 的 60 秒空闲 watchdog：到点 cancel + 收账本，serve 自己收尾。
   assert.match(sync, /flowTimeoutMs: ASSET_FLOW_IDLE_TIMEOUT_MS/);
+  // 0 是“关掉”，不能被 || 当成默认值；sync 也依赖这个语义。
+  assert.match(assets, /opts\.flowTimeoutMs \?\? ASSET_FLOW_IDLE_TIMEOUT_MS/);
   assert.match(sync, /onFlowTimeout: \(\) => \{[\s\S]{0,80}session\.cancel\(m\.requestId\)/);
   assert.match(sync, /tryAcquire\(m\.requestId\)/);
   assert.match(sync, /\.finally\(\(\) => \{ if \(opts\.stats !== false\) endAssetFlow\(binding, m\.requestId\); session\.release\(m\.requestId\); refreshAssetTransferStats\(\); drainAssetRequestQueue\(binding\); \}\)/);

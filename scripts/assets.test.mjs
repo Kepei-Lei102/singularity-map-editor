@@ -415,6 +415,25 @@ test('整条 flow 卡住：watchdog 触发后不再发 start', async () => {
   assert.deepEqual(sent, []);
 });
 
+test('flowTimeoutMs:0 完全关掉 watchdog，慢 load 仍能正常发完', async () => {
+  let release;
+  let timedOut = 0;
+  const sent = [];
+  const task = api.serveAssetRequest({ type: 'asset-request', requestId: 'r-flow-off', keys: ['k'] }, {
+    send: (body) => { sent.push(body); return true; },
+    load: () => new Promise((r) => { release = r; }),
+    meta: () => ({ mime: 'image/png' }),
+    paceMs: 0,
+    flowTimeoutMs: 0,
+    onFlowTimeout: () => { timedOut++; },
+  });
+  await new Promise((r) => setTimeout(r, 30));
+  release(new Blob([pattern(3)]));
+  await task;
+  assert.equal(timedOut, 0);
+  assert.deepEqual(sent.map((m) => m.type), ['asset-start', 'asset-chunk', 'asset-end']);
+});
+
 test('watchdog 每发一块就续命，正常两块不会被误杀', async () => {
   let timedOut = 0;
   const sent = [];
