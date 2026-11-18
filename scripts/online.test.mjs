@@ -72,7 +72,7 @@ globalThis.window = { setTimeout: () => 0, setInterval: () => 0, addEventListene
 const load = async (name, role, search) => {
   const file = join(temp, name);
   await build({
-    stdin: { contents: `export * from './src/runtime/onlineRoom'; export * from './src/runtime/sync'; export * from './src/core/defaults'; export * from './src/core/store'; export * from './src/runtime/actions'; export * from './src/runtime/media'; export * from './src/runtime/assets';`, resolveDir: root },
+    stdin: { contents: `export * from './src/runtime/onlineRoom'; export * from './src/runtime/sync'; export * from './src/core/defaults'; export * from './src/core/store'; export * from './src/runtime/actions'; export * from './src/runtime/media'; export * from './src/runtime/assets'; export * from './src/runtime/trial';`, resolveDir: root },
     outfile: file, bundle: true, platform: 'node', format: 'cjs', logLevel: 'silent',
     define: { 'import.meta.env': JSON.stringify({ VITE_APP_ROLE: role }) },
   });
@@ -97,6 +97,8 @@ test('线上闭环：主持建房、发邀请、玩家加入、hello/world/say �
   const w = host.emptyWorld();
   w.party = [{ id: 'pc', name: '甲', tags: [], color: '#fff' }];
   host.replaceWorld(w);
+  w.maps[0].spawn = { x: 1, y: 1 };
+  host.setUI({ mapId: w.maps[0].id });
   const hostSeen = [];
   host.listen((m, _source, from) => hostSeen.push({ type: m.type, from }));
   const localWindow = { closed: false, messages: [], postMessage(data) { this.messages.push(data); } };
@@ -180,6 +182,21 @@ test('线上闭环：主持建房、发邀请、玩家加入、hello/world/say �
   const afterLocalBefore = playerSeen.length;
   player.send({ type: 'asset-request', requestId: 'r3', keys: ['k1'] });
   await waitFor(() => playerSeen.slice(afterLocalBefore).some((m) => m.type === 'asset-fail' && m.key === 'k1' && m.reason === 'forbidden'));
+
+  // 试玩开始前还广播着：先给真实玩家发 stop、收走广播 key；试玩结束不自动恢复。
+  host.playMedia('m1', '图', true);
+  await waitFor(() => playerSeen.slice(afterLocalBefore).some((m) => m.type === 'play'));
+  const trialBefore = playerSeen.length;
+  host.startTrial();
+  assert.ok(host.getUI().trial);
+  await waitFor(() => playerSeen.slice(trialBefore).some((m) => m.type === 'stop'));
+  assert.equal(host.getUI().nowPlaying, null);
+  const trialAssetBefore = playerSeen.length;
+  player.send({ type: 'asset-request', requestId: 'r-trial', keys: ['k1'] });
+  await waitFor(() => playerSeen.slice(trialAssetBefore).some((m) => m.type === 'asset-fail' && m.key === 'k1' && m.reason === 'forbidden'));
+  host.endTrial();
+  assert.equal(host.getUI().trial, null);
+  assert.equal(host.getUI().nowPlaying, null);
 
   player.send({ type: 'say', text: '你好', targetTokenId: null });
   await waitFor(() => hostSeen.some((m) => m.type === 'say' && m.from === joined.binding));

@@ -16,6 +16,7 @@ import { createSwitchTransport, type Transport } from './transport';
 import type { AssetBody, SyncBody, SyncMsg, TrialMoveSignal } from './messages';
 import { serveAssetRequest, assetKeyOf, type ServeAssetOptions } from './assets';
 import { getRaw } from './media';
+import { AssetSession } from './assetSessions';
 export type { SyncBody, SyncMsg, TrialMoveSignal } from './messages';
 import { groupBounds } from '../core/grid';
 import { effectiveLayer, emptyVision } from '../scene/vision';
@@ -36,11 +37,8 @@ const players = new Map<string, { pcId: string; context: number; trialContext?: 
 const assetAllow = new Map<string, Map<string, { mime: string; size: number }>>();
 /** 正在广播的媒体；只在这个 binding 的 world 之外额外允许这一个 key。 */
 let broadcastAsset: { key: string; mime: string; size: number } | null = null;
-interface AssetCancelEntry { all: boolean; keys: Set<string> }
-const assetCancels = new Map<string, Map<string, AssetCancelEntry>>();
-const assetActive = new Map<string, Map<string, number>>();
-/** 每 binding 的 generation：register/drop 后旧 serve 的 finally 不能减到新 serve 的引用。 */
-const assetEpoch = new Map<string, number>();
+/** 每条绑定的在途 asset 账本；重连/清空换新实例，旧 serve 还不到新账上。 */
+const assetSessions = new Map<string, AssetSession>();
 const assetRequestLog = new Map<string, number[]>();
 const bindingsKey = () => `ts-player-bindings-${SESSION}`;
 try {
@@ -71,8 +69,7 @@ export function resetPlayerBindings(): void {
   players.clear();
   broadcastAsset = null;
   assetAllow.clear();
-  assetCancels.clear();
-  assetActive.clear();
+  assetSessions.clear();
   assetRequestLog.clear();
   saveBindings();
 }
@@ -81,16 +78,14 @@ export function registerOnlinePlayer(binding: string, pcId: string): void {
   if (!binding || !pcId) return;
   players.set(binding, { pcId, context: projectContext() });
   assetAllow.delete(binding);
-  assetCancels.delete(binding);
-  assetActive.delete(binding);
+  assetSessions.set(binding, AssetSession.fresh());
   assetRequestLog.delete(binding);
-  bumpAssetEpoch(binding);
   saveBindings();
 }
 /** 服务器告诉主持端这个 binding 断了：别留下能继续请求媒体的僵尸入口。 */
 export function unregisterOnlinePlayer(binding: string): void {
   if (!binding) return;
-  bumpAssetEpoch(binding);
+  assetSessions.delete(binding);
   players.delete(binding);
   saveBindings();
   dropPlayerAssets(binding);
@@ -406,7 +401,7 @@ onProjectReplaced(() => {
     transport.sendToPeer(binding, { type: 'clear', __ts: 'ts-map', seq: rand(), from: SESSION, inst: INST, born: BORN });
     transport.dropPeer(binding);
   }
-  players.clear(); saveBindings(); broadcastAsset = null; assetAllow.clear(); assetCancels.clear(); assetActive.clear(); assetRequestLog.clear(); assetEpoch.clear();
+  players.clear(); saveBindings(); broadcastAsset = null; assetAllow.clear(); assetSessions.clear(); assetRequestLog.clear();
 });
 
 let quietUntil = 0; // 编辑器刚启动、还在确认会话标识没撞车时，先不往外推
@@ -486,8 +481,6 @@ export function pcIdForBinding(binding: string): string | null {
   return players.get(binding)?.pcId ?? null;
 }
 
-function bumpAssetEpoch(binding: string): void { assetEpoch.set(binding, (assetEpoch.get(binding) ?? 0) + 1); }
-
 /** 这条消息该发到哪一类窗口：试玩里的判定只发给试玩窗口，真实世界的判定只发给真实窗口。 */
 function sameContextWindow(entry: { trialContext?: string }): boolean {
   return (entry.trialContext ?? null) === (getUI().trial ? worldContext() : null);
@@ -515,16 +508,11 @@ function refreshPlayerAssets(): void {
     setPlayerAssets(binding, playerWorld(w, w.playerMapId, p.pcId), true);
   }
 }
-function dropPlayerAssets(binding: string): void { assetAllow.delete(binding); assetCancels.delete(binding); assetActive.delete(binding); assetRequestLog.delete(binding); bumpAssetEpoch(binding); }
+function dropPlayerAssets(binding: string): void { assetAllow.delete(binding); assetSessions.delete(binding); assetRequestLog.delete(binding); }
 
 function assetMsg(binding: string, body: AssetBody): boolean {
   return transport.sendToPeer(binding, { ...body, __ts: 'ts-map', seq: rand(), from: SESSION, inst: INST, born: BORN });
 }
-
-/** 同一 requestId 最多并存 4 个 serve；全 binding 最多 64 个在途 serve。再多直接回 forbidden，不占引用。 */
-const ASSET_MAX_REFS = 4;
-const ASSET_MAX_ACTIVE = 64;
-const ASSET_MAX_CANCEL_REQS = ASSET_MAX_ACTIVE;
 
 /** 拒绝也不留 active：最多 32 条 forbidden 在节流钟里发完，玩家收到后清 pending。 */
 function rejectAssetRequest(m: Extract<AssetBody, { type: 'asset-request' }>, binding: string): void {
@@ -540,37 +528,16 @@ function beginAssetServe(
   binding: string,
   opts: Pick<ServeAssetOptions, 'load' | 'meta'>,
 ): void {
-  const epoch = assetEpoch.get(binding) ?? -1;
-  const active = assetActive.get(binding) ?? new Map<string, number>();
-  const refs = active.get(m.requestId) ?? 0;
-  let total = 0;
-  for (const n of active.values()) total += n;
-  if (refs >= ASSET_MAX_REFS || total >= ASSET_MAX_ACTIVE) { rejectAssetRequest(m, binding); return; }
-  active.set(m.requestId, refs + 1);
-  assetActive.set(binding, active);
+  const session = assetSessions.get(binding) ?? AssetSession.fresh();
+  assetSessions.set(binding, session);
+  // 超 refs / 超总量直接回 forbidden，不占引用；玩家收到 fail 会清 pending。
+  if (!session.tryAcquire(m.requestId)) { rejectAssetRequest(m, binding); return; }
   void serveAssetRequest(m, {
     send: (body) => (players.has(binding) ? assetMsg(binding, body) : false),
     load: opts.load,
     meta: opts.meta,
-    isCancelled: (key) => {
-      const entry = assetCancels.get(binding)?.get(m.requestId);
-      return !!entry && (entry.all || (!!key && entry.keys.has(key)));
-    },
-  }).finally(() => {
-    // register/drop/reset 后这个 binding 已经换代：旧 serve 的 finally 不能碰新引用。
-    if ((assetEpoch.get(binding) ?? -1) !== epoch) return;
-    const act = assetActive.get(binding);
-    if (act) {
-      const left = (act.get(m.requestId) ?? 1) - 1;
-      if (left <= 0) act.delete(m.requestId); else act.set(m.requestId, left);
-      if (!act.size) assetActive.delete(binding);
-    }
-    // 引用计数归零才删 cancel；同 requestId 的另一个 serve 还在跑时不能丢它的 cancel。
-    if ((assetActive.get(binding)?.get(m.requestId) ?? 0) <= 0) {
-      const byReq = assetCancels.get(binding);
-      if (byReq) { byReq.delete(m.requestId); if (!byReq.size) assetCancels.delete(binding); }
-    }
-  });
+    isCancelled: (key) => session.isCancelled(m.requestId, key),
+  }).finally(() => session.release(m.requestId));
 }
 
 /** 玩家窗口按 world.media 的存储名来要文件；主持端只发这个 binding 被允许的 key。 */
@@ -601,15 +568,8 @@ export function onAssetCancel(m: Extract<AssetBody, { type: 'asset-cancel' }>, r
   const binding = bindingOf(ref);
   if (!binding) return;
   if (!players.has(binding)) return;
-  if (!(assetActive.get(binding)?.get(m.requestId) ?? 0)) return; // 迟到/木马 cancel 不留垃圾
-  const byReq = assetCancels.get(binding) ?? new Map<string, AssetCancelEntry>();
-  if (!byReq.has(m.requestId) && byReq.size >= ASSET_MAX_CANCEL_REQS) return;
-  const entry = byReq.get(m.requestId) ?? { all: false, keys: new Set<string>() };
-  if (typeof m.key === 'string' && m.key) {
-    if (entry.keys.size < 64) entry.keys.add(m.key);
-  } else entry.all = true;
-  byReq.set(m.requestId, entry);
-  assetCancels.set(binding, byReq);
+  const session = assetSessions.get(binding);
+  if (!session?.cancel(m.requestId, m.key)) return; // 迟到/木马 cancel 不留垃圾
 }
 
 /** 玩家载荷里的密码请求：只给门名和谁在输，不带作者密码、不带已输入原文。 */

@@ -214,3 +214,17 @@ test('线上广播播放接线：播放走 retry，切回仅主持人先停广�
   // 本地读文件是异步的：读完切到线上时不能再把 Blob 发进 ws。
   assert.match(actions, /!getUI\(\)\.trial && !isOnlineTransport\(\)/);
 });
+
+
+test('asset 账本随连接换代：reset/换工程清空，register 换新账本，serve 归还捕获实例', async () => {
+  const sync = await readFile(join(root, 'src/runtime/sync.ts'), 'utf8');
+  assert.match(sync, /resetPlayerBindings[\s\S]{0,400}assetSessions\.clear\(\)/);
+  assert.match(sync, /players\.clear\(\)[\s\S]{0,200}assetSessions\.clear\(\)/);
+  assert.match(sync, /registerOnlinePlayer[\s\S]{0,300}assetSessions\.set\(binding, AssetSession\.fresh\(\)\)/);
+  assert.match(sync, /const session = assetSessions\.get\(binding\) \?\? AssetSession\.fresh\(\)/);
+  assert.match(sync, /tryAcquire\(m\.requestId\)/);
+  assert.match(sync, /\.finally\(\(\) => session\.release\(m\.requestId\)\)/);
+  // 试玩里只拦 play；stop 必须放行，否则 quiet 延迟的 stop 会卡在 trial 守卫里。
+  assert.match(sync, /body\.type === 'play' && getUI\(\)\.trial/);
+  assert.doesNotMatch(sync, /\(body\.type === 'play' \|\| body\.type === 'stop'\) && getUI\(\)\.trial/);
+});
