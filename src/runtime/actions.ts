@@ -331,15 +331,26 @@ let playSeq = 0; // 每次播放 / 停止都加一：读文件是异步的，读
 export function playMedia(mediaId: string, label: string, broadcast: boolean) {
   const meta = getWorld().media.find((m) => m.id === mediaId);
   if (!meta) return toast('找不到这个媒体文件');
-  // 线上房间这一版只同步 world/判定/输入；Blob 过不了 JSON relay，先在本机播。
-  if (broadcast && !getUI().trial && isOnlineTransport()) return toast('线上房间暂不支持同步媒体；先用「▶ 仅主持人」在本机播放');
+  // 从广播切回「仅主持人」时先把广播停掉：否则广播 key 的 allow 会留在线上，玩家也收不到 stop。
+  const previous = getUI().nowPlaying;
+  if (!broadcast && previous?.broadcast && !getUI().trial) stopMedia();
   const seq = ++playSeq;
   const key = storageKey(mediaId); // 按开始播放那一刻的版本
   const ctx = worldContext();
+  const online = isOnlineTransport();
   setUI({ nowPlaying: { mediaId, label, broadcast } });
-  // 文件本身也一起发过去：玩家窗口不一定能读到本地存储（例如双击 html 打开时）。试玩里的播放只在主持人这边，根本不发
-  if (broadcast && !getUI().trial)
-    getRaw(key).catch(() => undefined).then((blob) => { if (seq === playSeq && ctx === worldContext() && !getUI().trial) send({ type: 'play', mediaId: key, label, mime: meta.mime, blob: blob && blob.type !== meta.mime ? new Blob([blob], { type: meta.mime }) : blob }); }); // 玩家窗口没有媒体表，直接给存储名
+  if (broadcast && !getUI().trial) {
+    if (online) {
+      // 线上只发元数据；玩家按内容 key 走 asset 分块，Blob 不进 relay。
+      send({ type: 'play', mediaId: key, label, mime: meta.mime });
+    } else {
+      // 本地窗口文件也一起发过去：玩家窗口不一定能读到本地存储（例如双击 html 打开时）。
+      getRaw(key).catch(() => undefined).then((blob) => {
+        // 读文件途中切到线上：不能再把 Blob 发进 ws relay。
+        if (seq === playSeq && ctx === worldContext() && !getUI().trial && !isOnlineTransport()) send({ type: 'play', mediaId: key, label, mime: meta.mime, blob: blob && blob.type !== meta.mime ? new Blob([blob], { type: meta.mime }) : blob }); // 玩家窗口没有媒体表，直接给存储名
+      });
+    }
+  }
   update((d) => log(d, 'media', `播放：${label || meta.name}${broadcast ? '（同步给玩家）' : '（仅主持人）'}`), { history: false });
 }
 

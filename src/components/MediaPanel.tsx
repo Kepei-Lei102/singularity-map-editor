@@ -47,7 +47,7 @@ export function MediaPanel() {
           <span>{kindOf(m.mime)} · {m.name} <span className="muted">{(m.size / 1048576).toFixed(1)}MB</span></span>
           <span className="inline">
             <button className="small" title="只在主持人这边播放" onClick={() => playMedia(m.id, m.name, false)}>▶</button>
-            <button className="small" disabled={online} title={online ? '线上房间暂不支持同步媒体；先在本机播放' : '同步给玩家窗口'} onClick={() => playMedia(m.id, m.name, true)}>📡</button>
+            <button className="small" title={online ? '同步给玩家（线上会分块传文件）' : '同步给玩家窗口'} onClick={() => playMedia(m.id, m.name, true)}>📡</button>
             <button className="danger small" onClick={() => {
               if (!confirm(`删除「${m.name}」？挂在物件上的引用也会一起删掉。`)) return;
               // 文件本身先不删：撤销、试玩结束恢复时还要用到。浏览器里多留一份不碍事，导出的工程只带还在用的。

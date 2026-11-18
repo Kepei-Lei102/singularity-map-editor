@@ -34,6 +34,8 @@ const players = new Map<string, { pcId: string; context: number; trialContext?: 
 // 每个玩家窗口只允许拉它自己那份 world 里用到的媒体存储名；请求别的一律 forbidden。
 // 世界一推就换一份，玩家换视角/换图后旧 key 也跟着收走。
 const assetAllow = new Map<string, Map<string, { mime: string; size: number }>>();
+/** 正在广播的媒体；只在这个 binding 的 world 之外额外允许这一个 key。 */
+let broadcastAsset: { key: string; mime: string; size: number } | null = null;
 interface AssetCancelEntry { all: boolean; keys: Set<string> }
 const assetCancels = new Map<string, Map<string, AssetCancelEntry>>();
 const assetActive = new Map<string, Map<string, number>>();
@@ -65,6 +67,7 @@ export function resetPlayerBindings(): void {
     transport.dropPeer(binding);
   }
   players.clear();
+  broadcastAsset = null;
   assetAllow.clear();
   assetCancels.clear();
   assetActive.clear();
@@ -399,7 +402,7 @@ onProjectReplaced(() => {
     transport.sendToPeer(binding, { type: 'clear', __ts: 'ts-map', seq: rand(), from: SESSION, inst: INST, born: BORN });
     transport.dropPeer(binding);
   }
-  players.clear(); saveBindings(); assetAllow.clear(); assetCancels.clear(); assetActive.clear(); assetRequestLog.clear();
+  players.clear(); saveBindings(); broadcastAsset = null; assetAllow.clear(); assetCancels.clear(); assetActive.clear(); assetRequestLog.clear();
 });
 
 let quietUntil = 0; // 编辑器刚启动、还在确认会话标识没撞车时，先不往外推
@@ -413,6 +416,13 @@ export function send(body: SyncBody, to?: string) {
   if ((body.type === 'play' || body.type === 'stop') && getUI().trial) return;
   const msg = (out: SyncBody): SyncMsg => ({ ...out, __ts: 'ts-map', seq: rand(), from: SESSION, inst: INST, born: BORN, ...(to ? { to } : {}) });
   if (body.type === 'world' || body.type === 'play' || body.type === 'stop' || body.type === 'clear') {
+    if (body.type === 'play') {
+      broadcastAsset = { key: body.mediaId, mime: body.mime, size: 0 };
+      refreshPlayerAssets();
+    } else if (body.type === 'stop' || body.type === 'clear') {
+      broadcastAsset = null;
+      refreshPlayerAssets();
+    }
     for (const [binding, p] of players) {
       const w = p.trialContext ? getWorld() : getRealWorld();
       if (!transport.hasPeer(binding)) {
@@ -430,7 +440,7 @@ export function send(body: SyncBody, to?: string) {
       else if (body.type === 'world') {
         const projected = playerWorld(w, mapId, p.pcId);
         const pw = { ...projected, pendingJudgment: pendingForPlayer(p.pcId, p.trialContext), pendingCode: codeForPlayer(p.pcId), combatNotice: combatNoticeFor(p.pcId), utterances: utterancesFor(p.pcId), trialFlags: trialFlagsFor(p.pcId) } as World;
-        setPlayerAssets(binding, pw);
+        setPlayerAssets(binding, pw, !p.trialContext);
         out = { type: 'world', world: pw, focus: getUI().focus ?? null, cast: getUI().cast ?? null, you: p.pcId, skills: publicSkillsOf(w.party.find((pc) => pc.id === p.pcId)?.skills ?? []),
           pathway: currentPathwayOf(w.party.find((pc) => pc.id === p.pcId) ?? { skills: [] }),
           avatar: w.party.find((pc) => pc.id === p.pcId)?.avatar ?? null };
@@ -477,7 +487,7 @@ function sameContextWindow(entry: { trialContext?: string }): boolean {
   return (entry.trialContext ?? null) === (getUI().trial ? worldContext() : null);
 }
 
-function setPlayerAssets(binding: string, w: World): void {
+function setPlayerAssets(binding: string, w: World, allowBroadcast = false): void {
   const media = new Map<string, { mime: string; size: number }>();
   for (const m of w.media ?? []) {
     if (!m || typeof m.id !== 'string') continue;
@@ -485,7 +495,19 @@ function setPlayerAssets(binding: string, w: World): void {
     if (!key) continue;
     media.set(key, { mime: typeof m.mime === 'string' ? m.mime : 'application/octet-stream', size: typeof m.size === 'number' ? m.size : 0 });
   }
+  if (allowBroadcast && broadcastAsset) media.set(broadcastAsset.key, { mime: broadcastAsset.mime, size: broadcastAsset.size });
   assetAllow.set(binding, media);
+}
+
+/** 广播开始/结束时重算所有玩家的 media allow：只多这一个文件，不放开媒体库。 */
+function refreshPlayerAssets(): void {
+  const w = getRealWorld();
+  const context = projectContext();
+  for (const [binding, p] of players) {
+    if (p.trialContext || p.context !== context) continue;
+    if (!w.party.some((pc) => pc.id === p.pcId)) continue;
+    setPlayerAssets(binding, playerWorld(w, w.playerMapId, p.pcId), true);
+  }
 }
 function dropPlayerAssets(binding: string): void { assetAllow.delete(binding); assetCancels.delete(binding); assetActive.delete(binding); assetRequestLog.delete(binding); }
 

@@ -374,12 +374,13 @@ test('最后一块后、end 的节流窗口里 cancel，不再发 end', async ()
   await api.serveAssetRequest({ type: 'asset-request', requestId: 'r-end-cancel', keys: ['k'] }, {
     send: (body) => {
       sent.push(body);
-      if (body.type === 'asset-chunk') setTimeout(() => { cancelled = true; }, 5);
+      // 0ms 定时器排在 end 的 50ms 节流之前；静态 end 检查发生在这一拍内，所以 cancel 只会被回调看到。
+      if (body.type === 'asset-chunk') setTimeout(() => { cancelled = true; }, 0);
       return true;
     },
     load: async () => new Blob([pattern(3)]),
     meta: () => ({ mime: 'image/png' }),
-    paceMs: 20,
+    paceMs: 50,
     isCancelled: () => cancelled,
   });
   assert.equal(sent.some((m) => m.type === 'asset-end'), false);
@@ -539,4 +540,17 @@ test('end 的节流窗口里只 cancel a：a 跳过 end，同批 b 继续', asyn
   await task;
   assert.equal(sent.some((m) => m.type === 'asset-end' && m.key === 'a'), false);
   assert.ok(sent.some((m) => m.type === 'asset-end' && m.key === 'b'));
+});
+
+
+test('retry 绕过一次失败冷却', async () => {
+  const requests = [];
+  const rec = api.createAssetReceiver({ send: (body) => requests.push(body), load: async () => undefined, save: async () => {}, timeoutMs: 0 });
+  await rec.request(['k']);
+  const req = requests[0];
+  rec.handle({ type: 'asset-fail', requestId: req.requestId, key: 'k', reason: 'read-failed' });
+  await rec.request(['k']);
+  assert.equal(requests.filter((m) => m.type === 'asset-request').length, 1, '冷却期内普通 request 不发');
+  await rec.retry(['k']);
+  assert.equal(requests.filter((m) => m.type === 'asset-request').length, 2);
 });

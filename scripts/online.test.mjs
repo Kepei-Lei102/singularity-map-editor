@@ -78,11 +78,41 @@ test('线上闭环：主持建房、发邀请、玩家加入、hello/world/say �
   await waitFor(() => playerSeen.some((m) => m.type === 'world' && m.world.viewerId === 'pc'));
   assert.ok(hostSeen.some((m) => m.type === 'hello' && m.from === joined.binding));
 
-  host.update((d) => { d.media.push({ id: 'm1', name: '图', mime: 'image/png', size: 1, key: 'k1' }); });
+  host.update((d) => { d.media.push({ id: 'm1', name: '图', mime: 'image/png', size: 1, key: 'k1' }); d.media.push({ id: 'm2', name: '本地', mime: 'audio/mpeg', size: 1, key: 'k2' }); });
   const seenBefore = playerSeen.length;
   host.playMedia('m1', '图', true);
-  await new Promise((r) => setTimeout(r, 30));
-  assert.equal(playerSeen.slice(seenBefore).some((m) => m.type === 'play'), false); // 线上不把 Blob 塞进 relay
+  await waitFor(() => playerSeen.slice(seenBefore).some((m) => m.type === 'play'));
+  const played = playerSeen.slice(seenBefore).find((m) => m.type === 'play');
+  assert.ok(played);
+  assert.equal(played.mediaId, 'k1'); // 内容 key，玩家拿它去走 asset 分块
+  assert.equal(played.blob, undefined); // 线上不把 Blob 塞进 relay
+
+  // 广播中的 key 应该进了这个 binding 的 allow；没有 IndexedDB 时读不到文件，但原因不能是 forbidden。
+  const assetSeenBefore = playerSeen.length;
+  player.send({ type: 'asset-request', requestId: 'r1', keys: ['k1'] });
+  await waitFor(() => playerSeen.slice(assetSeenBefore).some((m) => m.type === 'asset-fail' && m.key === 'k1'));
+  const assetFail = playerSeen.slice(assetSeenBefore).find((m) => m.type === 'asset-fail' && m.key === 'k1');
+  assert.notEqual(assetFail.reason, 'forbidden');
+
+  // 停止广播后，allow 只保留 world 真用到的媒体；这个文件没挂在任何物件上，应该立刻变成 forbidden。
+  host.stopMedia();
+  await waitFor(() => playerSeen.some((m) => m.type === 'stop'));
+  const stoppedBefore = playerSeen.length;
+  player.send({ type: 'asset-request', requestId: 'r2', keys: ['k1'] });
+  await waitFor(() => playerSeen.slice(stoppedBefore).some((m) => m.type === 'asset-fail' && m.key === 'k1' && m.reason === 'forbidden'));
+
+  // 广播中再点「▶ 仅主持人」：必须先给玩家 stop，并把广播 key 的 allow 收走；否则玩家永远停不下来。
+  const replayBefore = playerSeen.length;
+  host.playMedia('m1', '图', true);
+  await waitFor(() => playerSeen.slice(replayBefore).some((m) => m.type === 'play'));
+  const localPlayBefore = playerSeen.length;
+  host.playMedia('m2', '本地', false);
+  await waitFor(() => playerSeen.slice(localPlayBefore).some((m) => m.type === 'stop'));
+  host.stopMedia();
+  assert.equal(host.getUI().nowPlaying, null);
+  const afterLocalBefore = playerSeen.length;
+  player.send({ type: 'asset-request', requestId: 'r3', keys: ['k1'] });
+  await waitFor(() => playerSeen.slice(afterLocalBefore).some((m) => m.type === 'asset-fail' && m.key === 'k1' && m.reason === 'forbidden'));
 
   player.send({ type: 'say', text: '你好', targetTokenId: null });
   await waitFor(() => hostSeen.some((m) => m.type === 'say' && m.from === joined.binding));

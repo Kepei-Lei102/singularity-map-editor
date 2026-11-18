@@ -15,7 +15,7 @@ import { damageLanded, damageLost } from '../runtime/trial';
 /** 玩家窗口：主持人共享这个窗口的屏幕给玩家。只显示玩家该看到的东西。 */
 export function PlayerView() {
   const [world, setWorld] = useState<World | null>(null);
-  const [media, setMedia] = useState<{ mediaId: string; label: string; mime: string; blob?: Blob } | null>(null);
+  const [media, setMedia] = useState<{ mediaId: string; label: string; mime: string; blob?: Blob; failed?: boolean } | null>(null);
   const [armed, setArmed] = useState(false);
   const [nums, setNums] = useState(false);
   const [dismissed, setDismissed] = useState<string | null>(null);
@@ -112,7 +112,11 @@ export function PlayerView() {
       }
       else if (m.type === 'clear') { assets.current?.reset(); applyMediaIndex(null); setWorld(null); setMedia(null); setFocus(null); setCast(null); setPending(null); setRolled(null); setCodeRequest(null); setCodeSent(false); setCodeText(''); setCodeFeedback(null); }
       else if (m.type === 'move-result') setMoveNote(m.ok ? (m.kind === 'prompt' ? { ok: true, msg: m.msg } : null) : { ok: false, msg: m.msg });
-      else if (m.type === 'play') setMedia({ mediaId: m.mediaId, label: m.label, mime: m.mime, blob: m.blob });
+      else if (m.type === 'play') {
+        setMedia({ mediaId: m.mediaId, label: m.label, mime: m.mime, blob: m.blob, failed: false });
+        // 线上没有 blob：按内容 key 向主持端要文件；本地窗口直接读同源库。
+        if (onlineNow && assets.current && !m.blob) void assets.current.retry([m.mediaId]);
+      }
       else if (m.type === 'stop') setMedia(null);
     };
     document.title = '奇点之后 · 玩家视角';
@@ -120,7 +124,14 @@ export function PlayerView() {
       .then((isOnline) => {
         if (cancelled) return;
         onlineNow = isOnline;
-        const receiver = createAssetReceiver({ send, onReady: () => mediaChanged() });
+        const receiver = createAssetReceiver({
+          send,
+          onReady: (key) => {
+            mediaChanged();
+            setMedia((cur) => (cur?.mediaId === key ? { ...cur, failed: false } : cur));
+          },
+          onFail: (key) => setMedia((cur) => (cur?.mediaId === key ? { ...cur, failed: true } : cur)),
+        });
         assets.current = receiver;
         setOnline(isOnline);
         off = listenAsPlayer(handle, isOnline ? { online: true, binding: onlinePlayerInfo()?.binding } : {});
@@ -355,9 +366,18 @@ export function PlayerView() {
       </aside>}
       {media && armed && (
         <div className={media.mime.startsWith('audio') ? 'player-audio' : 'player-media'}>
-          {media.mime.startsWith('audio') && <span>♪ {media.label}</span>}
-          <MediaView key={media.mediaId} mediaId={media.mediaId} blob={media.blob} mime={media.mime} autoPlay
-            onEnded={() => !media.mime.startsWith('image') && setMedia(null)} />
+          {media.failed ? (
+            <div className="player-media-error">
+              <span>媒体没传过来。</span>
+              <button className="small" onClick={() => { setMedia({ ...media, failed: false }); void assets.current?.retry([media.mediaId]); }}>重试</button>
+            </div>
+          ) : (
+            <>
+              {media.mime.startsWith('audio') && <span>♪ {media.label}</span>}
+              <MediaView key={media.mediaId} mediaId={media.mediaId} blob={media.blob} mime={media.mime} autoPlay
+                onEnded={() => !media.mime.startsWith('image') && setMedia(null)} />
+            </>
+          )}
         </div>
       )}
       {held && (

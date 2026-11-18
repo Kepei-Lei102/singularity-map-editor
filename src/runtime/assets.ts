@@ -178,6 +178,8 @@ interface Incoming {
 /** 玩家端收文件：按 key 拼块，v: 哈希能校验就校验，失败最多重试一次。 */
 export interface AssetReceiver {
   request(keys: string[]): Promise<void>;
+  /** 用户明确点重试：绕过一次失败冷却，其他规则和 request 一样。 */
+  retry(keys: string[]): Promise<void>;
   handle(body: AssetBody): void;
   reset(): void;
 }
@@ -296,6 +298,12 @@ export function createAssetReceiver(opts: AssetReceiverOptions): AssetReceiver {
     }
   }
 
+  async function retry(keys: string[]): Promise<void> {
+    const list = (Array.isArray(keys) ? keys : []).filter((k) => typeof k === 'string' && k.length > 0);
+    for (const key of list) failed.delete(key);
+    return request(list);
+  }
+
   function handle(body: AssetBody): void {
     if (body.type === 'asset-start') {
       const p = pending.get(body.key);
@@ -364,5 +372,5 @@ export function createAssetReceiver(opts: AssetReceiverOptions): AssetReceiver {
     requesting.clear();
   }
 
-  return { request, handle, reset };
+  return { request, retry, handle, reset };
 }
