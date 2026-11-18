@@ -253,6 +253,7 @@ test('asset 账本随连接换代：reset/换工程清空，register 换新账�
   assert.match(sync, /scheduleAssetRateTick/);
   assert.match(mediaPanel, /ASSET_STATS_UI_MS = 150/);
   assert.match(mediaPanel, /const transfer = useThrottledAssetTransferStats\(\)/);
+  assert.match(mediaPanel, /DockTransferLine transfer=\{transfer\}/);
   assert.match(mediaPanel, /setStats\(snapshot\(\)\); \}, delayMs/);
   assert.match(mediaPanel, /if \(timer !== undefined\) window\.clearTimeout\(timer\)/);
   assert.match(mediaPanel, /近 2 秒/);

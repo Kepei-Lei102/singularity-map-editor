@@ -14,7 +14,7 @@ const temp = await mkdtemp(join(tmpdir(), 'ts-media-dock-ui-'));
 const bundle = join(temp, 'media-dock.cjs');
 await build({
   stdin: {
-    contents: `export { useThrottledAssetTransferStats } from './src/components/MediaPanel';
+    contents: `export { useThrottledAssetTransferStats, DockTransferLine } from './src/components/MediaPanel';
 export * as React from 'react';
 export { createRoot } from 'react-dom/client';
 export { act } from 'react';`,
@@ -24,7 +24,35 @@ export { act } from 'react';`,
   jsx: 'automatic', logLevel: 'silent',
   define: { 'import.meta.env': JSON.stringify({ VITE_APP_ROLE: 'host' }) },
 });
-after(() => { dom.window.close(); return rm(temp, { recursive: true, force: true }); });
+const priorGlobals = {
+  window: globalThis.window,
+  document: globalThis.document,
+  location: globalThis.location,
+  navigator: globalThis.navigator,
+  HTMLElement: globalThis.HTMLElement,
+  Event: globalThis.Event,
+  IS_REACT_ACT_ENVIRONMENT: globalThis.IS_REACT_ACT_ENVIRONMENT,
+  localStorage: globalThis.localStorage,
+  sessionStorage: globalThis.sessionStorage,
+  BroadcastChannel: globalThis.BroadcastChannel,
+  navigatorDescriptor: Object.getOwnPropertyDescriptor(globalThis, 'navigator'),
+};
+after(() => {
+  dom.window.close();
+  globalThis.window = priorGlobals.window;
+  globalThis.document = priorGlobals.document;
+  globalThis.location = priorGlobals.location;
+  if (priorGlobals.navigatorDescriptor) Object.defineProperty(globalThis, 'navigator', priorGlobals.navigatorDescriptor);
+  else delete globalThis.navigator;
+  globalThis.HTMLElement = priorGlobals.HTMLElement;
+  globalThis.localStorage = priorGlobals.localStorage;
+  globalThis.sessionStorage = priorGlobals.sessionStorage;
+  globalThis.BroadcastChannel = priorGlobals.BroadcastChannel;
+  globalThis.Event = priorGlobals.Event;
+  if (priorGlobals.IS_REACT_ACT_ENVIRONMENT === undefined) delete globalThis.IS_REACT_ACT_ENVIRONMENT;
+  else globalThis.IS_REACT_ACT_ENVIRONMENT = priorGlobals.IS_REACT_ACT_ENVIRONMENT;
+  return rm(temp, { recursive: true, force: true });
+});
 
 const dom = new JSDOM('<!doctype html><html><body></body></html>', { url: 'http://localhost/' });
 globalThis.window = dom.window;
@@ -60,7 +88,21 @@ function mount(element) {
   return container;
 }
 
-test('150ms 内连续通知只合并成一次 setState，之后取最新快照', async () => {
+function installFakeWindowTimers() {
+  const realSet = window.setTimeout;
+  const realClear = window.clearTimeout;
+  const timers = [];
+  let cleared = 0;
+  window.setTimeout = (fn) => { timers.push(fn); return timers.length; };
+  window.clearTimeout = (id) => { cleared++; if (timers[id - 1]) timers[id - 1] = undefined; };
+  return {
+    timers,
+    clearCount: () => cleared,
+    restore() { window.setTimeout = realSet; window.clearTimeout = realClear; },
+  };
+}
+
+test('150ms 内连续通知只合并成一次 setState，之后取最新快照', () => {
   let current = emptyStats();
   let renders = 0;
   const listeners = new Set();
@@ -77,21 +119,29 @@ test('150ms 内连续通知只合并成一次 setState，之后取最新快照',
 
   current = { ...current, bytes: 10, players: 1, requests: 1, inFlight: 1 };
   const notify = () => { for (const fn of [...listeners]) fn(); };
-  api.act(() => { notify(); notify(); notify(); });
-  assert.equal(container.textContent, '0', '150ms 之前不能重渲染');
-  assert.equal(renders, rendersAfterMount, '连续通知只能排一个 timer');
+  const fake = installFakeWindowTimers();
+  try {
+    api.act(() => { notify(); notify(); notify(); });
+    assert.equal(container.textContent, '0', '150ms 之前不能重渲染');
+    assert.equal(renders, rendersAfterMount, '连续通知只能排一个 timer');
+    assert.equal(fake.timers.length, 1, '3 次通知只排 1 个 timer');
 
-  await new Promise((r) => setTimeout(r, 180));
-  assert.equal(container.textContent, '10');
-  assert.ok(renders >= rendersAfterMount + 1, '到点后要更新');
+    api.act(() => { fake.timers.shift()(); });
+    assert.equal(container.textContent, '10');
+    assert.ok(renders >= rendersAfterMount + 1, '到点后要更新');
 
-  current = { ...current, bytes: 20 };
-  api.act(() => notify());
-  await new Promise((r) => setTimeout(r, 180));
-  assert.equal(container.textContent, '20');
+    current = { ...current, bytes: 20 };
+    api.act(() => notify());
+    assert.equal(container.textContent, '10');
+    assert.equal(fake.timers.length, 1);
+    api.act(() => { fake.timers.shift()(); });
+    assert.equal(container.textContent, '20');
+  } finally {
+    fake.restore();
+  }
 });
 
-test('卸载时清掉未触发的 timer，通知不再 setState', async () => {
+test('卸载时清掉未触发的 timer，通知不再 setState', () => {
   let current = emptyStats();
   let renders = 0;
   const listeners = new Set();
@@ -103,18 +153,41 @@ test('卸载时清掉未触发的 timer，通知不再 setState', async () => {
   }
   const container = mount(api.React.createElement(Probe));
   current = { ...current, bytes: 10 };
-  api.act(() => { for (const fn of [...listeners]) fn(); });
-  const rendersBefore = renders;
-  const realClear = window.clearTimeout;
-  let cleared = 0;
-  window.clearTimeout = (id) => { cleared++; return realClear(id); };
+  const fake = installFakeWindowTimers();
   try {
+    api.act(() => { for (const fn of [...listeners]) fn(); });
+    assert.equal(fake.timers.length, 1);
+    const rendersBefore = renders;
     api.act(() => { for (const { root } of mounted) root.unmount(); });
+    assert.equal(listeners.size, 0, '卸载要退订');
+    assert.ok(fake.clearCount() > 0, '卸载要真的清掉 pending timer');
+    assert.equal(fake.timers[0], undefined);
+    assert.equal(renders, rendersBefore, '卸载后 timer 不能再触发渲染');
   } finally {
-    window.clearTimeout = realClear;
+    fake.restore();
   }
-  assert.equal(listeners.size, 0, '卸载要退订');
-  assert.ok(cleared > 0, '卸载要真的清掉 pending timer');
-  await new Promise((r) => setTimeout(r, 180));
-  assert.equal(renders, rendersBefore, '卸载后 timer 不能再触发渲染');
+});
+
+test('Dock 传输行实际渲染名字、字节、排队和近2秒速率', () => {
+  const transfer = {
+    players: 2, requests: 1, bytes: 1_048_576, totalBytes: 2_097_152,
+    queued: 2, inFlight: 1, rate: 524_288,
+    bindings: [
+      { binding: 'b1', pcId: 'pc1', name: '甲', bytes: 524_288, totalBytes: 1_048_576, queued: 1, inFlight: 1, rate: 262_144 },
+      { binding: 'b2', pcId: 'pc2', name: '乙', bytes: 524_288, totalBytes: 1_048_576, queued: 1, inFlight: 0, rate: 262_144 },
+    ],
+  };
+  const container = mount(api.React.createElement(api.DockTransferLine, { transfer }));
+  const text = container.textContent ?? '';
+  assert.match(text, /正在传素材给 甲、乙（2 名，共享带宽）/);
+  assert.match(text, /1\.0 MB \/ 2\.0 MB/);
+  assert.match(text, /1 个传输中/);
+  assert.match(text, /2 个排队/);
+  assert.match(text, /近 2 秒 512 KB\/s/);
+
+  const many = mount(api.React.createElement(api.DockTransferLine, {
+    transfer: { ...transfer, players: 4, bindings: [1, 2, 3, 4].map((i) => ({ ...transfer.bindings[0], binding: `b${i}`, name: `P${i}` })) },
+  }));
+  assert.match(many.textContent ?? '', /正在传素材给 4 名玩家（共享带宽）/);
+  assert.doesNotMatch(many.textContent ?? '', /甲、乙/);
 });

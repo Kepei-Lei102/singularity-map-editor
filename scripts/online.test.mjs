@@ -195,6 +195,7 @@ test('线上闭环：主持建房、发邀请、玩家加入、hello/world/say �
   assert.equal(host.rateFromSamples([{ at: rateAt - 1000, bytes: 0 }, { at: rateAt, bytes: 1000 }], rateAt), 1000);
   assert.equal(host.rateFromSamples([{ at: rateAt - 1000, bytes: 0 }, { at: rateAt, bytes: 1000 }], rateAt + 1000), 500);
   assert.equal(host.rateFromSamples([{ at: rateAt - 1000, bytes: 0 }, { at: rateAt, bytes: 1000 }], rateAt + 1900), 500);
+  assert.equal(host.rateFromSamples([{ at: rateAt - 1000, bytes: 0 }, { at: rateAt, bytes: 1000 }], rateAt + 2000), 0);
   assert.equal(host.rateFromSamples([{ at: rateAt - 1000, bytes: 0 }, { at: rateAt, bytes: 1000 }], rateAt + 2001), 0);
   assert.equal(host.rateFromSamples([{ at: rateAt - 1000, bytes: 0 }, { at: rateAt, bytes: 1000 }], rateAt + 2500), 0);
   offStats();
@@ -384,6 +385,8 @@ test('watchdog 收掉 active 后队列继续；reset 清掉排队请求', async 
   host.replaceWorld(w);
   w.maps[0].spawn = { x: 1, y: 1 };
   host.setUI({ mapId: w.maps[0].id });
+  host.update((d) => { d.media.push({ id: 'm1', name: '图', mime: 'image/png', size: 1_048_576, key: 'k1' }); });
+  await host.putRaw('k1', new Blob([new Uint8Array(1_048_576).fill(9)], { type: 'image/png' }));
   const localWindow = { closed: false, messages: [], postMessage(data) { this.messages.push(data); } };
   globalThis.window.open = () => localWindow;
   host.openPlayerWindow('pc');
@@ -398,11 +401,43 @@ test('watchdog 收掉 active 后队列继续；reset 清掉排队请求', async 
   player.listenAsPlayer((m) => playerSeen.push(m), { online: true, binding: joined.binding });
   await waitFor(() => playerSeen.some((m) => m.type === 'world' && m.world.viewerId === 'pc'));
 
-  host.update((d) => { d.media.push({ id: 'm1', name: '图', mime: 'image/png', size: 1_048_576, key: 'k1' }); });
-  await host.putRaw('k1', new Blob([new Uint8Array(1_048_576).fill(9)], { type: 'image/png' }));
   const playBefore = playerSeen.length;
   host.playMedia('m1', '图', true);
   await waitFor(() => playerSeen.slice(playBefore).some((m) => m.type === 'play'));
+
+  // 一块之后卡住切片：ticker 要把速率从正数刷成 0；flow 结束后 ticker 不再通知。
+  const tickerStats = [];
+  const offTicker = host.subscribeAssetTransferStats(() => tickerStats.push(host.assetTransferStats()));
+  const realArrayBuffer = Blob.prototype.arrayBuffer;
+  const pending = [];
+  let sliced = 0;
+  Blob.prototype.arrayBuffer = function () {
+    sliced++;
+    if (sliced === 1) return realArrayBuffer.call(this);
+    return new Promise((resolve, reject) => { pending.push(() => realArrayBuffer.call(this).then(resolve, reject)); });
+  };
+  try {
+    player.send({ type: 'asset-request', requestId: 'r-ticker', keys: ['k1'] });
+    await waitFor(() => host.assetTransferStats().requests === 1 && host.assetTransferStats().bytes > 0 && host.assetTransferStats().rate > 0);
+    await waitFor(() => host.assetTransferStats().requests === 1 && host.assetTransferStats().rate === 0, 5000);
+    assert.ok(tickerStats.some((st) => st.requests === 1 && st.bytes > 0 && st.rate === 0), '一块之后没新块，ticker 要把速率刷成 0');
+  } finally {
+    Blob.prototype.arrayBuffer = realArrayBuffer;
+    for (const release of pending) release();
+  }
+  await waitFor(() => host.assetTransferStats().requests === 0, 6000);
+  const tickerEnd = tickerStats.length;
+  const afterEndSet = globalThis.setTimeout;
+  let ticks500 = 0;
+  globalThis.setTimeout = (fn, ms, ...args) => { if (ms === 500) ticks500++; return afterEndSet(fn, ms, ...args); };
+  try {
+    await new Promise((r) => afterEndSet(r, 700));
+  } finally {
+    globalThis.setTimeout = afterEndSet;
+  }
+  assert.equal(ticks500, 0, 'flow 结束后不能再排 500ms ticker');
+  assert.equal(tickerStats.length, tickerEnd, 'flow 结束后 ticker 不再通知');
+  offTicker();
 
   // 两条 load 卡住的 active 被 watchdog 收掉；第三条排队，旧 serve 释放后要继续。
   const abortTimer = globalThis.setTimeout;

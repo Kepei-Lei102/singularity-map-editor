@@ -101,6 +101,20 @@ export function useThrottledAssetTransferStats(
   return stats;
 }
 
+/** Dock 的传输明细行；单独拆出来，方便在没有真实线上流时渲染验证。 */
+export function DockTransferLine({ transfer }: { transfer: AssetTransferStats }) {
+  const names = transfer.bindings.length <= 3 ? transfer.bindings.map((b) => b.name || b.pcId).filter(Boolean) : [];
+  return (
+    <div className="dock-transfer">
+      {names.length ? `正在传素材给 ${names.join('、')}（${transfer.players} 名${transfer.players > 1 ? '，共享带宽' : ''}）` : `正在传素材给 ${transfer.players} 名玩家${transfer.players > 1 ? '（共享带宽）' : ''}`}
+      {transfer.totalBytes > 0 ? ` · ${fmtBytes(transfer.bytes)} / ${fmtBytes(transfer.totalBytes)}` : transfer.bytes > 0 ? ` · 已发 ${fmtBytes(transfer.bytes)}` : ''}
+      {transfer.inFlight > 0 ? ` · ${transfer.inFlight} 个传输中` : ''}
+      {transfer.queued > 0 ? ` · ${transfer.queued} 个排队` : ''}
+      {transfer.rate > 0 ? ` · 近 2 秒 ${fmtBytes(transfer.rate)}/s` : ''}
+    </div>
+  );
+}
+
 /** 主持人这边正在播放的媒体。 */
 export function MediaDock() {
   const ui = useUI();
@@ -116,18 +130,7 @@ export function MediaDock() {
         <span>{np.broadcast ? '📡 玩家也在看/听　' : '▶ 仅主持人　'}{np.label || meta.name}</span>
         <button className="small" onClick={stopMedia}>{np.broadcast ? '停止（玩家也停）' : '关闭'}</button>
       </div>
-      {np.broadcast && transfer.players > 0 && (
-        <div className="dock-transfer">
-          {(() => {
-            const names = transfer.bindings.length <= 3 ? transfer.bindings.map((b) => b.name || b.pcId).filter(Boolean) : [];
-            return names.length ? `正在传素材给 ${names.join('、')}（${transfer.players} 名${transfer.players > 1 ? '，共享带宽' : ''}）` : `正在传素材给 ${transfer.players} 名玩家${transfer.players > 1 ? '（共享带宽）' : ''}`;
-          })()}
-          {transfer.totalBytes > 0 ? ` · ${fmtBytes(transfer.bytes)} / ${fmtBytes(transfer.totalBytes)}` : transfer.bytes > 0 ? ` · 已发 ${fmtBytes(transfer.bytes)}` : ''}
-          {transfer.inFlight > 0 ? ` · ${transfer.inFlight} 个传输中` : ''}
-          {transfer.queued > 0 ? ` · ${transfer.queued} 个排队` : ''}
-          {transfer.rate > 0 ? ` · 近 2 秒 ${fmtBytes(transfer.rate)}/s` : ''}
-        </div>
-      )}
+      {np.broadcast && transfer.players > 0 && <DockTransferLine transfer={transfer} />}
       {/* 同步给玩家时主持人这边静音，避免共享屏幕时声音叠两遍 */}
       <MediaView key={np.mediaId + np.broadcast} mediaId={np.mediaId} mime={meta.mime} autoPlay={!np.broadcast} />
     </div>
