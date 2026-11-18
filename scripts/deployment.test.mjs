@@ -226,7 +226,7 @@ test('asset 账本随连接换代：reset/换工程清空，register 换新账�
   assert.match(sync, /registerOnlinePlayer[\s\S]{0,300}assetSessions\.set\(binding, AssetSession\.fresh\(\)\)/);
   assert.match(sync, /const session = assetSessions\.get\(binding\) \?\? AssetSession\.fresh\(\)/);
   assert.match(sync, /tryAcquire\(m\.requestId\)/);
-  assert.match(sync, /\.finally\(\(\) => session\.release\(m\.requestId\)\)/);
+  assert.match(sync, /\.finally\(\(\) => \{ session\.release\(m\.requestId\); refreshAssetTransferStats\(\); \}\)/);
   // 试玩里只拦 play；stop 必须放行，否则 quiet 延迟的 stop 会卡在 trial 守卫里。
   assert.match(sync, /body\.type === 'play' && getUI\(\)\.trial/);
   assert.doesNotMatch(sync, /\(body\.type === 'play' \|\| body\.type === 'stop'\) && getUI\(\)\.trial/);

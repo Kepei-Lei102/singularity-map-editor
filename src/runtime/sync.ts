@@ -40,6 +40,26 @@ let broadcastAsset: { key: string; mime: string; size: number } | null = null;
 /** 每条绑定的在途 asset 账本；重连/清空换新实例，旧 serve 还不到新账上。 */
 const assetSessions = new Map<string, AssetSession>();
 const assetRequestLog = new Map<string, number[]>();
+/** 主持端 dock 用的聚合数：几个玩家正在收、几条 serve 在跑。 */
+export type AssetTransferStats = { players: number; requests: number };
+let assetTransferSnapshot: AssetTransferStats = { players: 0, requests: 0 };
+const assetTransferListeners = new Set<() => void>();
+function refreshAssetTransferStats(): void {
+  let players = 0;
+  let requests = 0;
+  for (const session of assetSessions.values()) {
+    const n = session.activeCount;
+    if (n) { players++; requests += n; }
+  }
+  if (players === assetTransferSnapshot.players && requests === assetTransferSnapshot.requests) return;
+  assetTransferSnapshot = { players, requests };
+  for (const fn of [...assetTransferListeners]) fn();
+}
+export function subscribeAssetTransferStats(fn: () => void): () => void {
+  assetTransferListeners.add(fn);
+  return () => { assetTransferListeners.delete(fn); };
+}
+export function assetTransferStats(): AssetTransferStats { return assetTransferSnapshot; }
 const bindingsKey = () => `ts-player-bindings-${SESSION}`;
 try {
   const saved = JSON.parse(sessionStorage.getItem(bindingsKey()) ?? '{}') as Record<string, string>;
@@ -71,6 +91,7 @@ export function resetPlayerBindings(): void {
   assetAllow.clear();
   assetSessions.clear();
   assetRequestLog.clear();
+  refreshAssetTransferStats();
   saveBindings();
 }
 /** 线上邀请被加入时，主持端先把 binding 对到角色；服务器只知道 inviteId，不知道 pcId。 */
@@ -80,6 +101,7 @@ export function registerOnlinePlayer(binding: string, pcId: string): void {
   assetAllow.delete(binding);
   assetSessions.set(binding, AssetSession.fresh());
   assetRequestLog.delete(binding);
+  refreshAssetTransferStats();
   saveBindings();
 }
 /** 服务器告诉主持端这个 binding 断了：别留下能继续请求媒体的僵尸入口。 */
@@ -87,6 +109,7 @@ export function unregisterOnlinePlayer(binding: string): void {
   if (!binding) return;
   assetSessions.delete(binding);
   players.delete(binding);
+  refreshAssetTransferStats();
   saveBindings();
   dropPlayerAssets(binding);
 }
@@ -401,7 +424,7 @@ onProjectReplaced(() => {
     transport.sendToPeer(binding, { type: 'clear', __ts: 'ts-map', seq: rand(), from: SESSION, inst: INST, born: BORN });
     transport.dropPeer(binding);
   }
-  players.clear(); saveBindings(); broadcastAsset = null; assetAllow.clear(); assetSessions.clear(); assetRequestLog.clear();
+  players.clear(); saveBindings(); broadcastAsset = null; assetAllow.clear(); assetSessions.clear(); assetRequestLog.clear(); refreshAssetTransferStats();
 });
 
 let quietUntil = 0; // 编辑器刚启动、还在确认会话标识没撞车时，先不往外推
@@ -508,7 +531,7 @@ function refreshPlayerAssets(): void {
     setPlayerAssets(binding, playerWorld(w, w.playerMapId, p.pcId), true);
   }
 }
-function dropPlayerAssets(binding: string): void { assetAllow.delete(binding); assetSessions.delete(binding); assetRequestLog.delete(binding); }
+function dropPlayerAssets(binding: string): void { assetAllow.delete(binding); assetSessions.delete(binding); assetRequestLog.delete(binding); refreshAssetTransferStats(); }
 
 function assetMsg(binding: string, body: AssetBody): boolean {
   return transport.sendToPeer(binding, { ...body, __ts: 'ts-map', seq: rand(), from: SESSION, inst: INST, born: BORN });
@@ -532,12 +555,13 @@ function beginAssetServe(
   assetSessions.set(binding, session);
   // 超 refs / 超总量直接回 forbidden，不占引用；玩家收到 fail 会清 pending。
   if (!session.tryAcquire(m.requestId)) { rejectAssetRequest(m, binding); return; }
+  refreshAssetTransferStats();
   void serveAssetRequest(m, {
     send: (body) => (players.has(binding) ? assetMsg(binding, body) : false),
     load: opts.load,
     meta: opts.meta,
     isCancelled: (key) => session.isCancelled(m.requestId, key),
-  }).finally(() => session.release(m.requestId));
+  }).finally(() => { session.release(m.requestId); refreshAssetTransferStats(); });
 }
 
 /** 玩家窗口按 world.media 的存储名来要文件；主持端只发这个 binding 被允许的 key。 */

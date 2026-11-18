@@ -1,6 +1,6 @@
 import { useSyncExternalStore } from 'react';
 import { cleanupMedia, deleteMedia, offerDeleteOrphanBlob, stopMedia, playMedia } from '../runtime/actions';
-import { isOnlineTransport, subscribeTransportKind } from '../runtime/sync';
+import { assetTransferStats, isOnlineTransport, subscribeAssetTransferStats, subscribeTransportKind } from '../runtime/sync';
 import { storeBlobStatus, useBlobUrl } from '../runtime/media';
 import { toast, update, useUI, useWorld, worldContext } from '../core/store';
 import { uid } from '../core/util';
@@ -84,6 +84,7 @@ export function MediaView({ mediaId, blob, mime, autoPlay, onEnded, progress }: 
 export function MediaDock() {
   const ui = useUI();
   const w = useWorld();
+  const transfer = useSyncExternalStore(subscribeAssetTransferStats, assetTransferStats, assetTransferStats);
   const np = ui.nowPlaying;
   if (!np) return null;
   const meta = w.media.find((m) => m.id === np.mediaId);
@@ -92,6 +93,7 @@ export function MediaDock() {
     <div className="dock">
       <div className="dock-head">
         <span>{np.broadcast ? '📡 玩家也在看/听　' : '▶ 仅主持人　'}{np.label || meta.name}</span>
+        {np.broadcast && transfer.players > 0 && <span className="muted">正在传给 {transfer.players} 名玩家</span>}
         <button className="small" onClick={stopMedia}>{np.broadcast ? '停止（玩家也停）' : '关闭'}</button>
       </div>
       {/* 同步给玩家时主持人这边静音，避免共享屏幕时声音叠两遍 */}

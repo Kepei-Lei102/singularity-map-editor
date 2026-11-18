@@ -138,6 +138,8 @@ test('线上闭环：主持建房、发邀请、玩家加入、hello/world/say �
   const readyKeys = [];
   const assetFails = [];
   const assetProgress = [];
+  const hostTransferDuring = [];
+  let statEvents = 0;
   const assets = player.createAssetReceiver({
     send: player.send,
     load: async () => undefined, // 模拟另一个浏览器：玩家本地没有这份文件，必须先请求
@@ -147,14 +149,19 @@ test('线上闭环：主持建房、发邀请、玩家加入、hello/world/say �
     },
     onReady: (k) => readyKeys.push(k),
     onFail: (k, r) => assetFails.push([k, r]),
-    onProgress: (k, received, total) => assetProgress.push([k, received, total]),
+    onProgress: (k, received, total) => { assetProgress.push([k, received, total]); hostTransferDuring.push(host.assetTransferStats().players); },
   });
   const offAssets = player.listenAsPlayer((m) => { if (player.isAssetMessage(m)) assets.handle(m); }, { online: true, binding: joined.binding });
+  const offStats = host.subscribeAssetTransferStats(() => { statEvents++; });
   const assetSeenBefore = playerSeen.length;
   void assets.retry(['k1']);
   await waitFor(() => readyKeys.includes('k1'));
   assert.deepEqual(assetFails, []);
   assert.ok(assetProgress.some(([k, received, total]) => k === 'k1' && received === bytes.length && total === bytes.length));
+  assert.ok(hostTransferDuring.some((n) => n === 1)); // 玩家收到时主持端 dock 能看到 1 个在传
+  await waitFor(() => host.assetTransferStats().players === 0);
+  assert.ok(statEvents >= 2);
+  offStats();
   globalThis.__setIDBSide('player');
   const raw = await player.getRaw('k1');
   globalThis.__setIDBSide('host');
