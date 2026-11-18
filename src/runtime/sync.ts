@@ -14,7 +14,7 @@ import { SESSION, rand, renewSession } from '../core/session';
 import { createLocalTransport } from './transportLocal';
 import { createSwitchTransport, type Transport } from './transport';
 import type { AssetBody, SyncBody, SyncMsg, TrialMoveSignal } from './messages';
-import { serveAssetRequest, assetKeyOf } from './assets';
+import { serveAssetRequest, assetKeyOf, type ServeAssetOptions } from './assets';
 import { getRaw } from './media';
 export type { SyncBody, SyncMsg, TrialMoveSignal } from './messages';
 import { groupBounds } from '../core/grid';
@@ -493,41 +493,23 @@ function assetMsg(binding: string, body: AssetBody): boolean {
   return transport.sendToPeer(binding, { ...body, __ts: 'ts-map', seq: rand(), from: SESSION, inst: INST, born: BORN });
 }
 
-/** 玩家窗口按 world.media 的存储名来要文件；主持端只发这个 binding 被允许的 key。 */
-export function onAssetRequest(m: Extract<AssetBody, { type: 'asset-request' }>, ref: PeerRef): void {
-  if (transport.kind !== 'ws') return;
-  const binding = bindingOf(ref);
-  if (!binding) return;
-  if (!players.has(binding)) return;
-  const now = Date.now();
-  const log = (assetRequestLog.get(binding) ?? []).filter((t) => now - t < 10_000);
-  if (log.length >= 30) {
-    // 配额拒绝要回 forbidden，不然玩家 30 秒后才超时失败。
-    void serveAssetRequest(m, {
-      send: (body) => (players.has(binding) ? assetMsg(binding, body) : false),
-      load: async () => undefined,
-      meta: () => undefined,
-    });
-    return;
-  }
-  log.push(now);
-  assetRequestLog.set(binding, log);
+/** 同一 requestId 最多并存 4 个 serve；再多当恶意重复请求丢掉。 */
+const ASSET_MAX_REFS = 4;
+
+function beginAssetServe(
+  m: Extract<AssetBody, { type: 'asset-request' }>,
+  binding: string,
+  opts: Pick<ServeAssetOptions, 'load' | 'meta'>,
+): void {
   const active = assetActive.get(binding) ?? new Map<string, number>();
-  if (!active.has(m.requestId) && active.size >= 64) {
-    void serveAssetRequest(m, {
-      send: (body) => (players.has(binding) ? assetMsg(binding, body) : false),
-      load: async () => undefined,
-      meta: () => undefined,
-    });
-    return;
-  }
-  active.set(m.requestId, (active.get(m.requestId) ?? 0) + 1);
+  const refs = active.get(m.requestId) ?? 0;
+  if (refs >= ASSET_MAX_REFS) return;
+  active.set(m.requestId, refs + 1);
   assetActive.set(binding, active);
   void serveAssetRequest(m, {
     send: (body) => (players.has(binding) ? assetMsg(binding, body) : false),
-    load: (key) => getRaw(key),
-    // 不缓存 allow 表：world 一换，正在传的旧 key 下一块就停。
-    meta: (key) => assetAllow.get(binding)?.get(key),
+    load: opts.load,
+    meta: opts.meta,
     isCancelled: (key) => {
       const entry = assetCancels.get(binding)?.get(m.requestId);
       return !!entry && (entry.all || (!!key && entry.keys.has(key)));
@@ -539,8 +521,33 @@ export function onAssetRequest(m: Extract<AssetBody, { type: 'asset-request' }>,
       if (left <= 0) act.delete(m.requestId); else act.set(m.requestId, left);
       if (!act.size) assetActive.delete(binding);
     }
-    const byReq = assetCancels.get(binding);
-    if (byReq) { byReq.delete(m.requestId); if (!byReq.size) assetCancels.delete(binding); }
+    // 引用计数归零才删 cancel；同 requestId 的另一个 serve 还在跑时不能丢它的 cancel。
+    if ((assetActive.get(binding)?.get(m.requestId) ?? 0) <= 0) {
+      const byReq = assetCancels.get(binding);
+      if (byReq) { byReq.delete(m.requestId); if (!byReq.size) assetCancels.delete(binding); }
+    }
+  });
+}
+
+/** 玩家窗口按 world.media 的存储名来要文件；主持端只发这个 binding 被允许的 key。 */
+export function onAssetRequest(m: Extract<AssetBody, { type: 'asset-request' }>, ref: PeerRef): void {
+  if (transport.kind !== 'ws') return;
+  const binding = bindingOf(ref);
+  if (!binding) return;
+  if (!players.has(binding)) return;
+  const now = Date.now();
+  const log = (assetRequestLog.get(binding) ?? []).filter((t) => now - t < 10_000);
+  if (log.length >= 30) {
+    // 配额拒绝也要登记 active：玩家 reset 的 cancel 能停掉这串 forbidden。
+    beginAssetServe(m, binding, { load: async () => undefined, meta: () => undefined });
+    return;
+  }
+  log.push(now);
+  assetRequestLog.set(binding, log);
+  beginAssetServe(m, binding, {
+    load: (key) => getRaw(key),
+    // 不缓存 allow 表：world 一换，正在传的旧 key 下一块就停。
+    meta: (key) => assetAllow.get(binding)?.get(key),
   });
 }
 

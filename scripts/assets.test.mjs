@@ -121,6 +121,7 @@ test('坏 chunk / 不完整的 end 不写文件也不抛', async () => {
   await rec.request(['k']);
   const req = requests[0];
   assert.doesNotThrow(() => {
+    rec.handle({ type: 'asset-start', requestId: req.requestId, key: 'k' });
     rec.handle({ type: 'asset-chunk', requestId: req.requestId, key: 'k', mime: 'image/png', index: 0, count: 2, data: 'not base64!!' });
     rec.handle({ type: 'asset-end', requestId: req.requestId, key: 'k', bytes: 1 });
   });
@@ -216,6 +217,7 @@ test('块超过 256 KiB、end bytes 不符都会 fail，不写文件', async () 
     const { rec, requests, fails, saved } = mk();
     await rec.request(['big']);
     const req = requests[0];
+    rec.handle({ type: 'asset-start', requestId: req.requestId, key: 'big' });
     rec.handle({ type: 'asset-chunk', requestId: req.requestId, key: 'big', mime: 'image/png', index: 0, count: 1, data: api.bytesToBase64(pattern(api.ASSET_CHUNK_BYTES + 1)) });
     assert.deepEqual(fails, [['big', 'too-large']]);
     assert.equal(saved.length, 0);
@@ -224,6 +226,7 @@ test('块超过 256 KiB、end bytes 不符都会 fail，不写文件', async () 
     const { rec, requests, fails, saved } = mk();
     await rec.request(['k']);
     const req = requests[0];
+    rec.handle({ type: 'asset-start', requestId: req.requestId, key: 'k' });
     rec.handle({ type: 'asset-chunk', requestId: req.requestId, key: 'k', mime: 'image/png', index: 0, count: 1, data: api.bytesToBase64(pattern(3)) });
     rec.handle({ type: 'asset-end', requestId: req.requestId, key: 'k', bytes: 99 });
     assert.deepEqual(fails, [['k', 'read-failed']]);
@@ -307,4 +310,233 @@ test('asset-start 到达会把排队 watchdog 换成这个 key 的 inactivity ti
   assert.deepEqual(fails, [], '排队 watchdog 已被 start 清掉，inactivity 还没到');
   await new Promise((r) => setTimeout(r, 8));
   assert.deepEqual(fails, [['k', 'read-failed']], 'start 后 10ms 没有块才超时');
+});
+
+
+test('start 前的 chunk/end 被忽略；start 后正常拼回', async () => {
+  const requests = [];
+  const saved = [];
+  const ready = [];
+  const fails = [];
+  const rec = api.createAssetReceiver({ send: (body) => requests.push(body), load: async () => undefined, save: async (k) => saved.push(k), onReady: (k) => ready.push(k), onFail: (k, r) => fails.push([k, r]), timeoutMs: 0 });
+  await rec.request(['k']);
+  const req = requests[0];
+  rec.handle({ type: 'asset-chunk', requestId: req.requestId, key: 'k', mime: 'image/png', index: 0, count: 1, data: api.bytesToBase64(pattern(3)) });
+  rec.handle({ type: 'asset-end', requestId: req.requestId, key: 'k', bytes: 3 });
+  await tick();
+  assert.equal(saved.length, 0, 'start 前不接收');
+  assert.deepEqual(fails, [], 'start 前 end 被忽略，不该提前 fail');
+  rec.handle({ type: 'asset-start', requestId: req.requestId, key: 'k' });
+  rec.handle({ type: 'asset-end', requestId: req.requestId, key: 'k', bytes: 3 });
+  await tick();
+  assert.equal(saved.length, 0);
+  assert.deepEqual(fails, [['k', 'read-failed']], 'start 前的 chunk 没有被偷偷留下，end 才会因为缺块失败');
+  rec.reset();
+  await rec.request(['k']);
+  const req2 = requests.filter((m) => m.type === 'asset-request')[1];
+  rec.handle({ type: 'asset-start', requestId: req2.requestId, key: 'k' });
+  rec.handle({ type: 'asset-chunk', requestId: req2.requestId, key: 'k', mime: 'image/png', index: 0, count: 1, data: api.bytesToBase64(pattern(3)) });
+  rec.handle({ type: 'asset-end', requestId: req2.requestId, key: 'k', bytes: 3 });
+  await tick();
+  assert.equal(saved.length, 1);
+  assert.deepEqual(ready, ['k']);
+});
+
+test('重复 start 不会把 inactivity 往后推', async () => {
+  const requests = [];
+  const fails = [];
+  const rec = api.createAssetReceiver({ send: (body) => requests.push(body), load: async () => undefined, save: async () => {}, onFail: (k, r) => fails.push([k, r]), timeoutMs: 20, queueTimeoutMs: 0 });
+  await rec.request(['k']);
+  const req = requests[0];
+  rec.handle({ type: 'asset-start', requestId: req.requestId, key: 'k' });
+  await new Promise((r) => setTimeout(r, 10));
+  rec.handle({ type: 'asset-start', requestId: req.requestId, key: 'k' });
+  await new Promise((r) => setTimeout(r, 12));
+  assert.deepEqual(fails, [['k', 'read-failed']], '第二次 start 不该续命');
+});
+
+test('load 后、start 前 cancel 不再发 start，也不发 fail', async () => {
+  let cancelled = false;
+  const sent = [];
+  await api.serveAssetRequest({ type: 'asset-request', requestId: 'r-load', keys: ['k'] }, {
+    send: (body) => { sent.push(body); return true; },
+    load: async () => { cancelled = true; return new Blob([pattern(3)]); },
+    meta: () => ({ mime: 'image/png' }),
+    paceMs: 0,
+    isCancelled: () => cancelled,
+  });
+  assert.deepEqual(sent, []);
+});
+
+test('最后一块后、end 的节流窗口里 cancel，不再发 end', async () => {
+  let cancelled = false;
+  const sent = [];
+  await api.serveAssetRequest({ type: 'asset-request', requestId: 'r-end-cancel', keys: ['k'] }, {
+    send: (body) => {
+      sent.push(body);
+      if (body.type === 'asset-chunk') setTimeout(() => { cancelled = true; }, 5);
+      return true;
+    },
+    load: async () => new Blob([pattern(3)]),
+    meta: () => ({ mime: 'image/png' }),
+    paceMs: 20,
+    isCancelled: () => cancelled,
+  });
+  assert.equal(sent.some((m) => m.type === 'asset-end'), false);
+});
+
+
+test('同一个 key 并发 request 只发一次', async () => {
+  const requests = [];
+  const rec = api.createAssetReceiver({ send: (body) => requests.push(body), load: async () => undefined, save: async () => {}, timeoutMs: 0 });
+  await Promise.all([rec.request(['k']), rec.request(['k'])]);
+  assert.equal(requests.filter((m) => m.type === 'asset-request').length, 1);
+});
+
+test('reset 后正在 save 的旧 finish 不再 onReady', async () => {
+  let release;
+  let saves = 0;
+  const ready = [];
+  const requests = [];
+  const rec = api.createAssetReceiver({
+    send: (body) => requests.push(body),
+    load: async () => undefined,
+    save: async () => { saves++; await new Promise((r) => { release = r; }); },
+    onReady: (k) => ready.push(k),
+    timeoutMs: 0,
+  });
+  await rec.request(['k']);
+  const req = requests[0];
+  rec.handle({ type: 'asset-start', requestId: req.requestId, key: 'k' });
+  rec.handle({ type: 'asset-chunk', requestId: req.requestId, key: 'k', mime: 'image/png', index: 0, count: 1, data: api.bytesToBase64(pattern(3)) });
+  rec.handle({ type: 'asset-end', requestId: req.requestId, key: 'k', bytes: 3 });
+  assert.equal(saves, 1);
+  rec.reset();
+  release();
+  await tick();
+  assert.deepEqual(ready, []);
+});
+
+
+test('reset 会 fence 还在 load 的 request，不再发 asset-request', async () => {
+  let release;
+  const requests = [];
+  const rec = api.createAssetReceiver({
+    send: (body) => requests.push(body),
+    load: async () => { await new Promise((r) => { release = r; }); return undefined; },
+    save: async () => {},
+    timeoutMs: 0,
+  });
+  const pending = rec.request(['k']);
+  await tick();
+  rec.reset();
+  release();
+  await pending;
+  assert.equal(requests.filter((m) => m.type === 'asset-request').length, 0);
+});
+
+test('fail 也走节流钟', async () => {
+  const start = Date.now();
+  await api.serveAssetRequest({ type: 'asset-request', requestId: 'r-pace', keys: ['a', 'b'] }, {
+    send: () => true,
+    load: async () => undefined,
+    meta: () => undefined,
+    paceMs: 8,
+  });
+  assert.ok(Date.now() - start >= 6, '两个 fail 至少要隔一个节流间隔');
+});
+
+test('节流/排队常量守住 60 条/s 预算', () => {
+  assert.ok(api.ASSET_PACE_MS >= 40);
+  assert.ok(api.ASSET_QUEUE_TIMEOUT_MS >= 120_000);
+});
+
+
+test('load 后、start 前 allow 被撤掉，不发 start，发 forbidden', async () => {
+  let allowed = true;
+  const sent = [];
+  await api.serveAssetRequest({ type: 'asset-request', requestId: 'r-load-allow', keys: ['k'] }, {
+    send: (body) => { sent.push(body); return true; },
+    load: async () => { allowed = false; return new Blob([pattern(3)]); },
+    meta: () => allowed ? { mime: 'image/png' } : undefined,
+    paceMs: 0,
+  });
+  assert.equal(sent.some((m) => m.type === 'asset-start'), false);
+  assert.ok(sent.some((m) => m.type === 'asset-fail' && m.reason === 'forbidden'));
+});
+
+test('单 key 在 end 前被 cancel 只跳过这个 key，同批后面的 key 继续', async () => {
+  const canceled = new Set();
+  const sent = [];
+  await api.serveAssetRequest({ type: 'asset-request', requestId: 'r-end-two', keys: ['a', 'b'] }, {
+    send: (body) => {
+      sent.push(body);
+      if (body.type === 'asset-chunk' && body.key === 'a') canceled.add('a');
+      return true;
+    },
+    load: async () => new Blob([pattern(3)]),
+    meta: () => ({ mime: 'image/png' }),
+    paceMs: 0,
+    isCancelled: (key) => !!key && canceled.has(key),
+  });
+  assert.equal(sent.some((m) => m.type === 'asset-end' && m.key === 'a'), false);
+  assert.ok(sent.some((m) => m.type === 'asset-end' && m.key === 'b'));
+});
+
+
+test('start 的 paced 窗口里 allow 撤掉：只拒绝这个 key，同批后面的 key 继续', async () => {
+  // 先把全局节流钟推到未来，保证 a 的 start 真的会等一会儿。
+  await api.serveAssetRequest({ type: 'asset-request', requestId: 'warm', keys: ['w'] }, {
+    send: () => true, load: async () => new Blob([pattern(1)]), meta: () => ({ mime: 'image/png' }), paceMs: 40,
+  });
+  let allowA = true;
+  const sent = [];
+  const task = api.serveAssetRequest({ type: 'asset-request', requestId: 'r-start-revoke', keys: ['a', 'b'] }, {
+    send: (body) => { sent.push(body); return true; },
+    load: async () => new Blob([pattern(3)]),
+    meta: (key) => (key === 'a' ? (allowA ? { mime: 'image/png' } : undefined) : { mime: 'image/png' }),
+    paceMs: 20,
+  });
+  setTimeout(() => { allowA = false; }, 5);
+  await task;
+  assert.equal(sent.some((m) => m.type === 'asset-start' && m.key === 'a'), false);
+  assert.ok(sent.some((m) => m.type === 'asset-fail' && m.key === 'a' && m.reason === 'forbidden'));
+  assert.ok(sent.some((m) => m.type === 'asset-start' && m.key === 'b'));
+  assert.ok(sent.some((m) => m.type === 'asset-end' && m.key === 'b'));
+});
+
+test('start 的 paced 窗口里 cancel 掉 a：a 不 start，同批 b 继续', async () => {
+  let canceled = false;
+  const sent = [];
+  const task = api.serveAssetRequest({ type: 'asset-request', requestId: 'r-start-cancel', keys: ['a', 'b'] }, {
+    send: (body) => { sent.push(body); return true; },
+    load: async () => new Blob([pattern(3)]),
+    meta: () => ({ mime: 'image/png' }),
+    paceMs: 20,
+    isCancelled: (key) => key === 'a' && canceled,
+  });
+  setTimeout(() => { canceled = true; }, 5);
+  await task;
+  assert.equal(sent.some((m) => m.type === 'asset-start' && m.key === 'a'), false);
+  assert.ok(sent.some((m) => m.type === 'asset-start' && m.key === 'b'));
+  assert.ok(sent.some((m) => m.type === 'asset-end' && m.key === 'b'));
+});
+
+test('end 的节流窗口里只 cancel a：a 跳过 end，同批 b 继续', async () => {
+  let cancelA = false;
+  const sent = [];
+  const task = api.serveAssetRequest({ type: 'asset-request', requestId: 'r-end-window', keys: ['a', 'b'] }, {
+    send: (body) => {
+      sent.push(body);
+      if (body.type === 'asset-chunk' && body.key === 'a') setTimeout(() => { cancelA = true; }, 5);
+      return true;
+    },
+    load: async () => new Blob([pattern(3)]),
+    meta: () => ({ mime: 'image/png' }),
+    paceMs: 20,
+    isCancelled: (key) => key === 'a' && cancelA,
+  });
+  await task;
+  assert.equal(sent.some((m) => m.type === 'asset-end' && m.key === 'a'), false);
+  assert.ok(sent.some((m) => m.type === 'asset-end' && m.key === 'b'));
 });
