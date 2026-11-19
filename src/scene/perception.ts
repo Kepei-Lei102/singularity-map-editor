@@ -5,7 +5,7 @@ import type { GameMap, MapObject, Token, VisionLayer, World } from '../core/type
 import { partyVisionOf, sightCacheFor, visiblePoint, viewerOf, type SightCache, type SightCtx, type Viewer } from './sight';
 import { sightCtxFor } from './sightIndex';
 import { diffWorld } from './dirty';
-import { planVision, type MapScope } from './visionPlan';
+import { planVision, type MapScope, type VisionPlan } from './visionPlan';
 import { cloneLayer, emptyVision, mergeLayers, visionKey } from './vision';
 import { cellLine, gridDist } from '../core/util';
 
@@ -86,9 +86,9 @@ const step = (f: number, seeing: number) => (seeing ? 1 : f === 1 ? 2 : f);
  * 全队共享：全队一份，看得见 → 1，原来看得见、现在看不见 → 2（记忆）。
  * 各自独立：每个玩家角色一份（map.views），只算他自己的眼睛；地图上那份是所有人的并集，给主持人看。
  */
-export function withVision(next: World, prev: World, opts: { full?: boolean } = {}): World {
+export function withVision(next: World, prev: World, opts: { full?: boolean; plan?: VisionPlan } = {}): World {
   // 只有「纯棋子移动」才收窄到圆盘；结构变化和世界级変化一律整图重算。
-  const plan = opts.full ? null : planVision(next, diffWorld(prev, next));
+  const plan = opts.full ? null : opts.plan ?? planVision(next, diffWorld(prev, next));
   const scopeOf = (mapId: string): MapScope | undefined => {
     if (!plan || plan.full) return undefined; // 整图
     return plan.maps.get(mapId);

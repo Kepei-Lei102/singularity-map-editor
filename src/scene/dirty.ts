@@ -23,10 +23,12 @@ function tokenMoved(a: Token, b: Token): boolean {
 }
 
 function mapStructureChanged(a: GameMap, b: GameMap): boolean {
+  // 除了地形/建筑，雾和记忆层被外部改过（手动揭示、导入）也要走全量，否则记忆会漏同步。
   return a.cells !== b.cells || a.fineCells !== b.fineCells || a.d100 !== b.d100
     || a.objects !== b.objects || a.heights !== b.heights || a.architecture !== b.architecture
     || a.materialCells !== b.materialCells || a.fineMaterials !== b.fineMaterials
-    || a.rooms !== b.rooms || a.roomCells !== b.roomCells;
+    || a.rooms !== b.rooms || a.roomCells !== b.roomCells
+    || a.groups !== b.groups || a.fog !== b.fog || a.views !== b.views || a.autoFog !== b.autoFog;
 }
 
 /** prev → next 的脏集。地图按 id 对齐，新增的地图标 full。 */

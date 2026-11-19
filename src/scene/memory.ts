@@ -9,11 +9,15 @@ import type { CellGroup, GameMap, Id, MapObject, SeenObject, TextureSpec, Vision
 import { linesToFlow } from '../rules/flow';
 import { DEFAULT_MATERIALS } from '../core/defaults';
 import { cloneLayer, emptyVision, mergeLayers, pruneMemory, spatialFog, visionKey } from './vision';
+import type { VisionPlan } from './visionPlan';
 
 // 星际争霸式迷雾：fog 0 没去过 / 1 看得见 / 2 记忆。
 // 规则只有一条：看得见的地方，记忆 = 现实；看不见的地方，记忆停在上一次看见时。
 
 type Rect = { x: number; y: number; w: number; h: number };
+
+/** 脏区：主格索引集合；undefined 表示全图。 */
+type CellScope = Set<number> | undefined;
 
 export function anyVisible(m: { width: number; height: number; fog: number[] }, r: Rect) {
   for (let y = Math.max(0, r.y); y < Math.min(m.height, r.y + r.h); y++)
@@ -79,29 +83,74 @@ function syncObjectGroups(m: Draft<GameMap>) {
   }
 }
 
-/** 把一份迷雾里"看得见"的部分同步进它的记忆。 */
-function syncLayer(m: Draft<GameMap>, L: Draft<VisionLayer>, rev: number) {
+/** 脏区的外接矩形；只用来快速排除不相关的物件和贴图组。 */
+function scopeBBox(m: { width: number }, scope: Set<number>) {
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  for (const i of scope) {
+    const x = i % m.width, y = Math.floor(i / m.width);
+    if (x < x0) x0 = x;
+    if (x > x1) x1 = x;
+    if (y < y0) y0 = y;
+    if (y > y1) y1 = y;
+  }
+  return { x0, y0, x1, y1 };
+}
+
+function touchesRect(bbox: { x0: number; y0: number; x1: number; y1: number }, r: Rect): boolean {
+  return r.x <= bbox.x1 && r.x + r.w - 1 >= bbox.x0 && r.y <= bbox.y1 && r.y + r.h - 1 >= bbox.y0;
+}
+
+/** 贴图组记的是 1/3 格子键，换算成主格再和脏区比。 */
+function touchesGroup(box: { x0: number; y0: number; x1: number; y1: number }, width3: number, cells: number[]): boolean {
+  for (const key of cells) {
+    const x = Math.floor((key % width3) / 3), y = Math.floor(Math.floor(key / width3) / 3);
+    if (x >= box.x0 && x <= box.x1 && y >= box.y0 && y <= box.y1) return true;
+  }
+  return false;
+}
+
+/** 把一份迷雾里"看得见"的部分同步进它的记忆。给了 scope 就只处理这些主格。 */
+function syncLayer(m: Draft<GameMap>, L: Draft<VisionLayer>, rev: number, scope?: CellScope) {
   // Read geometry/fog from one plain snapshot; scanning subcells through Immer proxies
   // repeats thousands of trapped subdivision lookups on every movement.
   const source = isDraft(m) ? current(m) : m;
   const layer = isDraft(L) ? current(L) : L;
   L.seen.cellRevs ??= Array(m.width * m.height).fill(0); L.seen.observed ??= {}; L.seen.objectRevs ??= {}; L.seen.architectureRevs ??= {};
-  for (let key = 0; key < source.width * source.height * 9; key++) if (spatialFog(source, layer, key) === 1) { L.seen.observed[key] = rev; L.seen.architectureRevs[key] = rev; }
-  const n = m.width * m.height;
-  L.seen.materialCells ??= {};
-  for (let i = 0; i < n; i++) if (L.fog[i] === 1) {
-    L.seen.cells[i] = m.cells[i]; L.seen.cellRevs[i] = rev;
-    const mid = materialAtCell(m, i);
-    if (mid) L.seen.materialCells[i] = mid; else delete L.seen.materialCells[i];
+  const width3 = m.width * 3;
+  if (scope) {
+    for (const i of scope) {
+      const cx = i % m.width, cy = Math.floor(i / m.width);
+      for (let sy = 0; sy < 3; sy++) for (let sx = 0; sx < 3; sx++) {
+        const key = (cy * 3 + sy) * width3 + (cx * 3 + sx);
+        if (spatialFog(source, layer, key) === 1) { L.seen.observed[key] = rev; L.seen.architectureRevs[key] = rev; }
+      }
+    }
+  } else {
+    for (let key = 0; key < source.width * source.height * 9; key++) if (spatialFog(source, layer, key) === 1) { L.seen.observed[key] = rev; L.seen.architectureRevs[key] = rev; }
   }
+  const n = m.width * m.height;
+  const cellRevs = (L.seen.cellRevs ??= Array(n).fill(0));
+  const materialCells = (L.seen.materialCells ??= {});
+  const writeCell = (i: number) => {
+    if (L.fog[i] !== 1) return;
+    L.seen.cells[i] = m.cells[i]; cellRevs[i] = rev;
+    const mid = materialAtCell(m, i);
+    if (mid) materialCells[i] = mid; else delete materialCells[i];
+  };
+  if (scope) for (const i of scope) writeCell(i);
+  else for (let i = 0; i < n; i++) writeCell(i);
+  // 建筑记忆按整层重算：它只跟建筑段数有关，跟格数无关。
   const historical = clipArchitecture(source, layer, 2, layer.seen.architecture ?? []);
   L.seen.architecture = [...historical, ...clipArchitecture(source, layer)];
+  const bbox = scope ? scopeBBox(source, scope) : null;
   const box = { ...source, fog: layer.fog };
-  const live = source.objects.filter((o) => objectEnabled(source, o) && o.kind === 'object' && !isArchitectureObject(o) && !o.hidden && anyVisible(box, o));
+  const live = source.objects.filter((o) => objectEnabled(source, o) && o.kind === 'object' && !isArchitectureObject(o) && !o.hidden
+    && (!bbox || touchesRect(bbox, o)) && anyVisible(box, o));
   const liveIds = new Set(live.map((o) => o.id));
   const textures = objectTexturesOf(source);
-  // 记忆里的东西，原地方现在看得见了、但它已经不在那（被搬走/删掉/藏起来）→ 忘掉
-  const kept = L.seen.objects.filter((r) => liveIds.has(r.id) || !anyVisible(box, r));
+  // 记忆里的东西，原地方现在看得见了、但它已经不在那（被搬走/删掉/藏起来）→ 忘掉。
+  // 脏区外的记忆不受影响，直接留着。
+  const kept = L.seen.objects.filter((r) => liveIds.has(r.id) || !anyVisible(box, r) || (bbox !== null && !touchesRect(bbox, r)));
   if (kept.length !== L.seen.objects.length) L.seen.objects = kept;
   for (const o of live) {
     const snap = snapshot(o, textures.get(o.id));
@@ -122,11 +171,17 @@ function syncLayer(m: Draft<GameMap>, L: Draft<VisionLayer>, rev: number) {
   const oldRevs = L.seen.groupRevs ?? {};
   // 旧记忆组：只留灰格，按原版本保留；同时把旧工程的旧 id 归一成「原组~版本」。
   for (const old of (L.seen.groups ?? []).filter((g) => !g.objectId)) {
-    const cells = old.cells.filter((key) => spatialFog(source, layer, key) === 2).sort((a, b) => a - b);
-    if (!cells.length) continue;
     const sourceId = memorySourceOf(old);
     const textureKey = textureKeyOf(old);
     const id = `${sourceId}~${textureKey}`;
+    if (bbox && !touchesGroup(bbox, width3, old.cells)) {
+      // 脏区外的组：格子的雾没变，原样保留（只做 id 归一，和全量口径一致）。
+      nextGroups.set(id, { ...old, id, sourceId, textureKey });
+      nextRevs.set(id, Math.max(nextRevs.get(id) ?? 0, oldRevs[id] ?? 0, oldRevs[old.id] ?? 0));
+      continue;
+    }
+    const cells = old.cells.filter((key) => spatialFog(source, layer, key) === 2).sort((a, b) => a - b);
+    if (!cells.length) continue;
     const before = nextGroups.get(id);
     const next: CellGroup = before
       ? { ...before, cells: [...new Set([...before.cells, ...cells])].sort((a, b) => a - b) }
@@ -136,6 +191,7 @@ function syncLayer(m: Draft<GameMap>, L: Draft<VisionLayer>, rev: number) {
   }
   // 当前可见的格子：按当前的贴图版本单独记一份；同一个版本和旧灰格并起来。
   for (const live of liveGroups) {
+    if (bbox && !touchesGroup(bbox, width3, live.cells)) continue;
     const cells = [...new Set(visibleCellsOf(live))].sort((a, b) => a - b);
     if (!cells.length) continue;
     const textureKey = textureKeyOf(live);
@@ -152,19 +208,22 @@ function syncLayer(m: Draft<GameMap>, L: Draft<VisionLayer>, rev: number) {
 }
 
 /** 每次修改世界后执行：全队那份和每个人自己那份，都把"看得见"的部分同步进记忆。 */
-export function syncMemory(d: Draft<World>) {
+export function syncMemory(d: Draft<World>, plan?: VisionPlan) {
   const rev = d.observationSeq = (d.observationSeq ?? 0) + 1;
   for (const m of d.maps) {
     migrateArchitecture(m);
     syncObjectGroups(m);
+    const scope: CellScope = plan && !plan.full ? plan.maps.get(m.id) ?? undefined : undefined;
+    if (scope && scope.size === 0) continue; // 这张图没变
     if (d.visionMode === 'shared') {
-      syncLayer(m, m, rev); pruneMemory(m, m);
+      syncLayer(m, m, rev, scope);
+      pruneMemory(m, m, scope);
       for (const p of d.party) m.views[p.id] = cloneLayer(m);
     } else {
       const done = new Set<string>();
       for (const p of d.party) {
         const key = visionKey(d, p.id); if (done.has(key)) continue; done.add(key);
-        const L = m.views[p.id]; syncLayer(m, L, rev); pruneMemory(m, L);
+        const L = m.views[p.id]; syncLayer(m, L, rev, scope); pruneMemory(m, L, scope);
         for (const peer of d.party.filter(x => visionKey(d, x.id) === key)) m.views[peer.id] = cloneLayer(L);
       }
       Object.assign(m, mergeLayers(m, d.party.map(p => m.views[p.id])));

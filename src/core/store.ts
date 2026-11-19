@@ -9,6 +9,8 @@ import { migrateWorld, syncMemory } from '../scene/memory';
 import type { CombatNotice } from './types';
 import { setMediaIndex } from '../runtime/media';
 import { withVision } from '../scene/perception';
+import { diffWorld } from '../scene/dirty';
+import { planVision } from '../scene/visionPlan';
 import { loadSlot, saveSlot } from './persist';
 import { onSessionRenewed } from './session';
 
@@ -158,7 +160,9 @@ export function update(fn: (d: Draft<World>) => void, opts: { coalesce?: string;
     if (error) { toast(error); return; }
   }
   const needMemory = memoryDirty(world, next);
-  next = produce(withVision(next, world), (d) => { if (needMemory) syncMemory(d); });
+  // 脏集只算一次：视野只写脏格，记忆也只同步脏格。
+  const plan = planVision(next, diffWorld(world, next));
+  next = produce(withVision(next, world, { plan }), (d) => { if (needMemory) syncMemory(d, plan); });
   next = bumpStateRevs(world, next);
   if (batching && batchStart) { pushHistory(batchStart); batchStart = null; } // 拖动里第一次真的改了东西，才记一步撤销
   else if (!batching && opts.history !== false) {
