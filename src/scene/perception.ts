@@ -4,6 +4,8 @@ import { produce } from 'immer';
 import type { GameMap, MapObject, Token, VisionLayer, World } from '../core/types';
 import { partyVisionOf, sightCacheFor, visiblePoint, viewerOf, type SightCache, type SightCtx, type Viewer } from './sight';
 import { sightCtxFor } from './sightIndex';
+import { diffWorld } from './dirty';
+import { planVision, type MapScope } from './visionPlan';
 import { cloneLayer, emptyVision, mergeLayers, visionKey } from './vision';
 import { cellLine, gridDist } from '../core/util';
 
@@ -67,12 +69,14 @@ function sightToObject(world: World, map: GameMap, eye: Viewer, o: MapObject, sh
  * 规则书视野。只有棋子才有朝向和姿态，所以这里收棋子列表而不是坐标。
  * 迷雾按大格记；小格地形仍参与线遮挡，但不会再单独生成一份小格迷雾。
  */
-export function detailedVisionRulebook(world: World, map: GameMap, tokens: Token[], ctx?: SightCtx): Uint8Array {
+export function detailedVisionRulebook(
+  world: World, map: GameMap, tokens: Token[], ctx?: SightCtx, cells?: Iterable<number>,
+): Uint8Array {
   const viewers = tokens.map((t) => {
     const pc = world.party.find((p) => p.id === t.pcId);
     return viewerOf(t, { sex: pc?.sex, heightCm: pc?.heightCm });
   });
-  return partyVisionOf(world, map, viewers, ctx);
+  return partyVisionOf(world, map, viewers, ctx, cells);
 }
 
 const step = (f: number, seeing: number) => (seeing ? 1 : f === 1 ? 2 : f);
@@ -82,7 +86,13 @@ const step = (f: number, seeing: number) => (seeing ? 1 : f === 1 ? 2 : f);
  * 全队共享：全队一份，看得见 → 1，原来看得见、现在看不见 → 2（记忆）。
  * 各自独立：每个玩家角色一份（map.views），只算他自己的眼睛；地图上那份是所有人的并集，给主持人看。
  */
-export function withVision(next: World, prev: World): World {
+export function withVision(next: World, prev: World, opts: { full?: boolean } = {}): World {
+  // 只有「纯棋子移动」才收窄到圆盘；结构变化和世界级変化一律整图重算。
+  const plan = opts.full ? null : planVision(next, diffWorld(prev, next));
+  const scopeOf = (mapId: string): MapScope | undefined => {
+    if (!plan || plan.full) return undefined; // 整图
+    return plan.maps.get(mapId);
+  };
   return produce(next, d => {
     const membershipChanged = next.party !== prev.party || next.visionGroups !== prev.visionGroups || next.visionMode !== prev.visionMode;
     for (const m of d.maps) {
@@ -94,23 +104,27 @@ export function withVision(next: World, prev: World): World {
       const ids = new Set(d.party.map(p => p.id));
       for (const id of Object.keys(m.views)) if (!ids.has(id)) delete m.views[id];
       for (const p of d.party) m.views[p.id] ??= emptyVision(m.width * m.height);
+      const scope = scopeOf(src.id);
       const apply = (L: VisionLayer, members: Set<string>) => {
+        if (scope && scope.size === 0) return; // 这张图没变
         const mine = src.tokens.filter(t => t.pcId && members.has(t.pcId));
-        const vis = detailedVisionRulebook(next, src, mine, sightCtx);
-        L.fog = L.fog.map((f, i) => step(f, vis[i]));
+        const cells = scope ? [...scope] : undefined;
+        const vis = detailedVisionRulebook(next, src, mine, sightCtx, cells);
+        if (cells) for (const i of cells) L.fog[i] = step(L.fog[i], vis[i]);
+        else L.fog = L.fog.map((f, i) => step(f, vis[i]));
       };
       if (prev.visionMode === 'shared' && next.visionMode !== 'shared' && before)
         for (const p of d.party) m.views[p.id] = cloneLayer(before);
       if (next.visionMode === 'shared') {
         if (prev.visionMode !== 'shared') Object.assign(m, mergeLayers(src, d.party.map(p => m.views[p.id])));
-        if (m.autoFog && dirty) apply(m, ids);
+        if (m.autoFog && (dirty || opts.full)) apply(m, ids);
         for (const p of d.party) m.views[p.id] = cloneLayer(m);
       } else {
         const groups = new Map<string, string[]>();
         for (const p of d.party) { const key = visionKey(next, p.id); groups.set(key, [...groups.get(key) ?? [], p.id]); }
         for (const members of groups.values()) {
           const L = members.length === 1 ? cloneLayer(m.views[members[0]]) : mergeLayers(src, members.map(id => m.views[id]));
-          if (m.autoFog && dirty) apply(L, new Set(members));
+          if (m.autoFog && (dirty || opts.full)) apply(L, new Set(members));
           for (const id of members) m.views[id] = cloneLayer(L);
         }
         Object.assign(m, mergeLayers(src, d.party.map(p => m.views[p.id])));

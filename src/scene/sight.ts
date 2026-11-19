@@ -21,6 +21,8 @@ export const VISION_BUDGET = 1.56;
 export const BASE_CELL_COST = 0.1;
 /** 完全挡住：够高或者性质挡死。 */
 export const FULL_BLOCK = 99;
+/** 视野半径（主格）：预算 ÷ 每格最低消耗，向上取整。脏区圆盘用它，别自己写 15。 */
+export const VISION_RADIUS_CELLS = Math.ceil(VISION_BUDGET / BASE_CELL_COST);
 
 /** 眼高占身高的比例。 */
 export const EYE_RATIO = 0.93;
@@ -352,7 +354,9 @@ export function localSightCtx(world: World, map: GameMap): SightCtx {
 }
 
 /** 用现成的三张表算一个观察者看得见哪些格。 */
-export function visionWithTables(map: GameMap, viewer: Viewer, tables: SightTables): Uint8Array {
+export function visionWithTables(
+  map: GameMap, viewer: Viewer, tables: SightTables, cells?: Iterable<number>,
+): Uint8Array {
   const { cost, geometry, block } = tables;
   const w3 = map.width * SUB, h3 = map.height * SUB;
   const cone = viewer.facing ? coneFor(map, viewer.x, viewer.y) : 360;
@@ -362,7 +366,7 @@ export function visionWithTables(map: GameMap, viewer: Viewer, tables: SightTabl
     ? (to: Point) => wallSightSumIndexed(tables.walls!, p, to)
     : (to: Point) => wallSightSum(geometry, p, to);
   const vis = new Uint8Array(map.width * map.height);
-  const maxCells = Math.ceil(VISION_BUDGET / BASE_CELL_COST); // 15
+  const maxCells = VISION_RADIUS_CELLS;
   const clear = (target: Point) => {
     const total = cellSightTotal(cost, map.width, Math.floor(p.x), Math.floor(p.y), Math.floor(target.x), Math.floor(target.y));
     if (total > VISION_BUDGET) return false;
@@ -370,28 +374,42 @@ export function visionWithTables(map: GameMap, viewer: Viewer, tables: SightTabl
     if (total + wallSum(target) > VISION_BUDGET) return false;
     return !subcellBlockedWith(block, w3, h3, p, target);
   };
-  for (let y = 0; y < map.height; y++) for (let x = 0; x < map.width; x++) {
-    if (gridDist(x - viewer.x, y - viewer.y) > maxCells) continue;
-    if (viewer.facing && !inCone(viewer.facing, viewer.x, viewer.y, x, y, cone)) continue;
+  // 单个主格看得见吗；每个格子只依赖三张表和眼睛位置，所以可以只算指定格。
+  const look = (x: number, y: number): boolean => {
+    if (gridDist(x - viewer.x, y - viewer.y) > maxCells) return false;
+    if (viewer.facing && !inCone(viewer.facing, viewer.x, viewer.y, x, y, cone)) return false;
     const n = hasFineDetail(map, x, y) ? SUB : 1;
-    let seen = false;
-    for (let sy = 0; sy < n && !seen; sy++) for (let sx = 0; sx < n && !seen; sx++) {
-      if (clear({ x: x + (sx + 0.5) / n, y: y + (sy + 0.5) / n })) seen = true;
+    for (let sy = 0; sy < n; sy++) for (let sx = 0; sx < n; sx++)
+      if (clear({ x: x + (sx + 0.5) / n, y: y + (sy + 0.5) / n })) return true;
+    return false;
+  };
+  if (cells) {
+    for (const i of cells) {
+      const x = i % map.width, y = Math.floor(i / map.width);
+      if (look(x, y)) vis[i] = 1;
     }
-    if (seen) vis[y * map.width + x] = 1;
+    return vis;
   }
+  for (let y = 0; y < map.height; y++) for (let x = 0; x < map.width; x++) if (look(x, y)) vis[y * map.width + x] = 1;
   return vis;
 }
 
 /** 队伍视野：各人取并集。 */
-export function partyVisionOf(world: World, map: GameMap, viewers: Viewer[], ctx?: SightCtx): Uint8Array {
+export function partyVisionOf(world: World, map: GameMap, viewers: Viewer[], ctx?: SightCtx, cells?: Iterable<number>): Uint8Array {
   const tables = ctx ?? localSightCtx(world, map);
   const out = new Uint8Array(map.width * map.height);
+  const list = cells ? [...cells] : null;
   for (const v of viewers) {
-    const one = visionWithTables(map, v, tables.tablesFor(eyeHeight(v)));
-    for (let i = 0; i < out.length; i++) if (one[i]) out[i] = 1;
+    const one = visionWithTables(map, v, tables.tablesFor(eyeHeight(v)), list ?? undefined);
+    if (list) { for (const i of list) if (one[i]) out[i] = 1; }
+    else for (let i = 0; i < out.length; i++) if (one[i]) out[i] = 1;
   }
   return out;
+}
+
+/** 只算给定格集合（脏区）的队伍视野；网格外的格子保持 0。 */
+export function partyVisionCells(world: World, map: GameMap, viewers: Viewer[], cells: Iterable<number>, ctx?: SightCtx): Uint8Array {
+  return partyVisionOf(world, map, viewers, ctx, cells);
 }
 
 
