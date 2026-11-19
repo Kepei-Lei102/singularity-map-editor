@@ -169,6 +169,64 @@ export function wallSightSum(geometry: ReturnType<typeof architectureGeometry>, 
   return sum;
 }
 
+/** 分桶边长（格）。100×80 是 13×10 个桶，一条 15 格的视线最多碰到 3×3 个桶。 */
+export const WALL_BUCKET_CELLS = 8;
+
+/** 墙段索引：每个桶记下和它相交的构件下标。 */
+export interface WallIndex {
+  cell: number;
+  cols: number;
+  rows: number;
+  buckets: number[][];
+  geometry: ReturnType<typeof architectureGeometry>;
+  /** 查询时给扫过的构件打标记，同一个构件跨多个桶只累加一次。 */
+  stamp: Int32Array;
+  tick: number;
+}
+
+export function buildWallIndex(map: GameMap, geometry: ReturnType<typeof architectureGeometry>): WallIndex {
+  const cell = WALL_BUCKET_CELLS;
+  const cols = Math.max(1, Math.ceil(map.width / cell));
+  const rows = Math.max(1, Math.ceil(map.height / cell));
+  const buckets: number[][] = Array.from({ length: cols * rows }, () => []);
+  for (let i = 0; i < geometry.length; i++) {
+    const r = geometry[i];
+    const x0 = Math.max(0, Math.floor(r.x / cell)), x1 = Math.min(cols - 1, Math.floor((r.x + r.w) / cell));
+    const y0 = Math.max(0, Math.floor(r.y / cell)), y1 = Math.min(rows - 1, Math.floor((r.y + r.h) / cell));
+    for (let by = y0; by <= y1; by++) for (let bx = x0; bx <= x1; bx++) buckets[by * cols + bx].push(i);
+  }
+  return { cell, cols, rows, buckets, geometry, stamp: new Int32Array(geometry.length), tick: 0 };
+}
+
+/**
+ * 和 `wallSightSum` 逐项等价：只测线段 bbox 覆盖到的桶里的构件。
+ * 桶按构件 bbox 登记，所以「线段与构件相交」必然意味着两者 bbox 相交、必然落在同一个桶里。
+ */
+export function wallSightSumIndexed(idx: WallIndex, from: Point, to: Point): number {
+  const { cell, cols, rows, geometry } = idx;
+  const x0 = Math.max(0, Math.floor(Math.min(from.x, to.x) / cell));
+  const x1 = Math.min(cols - 1, Math.floor(Math.max(from.x, to.x) / cell));
+  const y0 = Math.max(0, Math.floor(Math.min(from.y, to.y) / cell));
+  const y1 = Math.min(rows - 1, Math.floor(Math.max(from.y, to.y) / cell));
+  if (x0 > x1 || y0 > y1) return 0;
+  if (idx.tick >= 0x7ffffffe) { idx.stamp.fill(0); idx.tick = 0; }
+  const tick = ++idx.tick;
+  let sum = 0;
+  for (let by = y0; by <= y1; by++) for (let bx = x0; bx <= x1; bx++) {
+    for (const i of idx.buckets[by * cols + bx]) {
+      if (idx.stamp[i] === tick) continue;
+      idx.stamp[i] = tick;
+      const r = geometry[i];
+      const c = wallSightCostOf(r);
+      if (c <= 0) continue;
+      const inside = to.x >= r.x && to.x <= r.x + r.w && to.y >= r.y && to.y <= r.y + r.h;
+      if (inside) continue;
+      if (segmentHitsRect(from, to, r)) sum += c;
+    }
+  }
+  return sum;
+}
+
 /** 沿视线累加（逐格系数 + 穿过的墙按 2 记）；超过预算就看不见。 */
 export function canSee(cost: Float32Array, width: number, x0: number, y0: number, x1: number, y1: number, budget = VISION_BUDGET): boolean {
   return cellSightTotal(cost, width, x0, y0, x1, y1) <= budget;
@@ -259,21 +317,25 @@ export function visionOf(world: World, map: GameMap, viewer: Viewer, ctx?: Sight
   return visionWithTables(map, viewer, tables);
 }
 
-/** 一次视野判定要用的三张表。建表是 O(格数 + 建筑段)，所以一批观察者应该共用。 */
+/** 一次视野判定要用的表。建表是 O(格数 + 建筑段)，所以一批观察者应该共用。 */
 export interface SightTables {
   cost: Float32Array;
   geometry: ReturnType<typeof architectureGeometry>;
   block: Uint8Array | null;
+  /** 墙段按格分桶；没有索引时退回全扫（`wallSightSum`）。 */
+  walls?: WallIndex;
 }
 
 /** 一批观察者共用的表：同眼高只建一次，和地图有关的只建一次。 */
 export interface SightCtx { tablesFor(eye: number): SightTables }
 
 export function buildSightTables(world: World, map: GameMap, eye: number): SightTables {
+  const geometry = architectureGeometry(map);
   return {
     cost: cellSightCost(world, map, eye),
-    geometry: architectureGeometry(map),
+    geometry,
     block: sightSubcellBlockers(world, map),
+    walls: buildWallIndex(map, geometry),
   };
 }
 
@@ -295,13 +357,17 @@ export function visionWithTables(map: GameMap, viewer: Viewer, tables: SightTabl
   const w3 = map.width * SUB, h3 = map.height * SUB;
   const cone = viewer.facing ? coneFor(map, viewer.x, viewer.y) : 360;
   const p = eyePoint(viewer);
+  // 有分桶就走索引，没有就退回「逐段全扫」，两条路结果必须一样。
+  const wallSum = tables.walls
+    ? (to: Point) => wallSightSumIndexed(tables.walls!, p, to)
+    : (to: Point) => wallSightSum(geometry, p, to);
   const vis = new Uint8Array(map.width * map.height);
   const maxCells = Math.ceil(VISION_BUDGET / BASE_CELL_COST); // 15
   const clear = (target: Point) => {
     const total = cellSightTotal(cost, map.width, Math.floor(p.x), Math.floor(p.y), Math.floor(target.x), Math.floor(target.y));
     if (total > VISION_BUDGET) return false;
     // 墙按系数 2 记：穿过一道就 2 > 1.56，等于挡住；开门的话几何里没有这块，不额外加。
-    if (total + wallSightSum(geometry, p, target) > VISION_BUDGET) return false;
+    if (total + wallSum(target) > VISION_BUDGET) return false;
     return !subcellBlockedWith(block, w3, h3, p, target);
   };
   for (let y = 0; y < map.height; y++) for (let x = 0; x < map.width; x++) {

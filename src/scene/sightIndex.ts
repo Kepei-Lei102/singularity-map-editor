@@ -5,7 +5,7 @@
 // 所以只要 refsOf() 里任何一个引用变了，这张地图的表就作废重建；缓存跟着地图对象走
 // （WeakMap），换图/导入后旧表自然被回收。
 import type { GameMap, World } from '../core/types';
-import { buildSightTables, cellSightCost, type SightCtx, type SightTables } from './sight';
+import { buildSightTables, cellSightCost, type SightCtx, type SightTables, type WallIndex } from './sight';
 
 /** 同一地图最多缓存几个眼高：站/蹲/趴/坐各一个，再多也没用。 */
 const MAX_EYES = 4;
@@ -15,6 +15,7 @@ interface Entry {
   ready: boolean;
   geometry?: SightTables['geometry'];
   block?: Uint8Array | null;
+  walls?: WallIndex;
   cost: Map<number, Float32Array>;
 }
 
@@ -44,6 +45,7 @@ export function sightCtxFor(world: World, map: GameMap): SightCtx {
         const tables = buildSightTables(world, map, eye);
         e.geometry = tables.geometry;
         e.block = tables.block;
+        e.walls = tables.walls;
         e.cost.set(eye, tables.cost);
         e.ready = true;
         return tables;
@@ -60,7 +62,7 @@ export function sightCtxFor(world: World, map: GameMap): SightCtx {
           }
         }
       }
-      return { cost, geometry: e.geometry!, block: e.block ?? null };
+      return { cost, geometry: e.geometry!, block: e.block ?? null, walls: e.walls };
     },
   };
 }

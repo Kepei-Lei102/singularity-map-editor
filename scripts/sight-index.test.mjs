@@ -11,10 +11,11 @@ const root = fileURLToPath(new URL('..', import.meta.url));
 const temp = await mkdtemp(join(tmpdir(), 'ts-sight-index-test-'));
 const bundle = join(temp, 'editor.cjs');
 await build({
-  stdin: { contents: `export * from './src/scene/sightIndex'; export * from './src/scene/sight';`, resolveDir: root },
+  stdin: { contents: `export * from './src/scene/sightIndex'; export * from './src/scene/sight'; export { architectureGeometry } from './src/scene/architecture';`, resolveDir: root },
   outfile: bundle, bundle: true, platform: 'node', format: 'cjs', logLevel: 'silent',
 });
-const { sightCtxFor, sightCacheSize, visionOf, partyVisionOf, eyeHeight } = await import(bundle);
+const { sightCtxFor, sightCacheSize, visionOf, partyVisionOf, eyeHeight, wallSightSum, wallSightSumIndexed, buildWallIndex } = await import(bundle);
+const { architectureGeometry } = await import(bundle);
 after(() => rm(temp, { recursive: true, force: true }));
 
 const world = {
@@ -108,4 +109,56 @@ test('sightIndex：队伍视野用同一份表，结果和逐个算一致', () =
   assert.ok(sightCacheSize(map) <= 3, `表数量 ${sightCacheSize(map)} 超了`);
   const eyes = new Set(viewers.map((v) => eyeHeight(v)));
   assert.equal(sightCacheSize(map), eyes.size);
+});
+
+test('墙段分桶：和逐段全扫逐项等价（含玻璃、门、越界墙）', () => {
+  const map = mkMap(40, 30);
+  map.architecture = {
+    walls: [
+      { id: 'w1', a: { x: 60, y: 0 }, b: { x: 60, y: 90 }, thickness: 100, material: 'wall' },
+      { id: 'w2', a: { x: 0, y: 45 }, b: { x: 120, y: 45 }, thickness: 60, material: 'glass' },
+      { id: 'w3', a: { x: 30, y: 0 }, b: { x: 30, y: 30 }, thickness: 100, material: 'wall' },
+      // 越界墙：一段从地图左边探进来
+      { id: 'w4', a: { x: -15, y: 60 }, b: { x: 15, y: 60 }, thickness: 100, material: 'wall' },
+    ],
+    doors: [{ id: 'd1', wallId: 'w1', offset: 30, width: 3, open: false }],
+  };
+  const geometry = architectureGeometry(map);
+  const idx = buildWallIndex(map, geometry);
+  assert.ok(geometry.length >= 4, '构件没建出来');
+  // 固定种子，失败可复现
+  let seed = 20261118;
+  const rnd = () => { seed = (seed * 1664525 + 1013904223) % 4294967296; return seed / 4294967296; };
+  let hits = 0;
+  for (let k = 0; k < 400; k++) {
+    const from = { x: rnd() * 40, y: rnd() * 30 }, to = { x: rnd() * 40, y: rnd() * 30 };
+    const slow = wallSightSum(geometry, from, to);
+    const fast = wallSightSumIndexed(idx, from, to);
+    assert.equal(fast, slow, `第 ${k} 条线不一致：${JSON.stringify(from)} → ${JSON.stringify(to)}`);
+    if (slow > 0) hits++;
+  }
+  assert.ok(hits > 50, `随机线里只有 ${hits} 条穿过墙，覆盖面不够`);
+});
+
+test('墙段分桶：同一构件跨多个桶不会被重复累加', () => {
+  const map = mkMap(40, 30);
+  // 一条横穿整张图的墙，必然登记在很多桶里；视线也用一条斜线，让它的 bbox 横跨多个桶，
+  // 这样「同一个构件被多个桶各算一次」才会暴露出来。
+  map.architecture = { walls: [{ id: 'long', a: { x: 0, y: 45 }, b: { x: 120, y: 45 }, thickness: 100, material: 'wall' }], doors: [] };
+  const geometry = architectureGeometry(map);
+  const idx = buildWallIndex(map, geometry);
+  const from = { x: 2, y: 5 }, to = { x: 36, y: 25 };
+  const sum = wallSightSumIndexed(idx, from, to);
+  assert.equal(sum, wallSightSum(geometry, from, to));
+  assert.equal(sum, 2, '穿一道普通墙只该记 2，不该按桶数量翻倍');
+});
+
+test('sightIndex：缓存命中路径也要带上墙段索引', () => {
+  const map = mkMap(20, 20);
+  map.architecture = { walls: [{ id: 'w', a: { x: 30, y: 0 }, b: { x: 30, y: 60 }, thickness: 100, material: 'wall' }], doors: [] };
+  const ctx = sightCtxFor(world, map);
+  assert.ok(ctx.tablesFor(1.58).walls, '首次建表要带索引');
+  assert.ok(ctx.tablesFor(1.58).walls, '缓存命中的路径也要带索引（漏了会静默退回全扫）');
+  assert.ok(ctx.tablesFor(0.9).walls, '按眼高再取一次也要带索引');
+  assert.equal(ctx.tablesFor(1.58).walls, ctx.tablesFor(0.9).walls, '索引与眼高无关，应该共用');
 });
