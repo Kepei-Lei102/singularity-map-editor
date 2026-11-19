@@ -6,13 +6,45 @@ import type { CellGroup, CodeRequest, CombatNotice, DiceJudgment, Endpoint, Game
 import { visibleMarks } from '../scene/perception';
 import { viewerOf, visiblePoint } from '../scene/sight';
 import { numbering } from '../scene/render';
-import { getUI, worldContext } from '../core/store';
+import { getUI, projectContext, worldContext } from '../core/store';
+import { SESSION } from '../core/session';
 import { groupBounds } from '../core/grid';
 import { effectiveLayer, emptyVision } from '../scene/vision';
 
 // 主持端算给玩家的载荷。纯函数：不碰 transport、不碰 asset、不写世界。
 // sync.ts 仍是公开门面，playerWorld/playerMap/playerDiceMode 由它 re-export。
 // 其余 export 只给 sync.ts 组装玩家载荷用，不是对外 API。
+
+/** 一个玩家窗口的绑定：pcId 是身份也是视角；试玩窗口多带一个试玩上下文，和真实窗口互相不认。 */
+export type PlayerBinding = { pcId: string; context: number; trialContext?: string };
+// Binding is held only by the host; the URL carries an opaque reconnect capability, never a selectable pcId.
+const players = new Map<string, PlayerBinding>();
+const bindingsKey = () => `ts-player-bindings-${SESSION}`;
+try {
+  const saved = JSON.parse(sessionStorage.getItem(bindingsKey()) ?? '{}') as Record<string, string>;
+  for (const [binding, pcId] of Object.entries(saved)) if (typeof pcId === 'string') players.set(binding, { pcId, context: projectContext() });
+} catch { /* no reconnect state */ }
+function saveBindings() {
+  try { sessionStorage.setItem(bindingsKey(), JSON.stringify(Object.fromEntries([...players].filter(([, p]) => !p.trialContext).map(([key, p]) => [key, p.pcId])))); } catch { /* unavailable */ }
+}
+export function bindPlayer(binding: string, pcId: string, trialContext?: string): void {
+  players.set(binding, { pcId, context: projectContext(), ...(trialContext ? { trialContext } : {}) });
+  saveBindings();
+}
+export function unbindPlayer(binding: string): void {
+  players.delete(binding);
+  saveBindings();
+}
+export function clearPlayerBindings(): void {
+  players.clear();
+  saveBindings();
+}
+export function playerEntry(binding: string): PlayerBinding | undefined { return players.get(binding); }
+export function hasPlayerBinding(binding: string): boolean { return players.has(binding); }
+export function playerEntries(): IterableIterator<[string, PlayerBinding]> { return players.entries(); }
+export function playerBindingKeys(): string[] { return [...players.keys()]; }
+export function trialBindings(): Array<[string, PlayerBinding]> { return [...players].filter(([, p]) => !!p.trialContext); }
+export function pcIdForBinding(binding: string): string | null { return players.get(binding)?.pcId ?? null; }
 
 /**
  * 试玩里刚发生的攻击，推给跟他有关的玩家。

@@ -195,7 +195,7 @@ test('玩家窗口回传的消息（掷骰、说话、走一格）都送到见�
   // 主持人这边要能收，并且用绑定信息认人，不信玩家自报
   const handler = src.split('function onSay')[1].split('export function onMove')[0];
   assert.match(handler, /const binding = bindingOf\(ref\)/);
-  assert.match(handler, /players\.get\(binding\)/);
+  assert.match(handler, /playerEntry\(binding\)/);
   assert.match(handler, /p\.pcId/);
   // 掷骰也只认绑给「判定角色」的那个窗口，不信消息里自报的身份
   const judge = src.split('export function onJudgeRoll')[1].split('export function reportJudgmentRoll')[0];
@@ -225,7 +225,9 @@ test('asset 账本随连接换代：reset/换工程清空，register 换新账�
   const mediaPanel = await readFile(join(root, 'src/components/MediaPanel.tsx'), 'utf8');
   const assets = await readFile(join(root, 'src/runtime/assets.ts'), 'utf8');
   assert.match(sync, /resetPlayerBindings[\s\S]{0,400}assetSessions\.clear\(\)/);
-  assert.match(sync, /players\.clear\(\)[\s\S]{0,200}assetSessions\.clear\(\)/);
+  const reset = sync.split('export function resetPlayerBindings')[1].split('/** 线上邀请')[0];
+  assert.match(reset, /clearPlayerBindings\(\)/);
+  assert.match(reset, /assetSessions\.clear\(\)/);
   // reset 和 drop 都必须清排队请求，否则断线/换房间后队列会留到下一次事件。
   assert.match(sync, /export function resetPlayerBindings\(\): void \{[\s\S]{0,600}clearAssetRequestQueues\(\)/);
   assert.match(sync, /function dropPlayerAssets\(binding: string\): void \{ clearAssetRequestQueues\(binding\)/);
@@ -283,6 +285,14 @@ test('玩家载荷投影搬进 hostSession，sync 只留门面', async () => {
     assert.match(hostSession, new RegExp(`(?:export )?function ${fn}\\(`), `${fn} 只在 hostSession 定义`);
     assert.doesNotMatch(sync, new RegExp(`function ${fn}\\(`), `${fn} 不能在 sync 复活`);
   }
-  assert.match(sync, /import \{[\s\S]{0,240}playerWorld, playerMap, playerDiceMode,[\s\S]{0,80}\} from '\.\/hostSession'/);
-  assert.match(sync, /export \{ playerWorld, playerMap, playerDiceMode \};/);
+  assert.match(sync, /import \{[\s\S]{0,400}playerWorld, playerMap, playerDiceMode,[\s\S]{0,400}\} from '\.\/hostSession'/);
+  assert.match(sync, /export \{ playerWorld, playerMap, playerDiceMode, pcIdForBinding \};/);
+  assert.doesNotMatch(sync, /const players = new Map/);
+  for (const fn of ['bindPlayer', 'unbindPlayer', 'clearPlayerBindings', 'playerEntry', 'hasPlayerBinding',
+    'playerEntries', 'playerBindingKeys', 'trialBindings', 'pcIdForBinding']) {
+    assert.match(hostSession, new RegExp(`export function ${fn}\\(`), `${fn} 只在 hostSession 定义`);
+    assert.doesNotMatch(sync, new RegExp(`function ${fn}\\(`), `${fn} 不能在 sync 复活`);
+  }
+  assert.match(sync, /bindPlayer\(binding, pcId\)/);
+  assert.match(sync, /unbindPlayer\(binding\)/);
 });

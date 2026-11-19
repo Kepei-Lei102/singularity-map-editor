@@ -534,6 +534,7 @@ test('watchdog 收掉 active 后队列继续；reset 清掉排队请求', async 
     await waitFor(() => host.assetTransferStats().requests === 2);
     host.resetPlayerBindings();
     await waitFor(() => host.assetTransferStats().players === 0);
+    assert.equal(host.pcIdForBinding(joined.binding), null, 'reset 要清掉 binding');
     assert.ok([...resetTicks].some((id) => resetCleared.has(id)), 'reset 要清掉空闲 ticker');
   } finally {
     globalThis.__releaseIDB('k1');
