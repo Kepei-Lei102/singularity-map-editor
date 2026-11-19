@@ -911,3 +911,55 @@ test('撬锁判定开着时人被挪走：按结果执行拒绝，不落账', ()
     assert.equal(door().state, 0);
   } finally { stop(); }
 });
+
+test('昏厥/尸体不能开门', () => {
+  stage();
+  try {
+    api.update((d) => { d.maps[0].tokens[0].down = true; });
+    assert.match(api.trialOpenDoor('door1') ?? '', /昏厥/);
+    assert.equal(door().state, 0);
+    assert.equal(lastEvent(), undefined);
+    api.update((d) => { const t = d.maps[0].tokens[0]; delete t.down; t.corpse = true; });
+    assert.match(api.trialOpenDoor('door1') ?? '', /已经死了/);
+    assert.equal(door().state, 0);
+  } finally { stop(); }
+});
+
+test('结束回合后不能开门', () => {
+  stage();
+  try {
+    api.setUI({ trial: { ...api.getUI().trial, combat: true, ended: { ta: true } } });
+    assert.match(api.trialOpenDoor('door1') ?? '', /这个回合已经结束了/);
+    assert.equal(door().state, 0);
+    assert.equal(lastEvent(), undefined);
+  } finally { stop(); }
+});
+
+test('挂起撞门在落地前遇到眩晕：整笔取消，门不动、不落事件', () => {
+  stage({ hp: 8 });
+  try {
+    api.openPlayerWindow('a', true);
+    assert.equal(api.trialRamDoor('door1'), null);
+    assert.ok(api.getUI().pendingJudgment);
+    api.update((d) => { d.maps[0].tokens[0].status = { label: '眩晕', roundsLeft: 1, skipTurns: 1, blocksAction: true }; });
+    assert.match(settle([15]) ?? '', /眩晕/);
+    assert.equal(api.getUI().pendingJudgment, null);
+    assert.equal(door().state, 0);
+    assert.equal(lastEvent(), undefined);
+  } finally { stop(); }
+});
+
+test('挂起撬锁在落地前遇到眩晕：整笔取消，锁不动', () => {
+  stage({ lock: { kind: 'physical', locked: true, keyable: true } });
+  try {
+    api.openPlayerWindow('a', true);
+    assert.equal(api.trialPickLock('door1', 'pick'), null);
+    assert.ok(api.getUI().pendingJudgment);
+    api.update((d) => { d.maps[0].tokens[0].status = { label: '眩晕', roundsLeft: 1, skipTurns: 1, blocksAction: true }; });
+    assert.match(settle([15, 15]) ?? '', /眩晕/);
+    assert.equal(api.getUI().pendingJudgment, null);
+    assert.equal(door().lock.locked, true);
+    assert.equal(door().state, 0);
+    assert.equal(lastEvent(), undefined);
+  } finally { stop(); }
+});

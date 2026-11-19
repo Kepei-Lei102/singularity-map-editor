@@ -629,6 +629,8 @@ interface JumpSettleOptions {
   injuryRoll?: number;
   injuryBy?: JumpRollBy;
   checkBy?: JumpRollBy;
+  /** 挂起判定结算前复核：发起者状态变了就整笔取消。 */
+  guardState?: boolean;
 }
 
 /** 把已经掷完的属性骰记成可以带进第二棒和最终事件的形状。 */
@@ -709,9 +711,11 @@ function jumpTarget(req: JumpRequest): { w: World; m: GameMap; tok: Token; pc: P
   return { w, m, tok, pc };
 }
 
-/** 广播第一颗骰之前先做这个；失败就一个字都不广播。 */
+/** 广播骰子之前先做这个；失败就一个字都不广播。 */
 function jumpPrecheck(req: JumpRequest): string | null {
-  return jumpTarget(req) ? null : '找不到跳跃对象';
+  const target = jumpTarget(req);
+  if (!target) return '找不到棋子';
+  return actorStateError(tr(), target.tok);
 }
 
 /**
@@ -729,6 +733,10 @@ export function settleJump(req: JumpRequest, values: number[], opts: JumpSettleO
   if (!m) return '找不到地图';
   const tok = m.tokens.find((x) => x.id === req.tokenId);
   if (!tok) return '找不到棋子';
+  if (opts.guardState) {
+    const blocked = actorStateError(t, tok);
+    if (blocked) return blocked;
+  }
   const pc = tok.pcId ? w.party.find((p) => p.id === tok.pcId) : null;
 
   let roll: JumpRoll | null = null;
@@ -908,8 +916,14 @@ export function trialEndTurn(roller: Roller = randomDie) {
   // 因为主持人可以手动切人；只有所有人都结束过才结算状态。
   const ended: Record<string, boolean> = { ...(t.ended ?? {}) };
   const curId = t.players[t.current]?.tokenId;
-  // 已经结束过的人再按空格：不重复结算，不清资源，也不重复消费眩晕。
-  if (curId && ended[curId]) return;
+  const curPcId = t.players[t.current]?.pcId;
+  const pending = getUI().pendingJudgment;
+  const pendingMine = !!pending && (pendingTokenFor(pending) === curId || pending.subjectId === curPcId);
+  // 已经结束过的人再按空格：不重复结算，不清资源，也不重复消费眩晕；自己的挂起判定收掉。
+  if (curId && ended[curId]) {
+    if (pendingMine) closePendingJudgment();
+    return;
+  }
   if (curId) ended[curId] = true;
   // 尸体/昏厥的人现在不能操作，不要求主持人切过去按空格；但不写进 ended，
   // 这样同轮被救起来的人还能拿到自己的行动。
@@ -918,6 +932,9 @@ export function trialEndTurn(roller: Roller = randomDie) {
     return !!tok && (!!tok.corpse || !!tok.down);
   };
   const endsRound = t.players.every((p) => ended[p.tokenId] || inactive(p.tokenId));
+  // 人结束回合后，属于他的挂起判定不能再落地；整轮结束就全收，别让下一轮把 ended 重置后
+  // 又拿着一笔旧 pending 去结算。
+  if (pending && (endsRound || pendingMine)) closePendingJudgment();
   const died: string[] = [];
   if (endsRound) {
     update((d) => {
@@ -1060,6 +1077,14 @@ export function currentTokenId(t: Trial | null | undefined): string | null {
 const actedOf = (t: Trial, tokenId: string | null): boolean => !!(tokenId && t.acted?.[tokenId]);
 /** 这个角色这一整轮已经结束过回合：不能再动，按空格也不重复结算。 */
 const turnEnded = (t: Trial, tokenId: string | null | undefined): boolean => !!(t.combat && tokenId && t.ended?.[tokenId]);
+/** 棋子现在还能不能继续做动作：尸体、昏厥、本回合已结束、眩晕等状态一律挡住。 */
+function actorStateError(t: Trial | null, tok: Token): string | null {
+  if (tok.corpse) return `${tok.name}已经死了`;
+  if (tok.down) return `${tok.name}昏厥中，暂时不能行动`;
+  if (t && turnEnded(t, tok.id)) return `${tok.name}这个回合已经结束了，等下一轮`;
+  if (statusBlocksAction(tok.status)) return `${tok.name}${tok.status!.label}中，暂时不能行动`;
+  return null;
+}
 /** 这个棋子这一回合选的跑法。 */
 export const runModeOf = (t: Trial | null | undefined, tokenId: string | null): RunMode | null =>
   (tokenId && t?.runMode?.[tokenId]) || null;
@@ -1084,7 +1109,6 @@ function attackContext(targetTokenId: string, sharp: boolean) {
   const pl = t?.players[t.current];
   if (!t || !pl) return '没有正在试玩的角色';
   if (!t.combat) return '先打开战斗模式再攻击';
-  if (actedOf(t, pl.tokenId)) return '这回合的行动点已经用掉了，按空格结束回合';
   const w = getWorld();
   const m = findMap(w, t.mapId);
   const attacker = m?.tokens.find((x) => x.id === pl.tokenId);
@@ -1097,6 +1121,7 @@ function attackContext(targetTokenId: string, sharp: boolean) {
   if (attacker.down) return `${attacker.name}昏厥中，打不了`;
   if (turnEnded(t, attacker.id)) return `${attacker.name}这个回合已经结束了，等下一轮`;
   if (statusBlocksAction(attacker.status)) return `${attacker.name}${attacker.status!.label}中，暂时不能行动`;
+  if (actedOf(t, pl.tokenId)) return '这回合的行动点已经用掉了，按空格结束回合';
   if (target.corpse) return `${target.name} 已经死了，不用再打`;
   if (target.status?.label === '濒死') return `${target.name} 已经濒死了`;
   const dist = Math.abs(attacker.x - target.x) + Math.abs(attacker.y - target.y);
@@ -1222,8 +1247,8 @@ function doorContext(objectId: string): DoorCtx | string {
   const tok = m.tokens.find((x) => x.id === pl.tokenId);
   const pc = w.party.find((p) => p.id === pl.pcId);
   if (!tok || !pc) return '找不到当前角色';
-  if (turnEnded(t, tok.id)) return `${pl.name}这个回合已经结束了，等下一轮`;
-  if (statusBlocksAction(tok.status)) return `${pl.name}${tok.status!.label}中，暂时不能行动`;
+  const blocked = actorStateError(t, tok);
+  if (blocked) return blocked;
   const access = doorAccess(m, door, tok, pc, 'initial');
   if (access) return access;
   if (t.combat && actedOf(t, pl.tokenId)) return '这回合的行动点已经用掉了，按空格结束回合';
@@ -1321,10 +1346,12 @@ function ramPrecheck(mapId: Id, objectId: Id, tokenId: Id, subjectId: Id): { m: 
   if (tok.down || tok.corpse) return '现在的状态撞不了门';
   const pc = w.party.find((x) => x.id === subjectId);
   if (!pc) return '找不到角色卡';
+  const t = tr();
+  const blocked = actorStateError(t, tok);
+  if (blocked) return blocked;
   // 第二颗之前人可能被挪走、门可能被关掉/藏起来、行动点可能被别的动作用掉；这些都要和第一颗一样拦。
   const access = doorAccess(m, door, tok, pc, 'recheck');
   if (access) return access;
-  const t = tr();
   if (t?.combat && actedOf(t, tokenId)) return '这回合的行动点已经用掉了，按空格结束回合';
   return { m, door, tok, pc };
 }
@@ -1642,10 +1669,12 @@ function settleDoorAttempt(
   const tokenId = pendingTokenFor(p);
   const tok = tokenId ? m.tokens.find((x) => x.id === tokenId) : undefined;
   if (!tok) return '这扇门已经变了，重开判定';
+  const trialNow = tr();
+  const blocked = actorStateError(trialNow, tok);
+  if (blocked) return blocked;
   const access = doorAccess(m, door, tok, pc, 'recheck');
   if (access) return access;
   if (openingIsOpen(door) || !door.lock || !door.opening?.openStates?.length) return '这扇门已经变了，重开判定';
-  const trialNow = tr();
   if (trialNow?.combat && actedOf(trialNow, tokenId)) return '这回合的行动点已经用掉了，按空格结束回合';
   const values = input.values?.length ? input.values : [input.value];
   if (values.length !== p.check.attrs.length) return '骰子数量不对';
@@ -1932,18 +1961,29 @@ export function settlePendingJudgment(input: JudgmentRollInput, byStandIn = fals
     pushJudgmentRequest(p.subjectId);
     return null;
   }
-  if (p.door) { const e = settleDoorAttempt(p, input, byStandIn); if (e) return e; }
+  if (p.door) {
+    const tokenId = pendingTokenFor(p);
+    const tok = tokenId ? findMap(getWorld(), p.door.mapId)?.tokens.find((x) => x.id === tokenId) : undefined;
+    if (tok) {
+      const blocked = actorStateError(tr(), tok);
+      if (blocked) { closePendingJudgment(); return blocked; }
+    }
+    const e = settleDoorAttempt(p, input, byStandIn);
+    if (e) return e;
+  }
   // 第二棒：属性骰已经落过，这一颗是摔伤骰；结算时才挪棋子/扣血，最后一条总事件。
   if (p.fall) {
     const f = p.fall;
-    // 先确认棋子还在，再广播第二颗；否则会出现“第二颗已发、总事件落不下去”。
-    if (jumpPrecheck(f.req)) { closePendingJudgment(); return '找不到棋子'; }
+    // 先确认棋子还在、状态没变，再广播第二颗；否则会出现“第二颗已发、总事件落不下去”。
+    const preErr = jumpPrecheck(f.req);
+    if (preErr) { closePendingJudgment(); return preErr; }
     const err = publishPendingRoll(p, input, byStandIn);
     if (err) return err;
     const e = settleJump(f.req, f.check?.rolls ?? [], {
       injuryRoll: input.value,
       injuryBy: byStandIn ? 'witness' : 'player',
       checkBy: f.check?.rolledBy ?? 'host',
+      guardState: true,
     });
     if (e) { closePendingJudgment(); return e; }
     closePendingJudgment();
@@ -1951,9 +1991,11 @@ export function settlePendingJudgment(input: JudgmentRollInput, byStandIn = fals
   }
   if (p.jump) {
     const req = p.jump;
-    // 第一颗骰也不许先发再失败：先查棋子/地图。
+    // 第一颗骰也不许先发再失败：先查棋子/地图/状态。
     const target = jumpTarget(req);
     if (!target) { closePendingJudgment(); return '找不到跳跃对象'; }
+    const blocked = actorStateError(tr(), target.tok);
+    if (blocked) { closePendingJudgment(); return blocked; }
     const pc = target.pc;
     const roll = req.attr ? judgeValue({ attr: req.attr, dice: req.dice ?? 'single', why: '' }, pc ?? ({ attributes: {} } as never), diceValues) : null;
     const landed = req.forcedFall ? false : roll === null || roll.success;
@@ -1965,19 +2007,19 @@ export function settlePendingJudgment(input: JudgmentRollInput, byStandIn = fals
       const tier = req.injury ?? injuryTier(req.fall);
       // 见证者代掷，或者玩家窗口已经关了：没有第二棒可等，见证者现掷并落账。
       if (byStandIn || !pc || !playerWindowFor(pc.id)) {
-        const e = settleJump(req, diceValues, { injuryRoll: rollInjury(tier), injuryBy: 'witness', checkBy });
+        const e = settleJump(req, diceValues, { injuryRoll: rollInjury(tier), injuryBy: 'witness', checkBy, guardState: true });
         return e || null;
       }
       const record = roll && req.attr ? jumpCheckRecord(req, roll, checkBy) : null;
       const e = openFallPending(req, record, p.place ?? null);
       if (e) {
         // 第二棒开不出来（窗口/对象刚好失效）：退回见证者现掷，至少保住一条总事件。
-        const fallback = settleJump(req, diceValues, { injuryRoll: rollInjury(tier), injuryBy: 'witness', checkBy });
+        const fallback = settleJump(req, diceValues, { injuryRoll: rollInjury(tier), injuryBy: 'witness', checkBy, guardState: true });
         return fallback || null;
       }
       return null;
     }
-    const e = settleJump(req, diceValues, { checkBy });
+    const e = settleJump(req, diceValues, { checkBy, guardState: true });
     return e || null;
   }
   if (p.attack) {
@@ -2131,7 +2173,7 @@ export function trialOpportunityAttack(): string | null {
     const dm = findMap(d, t.mapId)!;
     for (const enemyId of o.enemies) {
       const e = dm.tokens.find((k) => k.id === enemyId);
-      if (!e || e.opportunityUsed || statusBlocksAction(e.status)) continue;
+      if (!e || e.corpse || e.down || e.opportunityUsed || statusBlocksAction(e.status)) continue;
       e.opportunityUsed = true;
       // 借机攻击走攻击口径（作者已定）：000 特大成功 / 1–5 落空 / 95–99 大成功 / 其余命中。
       // 不是「纯幸运骰 51+」——那条是 resolveLuck 的口径，借机攻击不用它。
@@ -2177,14 +2219,16 @@ export function trialRescue(targetTokenId: string, opts: { roll?: number } = {})
   const pl = t?.players[t.current];
   if (!t || !pl) return '没有正在试玩的角色';
   if (!t.combat) return '先打开战斗模式';
-  if (actedOf(t, pl.tokenId)) return '这回合的行动点已经用掉了，按空格结束回合';
   const w = getWorld();
   const m = findMap(w, t.mapId);
   const rescuer = m?.tokens.find((x) => x.id === pl.tokenId);
   const target = m?.tokens.find((x) => x.id === targetTokenId);
   if (!m || !rescuer || !target) return '找不到角色或目标';
+  if (rescuer.corpse) return `${rescuer.name}已经死了`;
+  if (rescuer.down) return `${rescuer.name}昏厥中，救不了人`;
   if (turnEnded(t, rescuer.id)) return `${rescuer.name}这个回合已经结束了，等下一轮`;
   if (statusBlocksAction(rescuer.status)) return `${rescuer.name}${rescuer.status!.label}中，暂时不能行动`;
+  if (actedOf(t, pl.tokenId)) return '这回合的行动点已经用掉了，按空格结束回合';
   const dist = Math.abs(rescuer.x - target.x) + Math.abs(rescuer.y - target.y);
   if (dist > ENGAGE_RANGE) return `救治要贴身（${dist} 格 > ${ENGAGE_RANGE}）`;
   if (target.corpse) return `${target.name} 已经死了，救不回来`; // 尸体不能治
@@ -2287,14 +2331,15 @@ export function trialSense(kind: SenseKind, opts: { targetObjectId?: string | nu
   const t = tr();
   const pl = t?.players[t.current];
   if (!t || !pl) return '没有正在试玩的角色';
-  if (t.combat && actedOf(t, pl.tokenId)) return '这回合的行动点已经用掉了，按空格结束回合';
   const w = getWorld();
   const m = findMap(w, t.mapId);
   const tok = m?.tokens.find((x) => x.id === pl.tokenId);
   if (!m || !tok) return '找不到你的棋子';
   if (tok.corpse) return '你已经死了';
+  if (tok.down) return `${tok.name}昏厥中，暂时不能行动`;
   if (turnEnded(t, tok.id)) return `${tok.name}这个回合已经结束了，等下一轮`;
   if (statusBlocksAction(tok.status)) return `${tok.name}${tok.status!.label}中，暂时不能行动`;
+  if (t.combat && actedOf(t, pl.tokenId)) return '这回合的行动点已经用掉了，按空格结束回合';
   const pc = w.party.find((p) => p.id === pl.pcId);
   if (!pc) return '找不到角色卡';
 
@@ -2344,6 +2389,8 @@ export function trialRun(mode: RunMode | null): string | null {
   const pc = w.party.find((p) => p.id === pl.pcId);
   if (!pc) return '找不到角色卡';
   const tok = findMap(w, t.mapId)?.tokens.find((x) => x.id === pl.tokenId);
+  if (tok?.corpse) return `${tok.name}已经死了`;
+  if (tok?.down) return `${tok.name}昏厥中，暂时不能行动`;
   if (turnEnded(t, tok?.id)) return `${tok?.name ?? pl.name}这个回合已经结束了，等下一轮`;
   if (statusBlocksAction(tok?.status)) return `${tok?.name ?? pl.name}${tok?.status?.label ?? '状态'}中，暂时不能行动`;
 
@@ -2382,6 +2429,7 @@ export function trialStance(stance: Stance | null): string | null {
   const tok = findMap(w, t.mapId)?.tokens.find((x) => x.id === pl.tokenId);
   if (!tok) return '找不到你的棋子';
   if (tok.corpse) return '你已经死了';
+  if (tok.down) return `${pl.name}昏厥中，暂时不能行动`;
   if (turnEnded(t, tok.id)) return `${pl.name}这个回合已经结束了，等下一轮`;
   if (statusBlocksAction(tok.status)) return `${pl.name}${tok.status!.label}中，暂时不能行动`;
 

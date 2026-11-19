@@ -339,3 +339,80 @@ test('跳跃成功：账本记属性骰和移动，不记摔伤', () => {
   const moved = ev.deltas.find((d) => d.kind === 'moved');
   assert.deepEqual({ from: moved.from, to: moved.to }, { from: { x: 2, y: 2 }, to: { x: 4, y: 2 } });
 });
+
+test('挂起跳跃落地前遇到眩晕：整笔取消，不挪棋子、不落事件', () => {
+  setup();
+  api.openJudgment({
+    title: '跳跃：往下 6 格', ruling: '', sides: 20, subjectId: 'a',
+    jump: { tokenId: 'ta', dx: 0, dy: 1, kind: 'down', cells: 6, fall: 6, attr: null, dice: 'single', landing: { x: 2, y: 3 }, injury: 'heavy', moveMultiplier: 1, forcedFall: true },
+  });
+  api.update((d) => { d.maps[0].tokens[0].status = { label: '眩晕', roundsLeft: 1, skipTurns: 1, blocksAction: true }; });
+  const err = api.settlePendingJudgment({ rollId: 'stun-jump', sides: 20, value: 5, values: [5], tens: null, units: null, material: 'wood', seed: 1 }, false);
+  assert.match(err ?? '', /眩晕/);
+  assert.equal(api.getUI().pendingJudgment, null);
+  assert.equal(api.getWorld().maps[0].tokens[0].x, 2);
+  assert.equal(api.getWorld().maps[0].tokens[0].y, 2);
+  assert.equal((api.getWorld().events ?? []).length, 0);
+  assert.equal((api.getWorld().judgments ?? []).length, 0, '一个字都不广播');
+});
+
+test('挂起跳跃落地前结束回合：整笔取消，不挪棋子、不落事件', () => {
+  setup();
+  api.openJudgment({
+    title: '跳跃：往下 6 格', ruling: '', sides: 20, subjectId: 'a',
+    jump: { tokenId: 'ta', dx: 0, dy: 1, kind: 'down', cells: 6, fall: 6, attr: null, dice: 'single', landing: { x: 2, y: 3 }, injury: 'heavy', moveMultiplier: 1, forcedFall: true },
+  });
+  api.setUI({ trial: { ...api.getUI().trial, ended: { ta: true } } });
+  const err = api.settlePendingJudgment({ rollId: 'ended-jump', sides: 20, value: 5, values: [5], tens: null, units: null, material: 'wood', seed: 2 }, false);
+  assert.match(err ?? '', /这个回合已经结束了/);
+  assert.equal(api.getUI().pendingJudgment, null);
+  assert.equal(api.getWorld().maps[0].tokens[0].x, 2);
+  assert.equal(api.getWorld().maps[0].tokens[0].y, 2);
+  assert.equal((api.getWorld().events ?? []).length, 0);
+  assert.equal((api.getWorld().judgments ?? []).length, 0, '一个字都不广播');
+});
+
+test('挂起跳跃第二颗落地前遇到眩晕：整笔取消，不挪棋子', () => {
+  setup();
+  api.openJudgment({
+    title: '跳跃：往下 6 格', ruling: '', sides: 20, subjectId: 'a',
+    jump: { tokenId: 'ta', dx: 0, dy: 1, kind: 'down', cells: 6, fall: 6, attr: '敏捷', dice: 'single', landing: { x: 2, y: 3 }, injury: 'heavy', moveMultiplier: 1 },
+  });
+  assert.equal(api.settlePendingJudgment({ rollId: 'fall1', sides: 20, value: 1, values: [1], tens: null, units: null, material: 'wood', seed: 3 }, false), null);
+  assert.ok(api.getUI().pendingJudgment?.fall);
+  api.update((d) => { d.maps[0].tokens[0].status = { label: '眩晕', roundsLeft: 1, skipTurns: 1, blocksAction: true }; });
+  const err = api.settlePendingJudgment({ rollId: 'fall2', sides: 12, value: 12, values: [12], tens: null, units: null, material: 'wood', seed: 4 }, false);
+  assert.match(err ?? '', /眩晕/);
+  assert.equal(api.getUI().pendingJudgment, null);
+  assert.equal(api.getWorld().maps[0].tokens[0].x, 2);
+  assert.equal(api.getWorld().maps[0].tokens[0].y, 2);
+  assert.equal((api.getWorld().events ?? []).length, 0);
+  assert.equal((api.getWorld().judgments ?? []).length, 1, '第二颗不许广播');
+});
+
+test('settleJump 的挂起复核：guardState 时状态变了直接拒绝', () => {
+  setup();
+  api.update((d) => { d.maps[0].tokens[0].status = { label: '眩晕', roundsLeft: 1, skipTurns: 1, blocksAction: true }; });
+  const err = api.settleJump(jumpDown(), [], { injuryRoll: 12, injuryBy: 'player', guardState: true });
+  assert.match(err ?? '', /眩晕/);
+  assert.equal(api.getWorld().maps[0].tokens[0].x, 2);
+  assert.equal(api.getWorld().maps[0].tokens[0].y, 2);
+  assert.equal((api.getWorld().events ?? []).length, 0);
+});
+
+test('挂起跳跃时真按空格结束回合：pending 收掉，整轮重置后也不能再结算', () => {
+  setup();
+  api.openJudgment({
+    title: '跳跃：往下 6 格', ruling: '', sides: 20, subjectId: 'a',
+    jump: { tokenId: 'ta', dx: 0, dy: 1, kind: 'down', cells: 6, fall: 6, attr: null, dice: 'single', landing: { x: 2, y: 3 }, injury: 'heavy', moveMultiplier: 1, forcedFall: true },
+  });
+  assert.ok(api.getUI().pendingJudgment);
+  api.trialEndTurn();
+  assert.equal(api.getUI().trial.turn, 2);
+  assert.equal(api.getUI().pendingJudgment, null, '结束回合要收掉自己的挂起判定');
+  const err = api.settlePendingJudgment({ rollId: 'late-jump', sides: 20, value: 5, values: [5], tens: null, units: null, material: 'wood', seed: 9 }, false);
+  assert.match(err ?? '', /没有待掷的判定/);
+  assert.equal(api.getWorld().maps[0].tokens[0].x, 2);
+  assert.equal(api.getWorld().maps[0].tokens[0].y, 2);
+  assert.equal((api.getWorld().events ?? []).length, 0);
+});
