@@ -758,6 +758,18 @@ function TokenInspector({ world, mapId, t }: { world: World; mapId: string; t: T
         </select>
       </Row>
       <div className="kv">位置 {cellName(t.x, t.y)}{t.subcell ? ` · 子格(${t.subcell.x}, ${t.subcell.y})` : ''}</div>
+      {!t.pcId && <div className="inline">
+        <span className="muted">ME</span>
+        <Num value={t.me ?? 0} min={0} onChange={(v) => up((x) => { x.me = Math.max(0, v); })} />
+        <span className="muted">/</span>
+        <Num value={t.meMax ?? 0} min={0} onChange={(v) => up((x) => { x.meMax = Math.max(0, v); })} />
+      </div>}
+      <div className="inline">
+        <Check label="物理弱点已知" value={!!t.weakness?.physical}
+          onChange={(v) => up((x) => { x.weakness = { ...(x.weakness ?? {}), physical: v || undefined }; })} />
+        <Check label="心理弱点已知" value={!!t.weakness?.psychological}
+          onChange={(v) => up((x) => { x.weakness = { ...(x.weakness ?? {}), psychological: v || undefined }; })} />
+      </div>
       {t.pcId && <div className="hint">地图上的三圈是"看清"范围：1 格触手可及 / 5 格一步之遥 / 15 格屋子那头（1 格 = {CELL_METERS} 米，只画看得见的格子）。</div>}
     </Section>
   );

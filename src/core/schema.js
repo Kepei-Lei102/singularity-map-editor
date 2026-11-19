@@ -669,6 +669,13 @@ export function checkWorld(w, migrated = false) {
       if (t.opportunityUsed !== undefined) optBool(t.opportunityUsed, `${ta}.opportunityUsed`);
       if (t.hp !== undefined) num(t.hp, `${ta}.hp`, 0);
       if (t.hpMax !== undefined) num(t.hpMax, `${ta}.hpMax`, 0);
+      if (t.me !== undefined) num(t.me, `${ta}.me`, 0);
+      if (t.meMax !== undefined) num(t.meMax, `${ta}.meMax`, 0);
+      if (t.weakness !== undefined) {
+        obj(t.weakness, `${ta}.weakness`);
+        optBool(t.weakness.physical, `${ta}.weakness.physical`);
+        optBool(t.weakness.psychological, `${ta}.weakness.psychological`);
+      }
       if (t.down !== undefined) optBool(t.down, `${ta}.down`);
     });
     unique(m.tokens, `${at}.tokens`);

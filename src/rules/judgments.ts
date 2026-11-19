@@ -51,7 +51,7 @@ export function openJudgment(input: {
   place?: { mapId: string; x: number; y: number } | null;
   jump?: import('../core/types').JumpRequest | null;
   fall?: import('../core/types').FallRequest | null;
-  attack?: { attackerTokenId: string; targetTokenId: string; sharp?: boolean } | null;
+  attack?: { attackerTokenId: string; targetTokenId: string; sharp?: boolean; skillId?: string } | null;
   door?: { mapId: string; objectId: string; method: 'pick' | 'force' | 'ram' } | null;
   ramImpact?: import('../core/types').RamImpact | null;
   check?: { attrs: { attr: string; dice: 'single' | 'advantage' | 'disadvantage' }[]; dc: number; merge: 'single' | 'any' | 'all' } | null;

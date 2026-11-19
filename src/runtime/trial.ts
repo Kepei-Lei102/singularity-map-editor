@@ -24,7 +24,8 @@ import { appendEvent, newEvent } from '../rules/events';
 import { CELL_METERS, heightAt } from '../scene/height';
 import { cellFloor, hasPitBottom } from '../scene/terrain';
 import { canAffordStep, canTurn, chargeUsedThisTurn, moveBudgetOn, movePool, RUN_MODES, runMeShort, spendCharge, stepPrice, tickCharge, STAND_UP_COST, ROLL_OVER_COST, type ChargeState, type RunMode } from '../rules/move';
-import { ATTACK_BAND_LABEL, ATTACK_RANGE, DYING_LABEL, DYING_ROUNDS, ENGAGE_RANGE, RESCUED_HP, ROBOT_LABEL, applyDamage, attackTargets, canRescue, canUseSharp, downedBy, downedLabel, hpOf, opportunityTriggers, randomDie, robotArrived, robotIncoming, rollAttack, rollRescue, settleDeath, statusBlocksAction, stepLimitNear, type AttackTarget, type Downed, type Roller } from '../rules/combat';
+import { ATTACK_BAND_LABEL, ATTACK_DICE, ATTACK_RANGE, DYING_LABEL, DYING_ROUNDS, ENGAGE_RANGE, RESCUED_HP, ROBOT_LABEL, applyDamage, attackTargets, canRescue, canUseSharp, downedBy, downedLabel, hpOf, opportunityTriggers, randomDie, robotArrived, robotIncoming, rollAttack, rollRescue, settleDeath, statusBlocksAction, stepLimitNear, type AttackTarget, type Downed, type Roller } from '../rules/combat';
+import { attackSkillById, passiveStunTriggers, pickRiderEffects, riderStatus, STUN_PASSIVE_ID, stunnedDamageDiceMultiplier, type AttackRider } from '../rules/attackSkills';
 
 // 试玩：放白板玩家进去，用 WASD 走，体验视野。退出时一切恢复原样（沙盒）。
 // 默认是非战斗：不限步数；打开"战斗模式"才是每回合 5 格。
@@ -1104,7 +1105,7 @@ export const actionsLeft = (t: Trial | null | undefined): number => {
  * 攻击的前置：校验 + 取攻击者/目标。返回错误字符串，或者一份可以直接用的上下文。
  * 校验只写这一份——发起（开判定）和结算（真扣血）都走它，免得两边口径漂。
  */
-function attackContext(targetTokenId: string, sharp: boolean) {
+function attackContext(targetTokenId: string, sharp: boolean, skillId?: string) {
   const t = tr();
   const pl = t?.players[t.current];
   if (!t || !pl) return '没有正在试玩的角色';
@@ -1129,22 +1130,32 @@ function attackContext(targetTokenId: string, sharp: boolean) {
   const pc = w.party.find((p) => p.id === pl.pcId);
   // 钝器默认；锐器要攻击者身上带着才行，不带的人勾不了。
   if (sharp && !canUseSharp(pc)) return `${pl.name} 身上没有锐器，只能用钝器`;
+  if (sharp && attacker.status?.label === '去除武器') return `${attacker.name}的武器被去除了，这一下只能用钝器`;
+  if (skillId === STUN_PASSIVE_ID) return '眩晕打击是被动，不用选，直接普通攻击就会触发';
+  const attackSkill = skillId ? attackSkillById(skillId) : undefined;
+  if (skillId && !attackSkill) return '没有这个攻击技能';
+  if (attackSkill) {
+    if (!pc?.skills?.includes(attackSkill.id)) return `${pl.name} 没有解锁【${attackSkill.name}】`;
+    if (!pc || pc.me == null) return `${pl.name} 还没填 ME，不能发动【${attackSkill.name}】`;
+    if (pc.me < attackSkill.me) return `ME 不够：【${attackSkill.name}】要 ${attackSkill.me} ME，现在只有 ${pc.me}`;
+  }
   const eye = viewerOf(attacker, { sex: pc?.sex, heightCm: pc?.heightCm });
   if (!visiblePoint(w, m, eye, tokenPosition(target))) return '看不见目标，不能攻击';
-  return { t, pl, w, m, attacker, target, pc, sharp };
+  return { t, pl, w, m, attacker, target, pc, sharp, attackSkill };
 }
 
 /**
  * 发起攻击。骰子归发起者：玩家发起 → 开一笔判定，骰子进他的窗口；NPC/见证者 → 这边现掷。
  * 攻击走 D100 攻击口径（000 特大 / 1–5 落空 / 95–99 大成功 / 其余命中），伤害默认 1D8。
  */
-export function trialAttack(targetTokenId: string, opts: { roll?: number; roller?: Roller; sharp?: boolean } = {}): string | null {
-  const ctx = attackContext(targetTokenId, !!opts.sharp);
+export function trialAttack(targetTokenId: string, opts: { roll?: number; roller?: Roller; sharp?: boolean; skillId?: string } = {}): string | null {
+  const ctx = attackContext(targetTokenId, !!opts.sharp, opts.skillId);
   if (typeof ctx === 'string') return ctx;
   if (opts.roll === undefined && ctx.pl.pcId && playerWindowFor(ctx.pl.pcId)) {
+    const title = ctx.attackSkill ? `攻击 ${ctx.target.name} · ${ctx.attackSkill.name}` : `攻击 ${ctx.target.name}`;
     const err = openJudgment({
-      title: `攻击 ${ctx.target.name}`, ruling: '', sides: 100, subjectId: ctx.pl.pcId, place: null,
-      attack: { attackerTokenId: ctx.pl.tokenId, targetTokenId, sharp: ctx.sharp },
+      title, ruling: '', sides: 100, subjectId: ctx.pl.pcId, place: null,
+      attack: { attackerTokenId: ctx.pl.tokenId, targetTokenId, sharp: ctx.sharp, skillId: ctx.attackSkill?.id },
     });
     if (err) return err;
     pushJudgmentRequest(ctx.pl.pcId);
@@ -1745,25 +1756,50 @@ function settleDoorAttempt(
 /** 按掷出来的点数结算一次攻击。见证者点「按结果执行」，或 NPC 当场出手时走这里。 */
 export function settleAttack(
   targetTokenId: string, roll: number,
-  opts: { roller?: Roller; sharp?: boolean; rolledBy?: 'player' | 'witness' | 'host' } = {},
+  opts: { roller?: Roller; sharp?: boolean; rolledBy?: 'player' | 'witness' | 'host'; skillId?: string } = {},
 ): string | null {
-  const ctx = attackContext(targetTokenId, !!opts.sharp);
+  const ctx = attackContext(targetTokenId, !!opts.sharp, opts.skillId);
   if (typeof ctx === 'string') return ctx;
-  const { t, pl, target, sharp } = ctx;
-
-  const r = rollAttack(roll, 8, opts.roller);
+  const { t, pl, target, sharp, attackSkill } = ctx;
+  const roller = opts.roller ?? randomDie;
+  // 009-9-003：打已经眩晕的人，伤害骰颗数 ×5。
+  const hasStunPassive = !!ctx.pc?.skills?.includes(STUN_PASSIVE_ID);
+  const diceMultiplier = hasStunPassive ? stunnedDamageDiceMultiplier(target.status?.label) : 1;
+  const r = rollAttack(roll, 8, opts.roller, diceMultiplier);
+  let damage = r.damage;
+  let damageDice = r.dice;
+  const baseDamageDice = ATTACK_DICE[r.band];
+  const damageRolls = [...r.rolls];
+  // 007 / 灵巧：命中才抽效果；知道对应弱点就抽两种，且不重复。
+  const riderEffects: AttackRider[] = r.hit && attackSkill
+    ? pickRiderEffects(attackSkill.id, !!target.weakness?.[attackSkill.weakness], roller)
+    : [];
+  if (r.hit && riderEffects.includes('暴击')) {
+    const extra = roller(8);
+    damageRolls.push(extra);
+    damage += extra;
+    damageDice += 1;
+  }
+  const passiveStun = hasStunPassive && passiveStunTriggers({
+    hit: r.hit,
+    damageRolls,
+    physicalWeaknessKnown: !!target.weakness?.physical,
+  });
   // 伤害这种大事单独给一张卡片（event），底部小字只留一句不起眼的补充。
   let hpBefore: number | null = null, hpAfter: number | null = null, hpMax: number | null = null;
   let downed: Downed | null = null;
   let note = '';
+  let paidMe = 0;
+  const notes: string[] = [];
   const kind = downedBy(sharp);
   // 攻击也要进事件账本：句子是渲染出来的，不再各处自己拼一段中文。
   const deltas: Delta[] = [];
   const record = (d: World, extraNote?: string) => {
     const band = r.band;
+    const finalNote = [extraNote, note, ...notes].filter(Boolean).join('；');
     const ev = newEvent(d, Date.now(),
       { kind: 'pc', id: pl.pcId ?? pl.tokenId, name: pl.name },
-      { name: sharp ? '攻击（锐器）' : '攻击（钝器）', source: '临场' },
+      { id: attackSkill?.id, name: `${sharp ? '攻击（锐器）' : '攻击（钝器）'}${attackSkill ? `·${attackSkill.name}` : ''}`, source: attackSkill ? '技能' : '临场' },
       {
         target: { kind: target.pcId ? 'pc' : 'npc', id: target.pcId ?? target.id, name: target.name },
         check: {
@@ -1776,27 +1812,78 @@ export function settleAttack(
           rolledBy: opts.rolledBy ?? 'host',
         },
         deltas,
-        ...(extraNote ? { note: extraNote } : {}),
+        ...(finalNote ? { note: finalNote } : {}),
       });
     appendEvent(d, ev);
   };
   update((d) => {
     const dm = findMap(d, t.mapId)!;
     const dt = dm.tokens.find((x) => x.id === targetTokenId)!;
+    if (attackSkill) {
+      const ap = d.party.find((x) => x.id === pl.pcId);
+      if (ap?.me != null) {
+        const meBefore = ap.me;
+        paidMe = Math.min(attackSkill.me, ap.me);
+        ap.me -= paidMe;
+        if (paidMe > 0) deltas.push({ kind: 'me', id: ap.id, name: ap.name, from: meBefore, to: ap.me });
+      }
+      notes.push(`消耗 ${paidMe} ME`);
+    }
+    // 命中后附加：状态和降智；目标已经倒地就不往上叠。
+    const applyRiders = () => {
+      if (!r.hit) return;
+      const statusEffects = riderEffects.filter((e) => riderStatus(e));
+      // 尸体/濒死：连即时 ME 伤害也不落；昏厥：只落即时伤害，不叠状态。
+      if (dt.corpse || dt.status?.label === DYING_LABEL) {
+        if (riderEffects.length || passiveStun) notes.push('目标已经倒地，附加效果没落');
+        return;
+      }
+      if (riderEffects.includes('降智')) {
+        const raw = roller(6);
+        const tp = dt.pcId ? d.party.find((x) => x.id === dt.pcId) : null;
+        const meBefore = tp ? tp.me : dt.me;
+        if (meBefore == null) notes.push(`降智 1D6=${raw}：目标没填 ME，伤害没落地`);
+        else {
+          const meAfter = Math.max(0, meBefore - raw);
+          if (tp) tp.me = meAfter; else dt.me = meAfter;
+          deltas.push({ kind: 'me', id: dt.pcId ?? dt.id, name: dt.name, from: meBefore, to: meAfter });
+          notes.push(`降智：ME ${meBefore}→${meAfter}`);
+        }
+      }
+      if (dt.down) {
+        if (statusEffects.length || passiveStun) notes.push('目标已经昏厥，附加状态没挂');
+        return;
+      }
+      const labels = new Set<AttackRider>();
+      for (const effect of statusEffects) labels.add(effect);
+      if (passiveStun) labels.add('眩晕');
+      for (const effect of labels) {
+        const st = riderStatus(effect)!;
+        const old = dt.status?.label ?? null;
+        dt.status = st;
+        if (old !== st.label) deltas.push({ kind: 'status', id: dt.id, name: dt.name, from: old, to: st.label });
+        else notes.push(`${st.label}刷新`);
+      }
+      if (riderEffects.includes('暴击')) notes.push('暴击：伤害骰 +1');
+      if (riderEffects.includes('去除武器')) notes.push('去除武器：1 回合不能用锐器');
+      if (riderEffects.includes('恐惧')) notes.push('恐惧：1 回合不能行动');
+      if (passiveStun) notes.push('眩晕打击：附带一回合眩晕');
+    };
     // NPC：棋子上填了 hp/hpMax 就按它扣；没填就当作没有血条，伤害只进裁定。
     const tokenHP = (dt.hpMax ?? 0) > 0 ? { hp: dt.hp ?? dt.hpMax!, max: dt.hpMax! } : null;
     const p = dt.pcId ? d.party.find((x) => x.id === dt.pcId) : null;
     const pool = p ? hpOf(p) : tokenHP;
     if (!pool) {
       // 落空本来就没有伤害可记；只有真打中才需要说明「伤害没落地」。
-      if (r.hit) { note = `${dt.name} 没有血条（角色卡和棋子都没填 HP）；伤害没落地`; record(d, note); }
+      applyRiders();
+      if (r.hit) { note = `${dt.name} 没有血条（角色卡和棋子都没填 HP）；伤害没落地`; record(d); }
       else record(d);
       return;
     }
     // 旧状态要先留成 from：被打到 0 的人本来可能是晕厥/中毒，不能写成「状态从 无 改为 昏厥」。
     const already = dt.status?.label === '濒死' ? 'dying' : dt.down ? 'down' : null;
     const oldLabel = dt.status?.label ?? (dt.down ? downedLabel('down') : null);
-    const next = Math.max(0, pool.hp - r.damage);
+    const next = Math.max(0, pool.hp - damage);
     hpBefore = pool.hp; hpAfter = next; hpMax = pool.max;
     // 只有真变了才记：落空（伤害 0）不写「HP 从 6 改为 6」。
     if (next !== pool.hp) deltas.push({ kind: 'hp', id: dt.pcId ?? dt.id, name: dt.name, from: pool.hp, to: next });
@@ -1818,10 +1905,12 @@ export function settleAttack(
       const toLabel = already === 'down' && downed === 'down' ? null : newLabel;
       if (oldLabel !== newLabel) deltas.push({ kind: 'status', id: dt.id, name: dt.name, from: oldLabel, to: toLabel });
     } else downed = already;
+    // 附加效果在掉血/倒地之后落：这一下打死的人，不再往上叠流血/眩晕。
+    applyRiders();
     // 命中但没掉血、只改了状态（打 hp0 的晕厥/中毒）：卡片不能只说「数值没有变化」。
     if (r.hit && deltas.length && !deltas.some((x) => x.kind === 'hp')) note = '这一下没有掉血，只改了状态';
     if (r.hit && !deltas.length) note = '这一下数值没有变化（目标已经在倒地状态，或没有可扣的血量）';
-    record(d, note || undefined);
+    record(d);
   });
   setTr({
     acted: { ...(t.acted ?? {}), [pl.tokenId]: true },
@@ -1832,8 +1921,8 @@ export function settleAttack(
       kind: r.hit ? 'hit' : 'miss',
       attackerPcId: pl.pcId, attackerName: pl.name,
       targetPcId: target.pcId, targetName: target.name,
-      roll: r.roll, crit: r.crit, dice: r.dice, damage: r.damage,
-      hpBefore, hpAfter, hpMax, downed, note, at: Date.now(),
+      roll: r.roll, crit: r.crit, dice: damageDice, diceBase: baseDamageDice, extraDice: damageDice - baseDamageDice, damage,
+      hpBefore, hpAfter, hpMax, downed, note: [note, ...notes].filter(Boolean).join('；'), at: Date.now(),
     },
   });
   return null;
@@ -2023,7 +2112,7 @@ export function settlePendingJudgment(input: JudgmentRollInput, byStandIn = fals
     return e || null;
   }
   if (p.attack) {
-    const e = settleAttack(p.attack.targetTokenId, input.value, { sharp: p.attack.sharp, rolledBy: byStandIn ? 'witness' : 'player' });
+    const e = settleAttack(p.attack.targetTokenId, input.value, { sharp: p.attack.sharp, skillId: p.attack.skillId, rolledBy: byStandIn ? 'witness' : 'player' });
     if (e) return e;
   }
   const err = publishPendingRoll(p, input, byStandIn);
