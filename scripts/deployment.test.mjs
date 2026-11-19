@@ -170,8 +170,9 @@ test('玩家窗口回传的掷骰结果不会被当成「复制标签页」丢�
 });
 
 test('战斗通报只发给当事人，且只带结果不带骰子细节', async () => {
+  const hostSession = await readFile(join(root, 'src/runtime/hostSession.ts'), 'utf8');
   const src = await readFile(join(root, 'src/runtime/sync.ts'), 'utf8');
-  const body = src.split('function combatNoticeFor')[1].split('/** 只把')[0];
+  const body = hostSession.split('function combatNoticeFor')[1].split('/** 只把')[0];
   // 既不是打人的也不是挨打的，就什么都不给
   assert.match(body, /asAttacker[\s\S]{0,80}asTarget/);
   assert.match(body, /if \(!asAttacker && !asTarget\) return null/);
@@ -271,4 +272,17 @@ test('asset 账本随连接换代：reset/换工程清空，register 换新账�
   // 试玩里只拦 play；stop 必须放行，否则 quiet 延迟的 stop 会卡在 trial 守卫里。
   assert.match(sync, /body\.type === 'play' && getUI\(\)\.trial/);
   assert.doesNotMatch(sync, /\(body\.type === 'play' \|\| body\.type === 'stop'\) && getUI\(\)\.trial/);
+});
+
+
+test('玩家载荷投影搬进 hostSession，sync 只留门面', async () => {
+  const hostSession = await readFile(join(root, 'src/runtime/hostSession.ts'), 'utf8');
+  const sync = await readFile(join(root, 'src/runtime/sync.ts'), 'utf8');
+  for (const fn of ['playerWorld', 'playerMap', 'playerDiceMode', 'judgmentVisible', 'opaqueMemoryId',
+    'forPlayer', 'pendingForPlayer', 'pendingFor', 'combatNoticeFor', 'codeForPlayer', 'trialFlagsFor']) {
+    assert.match(hostSession, new RegExp(`(?:export )?function ${fn}\\(`), `${fn} 只在 hostSession 定义`);
+    assert.doesNotMatch(sync, new RegExp(`function ${fn}\\(`), `${fn} 不能在 sync 复活`);
+  }
+  assert.match(sync, /import \{[\s\S]{0,240}playerWorld, playerMap, playerDiceMode,[\s\S]{0,80}\} from '\.\/hostSession'/);
+  assert.match(sync, /export \{ playerWorld, playerMap, playerDiceMode \};/);
 });
