@@ -118,7 +118,9 @@ export function withVision(next: World, prev: World, opts: { full?: boolean; pla
       if (next.visionMode === 'shared') {
         if (prev.visionMode !== 'shared') Object.assign(m, mergeLayers(src, d.party.map(p => m.views[p.id])));
         if (m.autoFog && (dirty || opts.full)) apply(m, ids);
-        for (const p of d.party) m.views[p.id] = cloneLayer(m);
+        // 共享模式下每个人的视野和地图那份内容完全相同，没必要复制一份：共用 fog/seen 两个数组。
+        // 切到「各自独立」时上面的 cloneLayer(before) 会补上真正的副本。
+        for (const p of d.party) m.views[p.id] = { fog: m.fog, seen: m.seen };
       } else {
         const groups = new Map<string, string[]>();
         for (const p of d.party) { const key = visionKey(next, p.id); groups.set(key, [...groups.get(key) ?? [], p.id]); }

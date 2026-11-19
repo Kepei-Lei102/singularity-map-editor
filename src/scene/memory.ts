@@ -218,7 +218,8 @@ export function syncMemory(d: Draft<World>, plan?: VisionPlan) {
     if (d.visionMode === 'shared') {
       syncLayer(m, m, rev, scope);
       pruneMemory(m, m, scope);
-      for (const p of d.party) m.views[p.id] = cloneLayer(m);
+      // 共享模式下每个人看到的就是地图那份，共用数组而不是复制 9 份。
+      for (const p of d.party) m.views[p.id] = { fog: m.fog, seen: m.seen };
     } else {
       const done = new Set<string>();
       for (const p of d.party) {
@@ -231,7 +232,9 @@ export function syncMemory(d: Draft<World>, plan?: VisionPlan) {
     // 辨识改变知识归属，不刷新灰区中物件的位置或状态。
     const source = isDraft(m) ? current(m) : m;
     const identities = new Map(source.objects.map(o => [o.id, identityKnowledge(o)]));
-    for (const L of [m, ...Object.values(m.views)]) L.seen.objects = L.seen.objects.map(r => {
+    // 共享模式下所有人的 seen 是同一个对象，去重后只扫一遍。
+    const layers = new Set<VisionLayer>([m, ...Object.values(m.views)]);
+    for (const L of layers) L.seen.objects = L.seen.objects.map(r => {
       const identity = identities.get(r.id);
       return identity && JSON.stringify(r.identity) !== JSON.stringify(identity) ? { ...r, identity } : r;
     });
