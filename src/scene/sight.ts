@@ -254,11 +254,44 @@ function subcellLineBlocked(block: Uint8Array, width3: number, x0: number, y0: n
  *   3. 细分格的挡死小块（visionCoef ≥ 99）。
  * 细分过的主格按 3×3 小格判，任意一小格看得见就整格可见。
  */
-export function visionOf(world: World, map: GameMap, viewer: Viewer): Uint8Array {
-  const eye = eyeHeight(viewer);
-  const cost = cellSightCost(world, map, eye);
-  const geometry = architectureGeometry(map);
-  const block = sightSubcellBlockers(world, map);
+export function visionOf(world: World, map: GameMap, viewer: Viewer, ctx?: SightCtx): Uint8Array {
+  const tables = (ctx ?? localSightCtx(world, map)).tablesFor(eyeHeight(viewer));
+  return visionWithTables(map, viewer, tables);
+}
+
+/** 一次视野判定要用的三张表。建表是 O(格数 + 建筑段)，所以一批观察者应该共用。 */
+export interface SightTables {
+  cost: Float32Array;
+  geometry: ReturnType<typeof architectureGeometry>;
+  block: Uint8Array | null;
+}
+
+/** 一批观察者共用的表：同眼高只建一次，和地图有关的只建一次。 */
+export interface SightCtx { tablesFor(eye: number): SightTables }
+
+export function buildSightTables(world: World, map: GameMap, eye: number): SightTables {
+  return {
+    cost: cellSightCost(world, map, eye),
+    geometry: architectureGeometry(map),
+    block: sightSubcellBlockers(world, map),
+  };
+}
+
+/** 一次调用内自己管表（没有外部缓存时的兜底）；同眼高复用。 */
+export function localSightCtx(world: World, map: GameMap): SightCtx {
+  const byEye = new Map<number, SightTables>();
+  return {
+    tablesFor(eye: number): SightTables {
+      let t = byEye.get(eye);
+      if (!t) { t = buildSightTables(world, map, eye); byEye.set(eye, t); }
+      return t;
+    },
+  };
+}
+
+/** 用现成的三张表算一个观察者看得见哪些格。 */
+export function visionWithTables(map: GameMap, viewer: Viewer, tables: SightTables): Uint8Array {
+  const { cost, geometry, block } = tables;
   const w3 = map.width * SUB, h3 = map.height * SUB;
   const cone = viewer.facing ? coneFor(map, viewer.x, viewer.y) : 360;
   const p = eyePoint(viewer);
@@ -285,10 +318,11 @@ export function visionOf(world: World, map: GameMap, viewer: Viewer): Uint8Array
 }
 
 /** 队伍视野：各人取并集。 */
-export function partyVisionOf(world: World, map: GameMap, viewers: Viewer[]): Uint8Array {
+export function partyVisionOf(world: World, map: GameMap, viewers: Viewer[], ctx?: SightCtx): Uint8Array {
+  const tables = ctx ?? localSightCtx(world, map);
   const out = new Uint8Array(map.width * map.height);
   for (const v of viewers) {
-    const one = visionOf(world, map, v);
+    const one = visionWithTables(map, v, tables.tablesFor(eyeHeight(v)));
     for (let i = 0; i < out.length; i++) if (one[i]) out[i] = 1;
   }
   return out;
@@ -301,7 +335,9 @@ export function partyVisionOf(world: World, map: GameMap, viewers: Viewer[]): Ui
  */
 export interface SightCache { cost: Float32Array; block: Uint8Array | null }
 
-export function sightCacheFor(world: World, map: GameMap, eye: Viewer): SightCache {
+export function sightCacheFor(world: World, map: GameMap, eye: Viewer, ctx?: SightCtx): SightCache {
+  // 传了 ctx 就复用已经建好的表（交互判定里会被反复取，别再按人重建全图）。
+  if (ctx) { const t = ctx.tablesFor(eyeHeight(eye)); return { cost: t.cost, block: t.block }; }
   return { cost: cellSightCost(world, map, eyeHeight(eye)), block: sightSubcellBlockers(world, map) };
 }
 

@@ -12,6 +12,7 @@ import { architectureGeometry, architectureObjectBounds, characterPathClear, fur
 import { terrainBlocksPoint, terrainBlocksRect } from '../scene/terrain';
 import { slidingPuzzleForObject } from '../scene/sliding';
 import { sightCacheFor, viewerOf, visiblePoint } from '../scene/sight';
+import { sightCtxFor } from '../scene/sightIndex';
 import { describeSense, rollSense, senseHints, SENSE_LABEL, type SenseKind } from '../rules/sense';
 import { resolveCheck } from '../rules/interaction';
 import {
@@ -2154,7 +2155,7 @@ export function trialAttackTargets(): AttackTarget[] {
   const pc = w.party.find((p) => p.id === pl.pcId);
   const eye = viewerOf(attacker, { sex: pc?.sex, heightCm: pc?.heightCm });
   // 一次枚举只建一次代价表：以前每个候选目标都重建一遍全图。
-  const cache = sightCacheFor(w, m, eye);
+  const cache = sightCacheFor(w, m, eye, sightCtxFor(w, m));
   return attackTargets(w, m, attacker, (k) => visiblePoint(w, m, eye, tokenPosition(k), undefined, cache));
 }
 

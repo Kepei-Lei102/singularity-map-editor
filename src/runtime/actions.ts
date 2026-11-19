@@ -7,6 +7,7 @@ import JSZip from 'jszip';
 import { getUI, getWorld, reachableWorlds, replaceWorld, setUI, toast, update, worldContext, type Selection } from '../core/store';
 import { blocksMovement, pcWithin } from '../scene/perception';
 import { sightCacheFor, viewerOf, visiblePoint } from '../scene/sight';
+import { sightCtxFor } from '../scene/sightIndex';
 import { subKey, terrainBlocksRect } from '../scene/terrain';
 import { groupBounds, hasFineDetail, objectFootprintCells } from '../core/grid';
 import { materialAtCell } from '../scene/material';
@@ -401,11 +402,13 @@ export function autoReveal(mapId: string) {
   // 视野表按「棋子」建（键 tokenId，不能按 pcId：同一个角色绑两个棋子、姿态不同时眼高就不同），
   // 遇到第一条待判定的 auto 秘密才惰性建，没有 auto 秘密的图一步都不用建。
   const cacheByToken = new Map<string, ReturnType<typeof sightCacheFor>>();
+  // 同一张图同一份内容只建一次表，按眼高分给各个棋子。
+  const sightCtx = sightCtxFor(w, m);
   const cacheForToken = (t: Token) => {
     let c = cacheByToken.get(t.id);
     if (!c) {
       const pc = w.party.find((x) => x.id === t.pcId);
-      c = sightCacheFor(w, m, viewerOf(t, { sex: pc?.sex, heightCm: pc?.heightCm }));
+      c = sightCacheFor(w, m, viewerOf(t, { sex: pc?.sex, heightCm: pc?.heightCm }), sightCtx);
       cacheByToken.set(t.id, c);
     }
     return c;

@@ -3,6 +3,7 @@ import { objectEnabled } from '../core/objectData.js';
 import { objectStateError, isArchitectureObject, furnitureSweepBlocked, isSubdivided, tokenPosition } from './architecture';
 import { blocksMovement } from './perception';
 import { sightCacheFor, viewerOf, visiblePoint } from './sight';
+import { sightCtxFor } from './sightIndex';
 import { terrainBlocksRect } from './terrain';
 
 /** 当前操控者确实看见家具的一部分，记忆与队友视野不算。 */
@@ -11,7 +12,7 @@ export function seesSlidingObject(world: World, map: GameMap, objectId: string, 
   if (!o || !objectEnabled(map, o) || o.hidden || !t) return false;
   const pc = world.party.find((p) => p.id === t.pcId);
   const eye = viewerOf(t, { sex: pc?.sex, heightCm: pc?.heightCm });
-  const cache = sightCacheFor(world, map, eye);
+  const cache = sightCacheFor(world, map, eye, sightCtxFor(world, map));
   for (let y = o.y; y < o.y + o.h; y++) for (let x = o.x; x < o.x + o.w; x++)
     { const n = isSubdivided(map, x, y) ? 3 : 1; for (let sy = 0; sy < n; sy++) for (let sx = 0; sx < n; sx++) if (visiblePoint(world, map, eye, { x: x + (sx + .5) / n, y: y + (sy + .5) / n }, undefined, cache)) return true; }
   return false;
