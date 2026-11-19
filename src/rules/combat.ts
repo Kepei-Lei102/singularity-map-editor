@@ -116,6 +116,12 @@ export function isDying(hp: number): boolean {
   return hp <= 0;
 }
 
+/** 这个状态挡不挡行动：流血/中毒是持续伤害，不该让人动不了；眩晕和其余状态默认挡住。 */
+export function statusBlocksAction(st: { label: string; blocksAction?: boolean } | undefined): boolean {
+  if (!st) return false;
+  return st.blocksAction ?? (st.label !== '流血' && st.label !== '中毒');
+}
+
 /** 战斗状态：流血 / 中毒 / 眩晕，各自在回合边界结算。 */
 export type CombatCondition = '流血' | '中毒' | '眩晕';
 
@@ -138,7 +144,10 @@ export interface RoundTick {
   ends: boolean;
 }
 
-/** 回合边界结算：每个状态先扣一次，再把剩余回合减一。返回这一回合跳了多少。 */
+/**
+ * 固定值版本的回合结算，保留给纯函数测试/旧调用。
+ * 生产回合边界在 `runtime/trial.ts`，按 `TokenStatus.damageDie` 掷骰、`perRound` 固定伤害。
+ */
 export function tickEffects(effects: CombatEffect[]): { ticks: RoundTick[]; left: CombatEffect[] } {
   const ticks: RoundTick[] = [];
   const left: CombatEffect[] = [];

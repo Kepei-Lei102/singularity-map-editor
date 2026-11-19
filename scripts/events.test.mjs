@@ -232,8 +232,11 @@ test('锐器是「这一击的选择」：打完自动回钝器，勾了没用�
   assert.equal(api.trialAttack('tb', { roll: 50, roller: () => 3, sharp: true }), null);
   assert.equal(api.getWorld().events.at(-1).action.name, '攻击（锐器）');
   assert.ok(!api.getUI().trial.sharpAttack.ta, '这一击打完就该回钝器');
-  // 下一回合不勾：走钝器
+  // 下一回合不勾：走钝器。结束回合后不能再打同一个人，要过完整轮。
   api.trialEndTurn();
+  api.switchTrialPlayer(1);
+  api.trialEndTurn();
+  api.switchTrialPlayer(0);
   assert.equal(api.trialAttack('tb', { roll: 50, roller: () => 3 }), null);
   assert.equal(api.getWorld().events.at(-1).action.name, '攻击（钝器）');
   // 勾了但没打：结束回合清掉

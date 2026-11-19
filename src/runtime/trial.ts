@@ -24,7 +24,7 @@ import { appendEvent, newEvent } from '../rules/events';
 import { CELL_METERS, heightAt } from '../scene/height';
 import { cellFloor, hasPitBottom } from '../scene/terrain';
 import { canAffordStep, canTurn, chargeUsedThisTurn, moveBudgetOn, movePool, RUN_MODES, runMeShort, spendCharge, stepPrice, tickCharge, STAND_UP_COST, ROLL_OVER_COST, type ChargeState, type RunMode } from '../rules/move';
-import { ATTACK_BAND_LABEL, ATTACK_RANGE, DYING_LABEL, DYING_ROUNDS, ENGAGE_RANGE, RESCUED_HP, ROBOT_LABEL, attackTargets, canRescue, canUseSharp, downedBy, downedLabel, hpOf, opportunityTriggers, robotArrived, robotIncoming, rollAttack, rollRescue, settleDeath, stepLimitNear, type AttackTarget, type Downed, type Roller } from '../rules/combat';
+import { ATTACK_BAND_LABEL, ATTACK_RANGE, DYING_LABEL, DYING_ROUNDS, ENGAGE_RANGE, RESCUED_HP, ROBOT_LABEL, applyDamage, attackTargets, canRescue, canUseSharp, downedBy, downedLabel, hpOf, opportunityTriggers, randomDie, robotArrived, robotIncoming, rollAttack, rollRescue, settleDeath, statusBlocksAction, stepLimitNear, type AttackTarget, type Downed, type Roller } from '../rules/combat';
 
 // 试玩：放白板玩家进去，用 WASD 走，体验视野。退出时一切恢复原样（沙盒）。
 // 默认是非战斗：不限步数；打开"战斗模式"才是每回合 5 格。
@@ -154,7 +154,7 @@ export function startTrial() {
   else playingBefore = before;
   beginSandbox();
   cancelPendingPlay();
-  setUI({ trial: { mapId, players: [], current: 0, combat: false, moved: {}, turned: {}, turn: 1, msg: '', markSymbol: '!', markText: '', markMode: false }, selection: null, pendingConn: null });
+  setUI({ trial: { mapId, players: [], current: 0, ended: {}, combat: false, moved: {}, turned: {}, turn: 1, msg: '', markSymbol: '!', markText: '', markMode: false }, selection: null, pendingConn: null });
   const p = placePlayer(mapId);
   if (!p) return endTrial();
   setTr({ players: [p] });
@@ -183,9 +183,21 @@ export function switchTrialPlayer(i?: number) {
   const t = tr();
   if (!t || !t.players.length) return;
   const current = i ?? (t.current + 1) % t.players.length;
+  const changed = current !== t.current;
   setTr({ current, msg: '' });
-  refreshOpportunity(t.players[current].tokenId);
-  selectTrialViewer(t.players[current].pcId);
+  // 真正换人时才消耗眩晕；点同一个人不能无限刷掉跳过回合。
+  const pl = t.players[current];
+  const tok = findMap(getWorld(), t.mapId)?.tokens.find((k) => k.id === pl.tokenId);
+  if (changed && tok?.status?.skipTurns !== undefined) {
+    const left = Math.max(0, tok.status.skipTurns - 1);
+    update((d) => {
+      const k = findMap(d, t.mapId)?.tokens.find((x) => x.id === pl.tokenId);
+      if (k?.status) k.status.skipTurns = left;
+    });
+    setTr({ acted: { ...(t.acted ?? {}), [pl.tokenId]: true }, msg: `${pl.name} 眩晕，跳过这个回合` });
+  }
+  refreshOpportunity(pl.tokenId);
+  selectTrialViewer(pl.pcId);
 }
 
 export function endTrial() {
@@ -236,9 +248,10 @@ function trialMoveStep(dx: number, dy: number) {
   const actor: PhysicalEvent['actor'] = pl.pcId
     ? { kind: 'pc', id: pl.pcId, name: pl.name }
     : { kind: 'npc', id: tok.id, name: tok.name };
-  if (tok.status) {
-    if (tok.status.endsAt !== undefined && tok.status.endsAt <= Date.now()) clearTrialStatus(tok.id);
-    else return setTr({ msg: `${pl.name}${tok.status.label}中，暂时不能行动` });
+  if (turnEnded(t, tok.id)) return setTr({ msg: `${pl.name}这个回合已经结束了，等下一轮` });
+  if (statusBlocksAction(tok.status)) {
+    if (tok.status!.endsAt !== undefined && tok.status!.endsAt <= Date.now()) clearTrialStatus(tok.id);
+    else return setTr({ msg: `${pl.name}${tok.status!.label}中，暂时不能行动` });
   }
   // 尸体和昏厥是另外两个字段，不挡在 status 里——这里补一道，不然死了还能走。
   if (tok.corpse) return setTr({ msg: `${pl.name}已经死了` });
@@ -887,37 +900,112 @@ export function settleJump(req: JumpRequest, values: number[], opts: JumpSettleO
   }
   return '';
 }
-/** 空格（只在战斗中）：结束这一回合。重置每人的移动力；"暂时不能行动"的回合数减一，减到 0 就恢复。 */
-export function trialEndTurn() {
+/** 空格（只在战斗中）：结束当前角色的回合。所有玩家都结束过才结算一整轮的状态和伤害。 */
+export function trialEndTurn(roller: Roller = randomDie) {
   const t = tr();
-  if (!t?.combat) return;
-  // 濒死倒计时走完就是撕卡：卡标已死亡，棋子变尸体留在原地，不删掉。
+  if (!t?.combat || !t.players.length) return;
+  // 一整轮 = 所有玩家各结束一次。按「谁结束过」记，不按 current，
+  // 因为主持人可以手动切人；只有所有人都结束过才结算状态。
+  const ended: Record<string, boolean> = { ...(t.ended ?? {}) };
+  const curId = t.players[t.current]?.tokenId;
+  // 已经结束过的人再按空格：不重复结算，不清资源，也不重复消费眩晕。
+  if (curId && ended[curId]) return;
+  if (curId) ended[curId] = true;
+  // 尸体/昏厥的人现在不能操作，不要求主持人切过去按空格；但不写进 ended，
+  // 这样同轮被救起来的人还能拿到自己的行动。
+  const inactive = (tokenId: string) => {
+    const tok = findMap(getWorld(), t.mapId)?.tokens.find((k) => k.id === tokenId);
+    return !!tok && (!!tok.corpse || !!tok.down);
+  };
+  const endsRound = t.players.every((p) => ended[p.tokenId] || inactive(p.tokenId));
   const died: string[] = [];
-  update((d) => {
-    const m = findMap(d, t.mapId);
-    for (const k of m?.tokens ?? []) {
-      if (k.status?.roundsLeft === undefined) continue;
-      k.status.roundsLeft -= 1;
-      if (k.status.roundsLeft > 0) continue;
-      if (k.status.label === DYING_LABEL && k.pcId) {
-        const pc = d.party.find((x) => x.id === k.pcId);
-        if (pc) {
-          if (settleDeath(pc, { mapId: t.mapId, x: k.x, y: k.y })) died.push(k.name);
-          k.corpse = true;
+  if (endsRound) {
+    update((d) => {
+      const m = findMap(d, t.mapId);
+      for (const k of m?.tokens ?? []) {
+        const st = k.status;
+        if (!st || st.roundsLeft === undefined) continue;
+        // 眩晕的跳过次数按「自己的回合」算，不跟整轮倒计时一起减。
+        if (st.skipTurns !== undefined) continue;
+        if (st.label === DYING_LABEL) {
+          st.roundsLeft -= 1;
+          if (st.roundsLeft > 0) continue;
+          if (k.pcId) {
+            const pc = d.party.find((x) => x.id === k.pcId);
+            if (pc && settleDeath(pc, { mapId: t.mapId, x: k.x, y: k.y })) died.push(k.name);
+            k.corpse = true;
+          } else {
+            // NPC 没有角色卡可撕，但也不能 HP 0 还站着。
+            k.corpse = true;
+            d.log.push({ id: uid(), at: Date.now(), session: d.session, kind: 'note', text: `${k.name} 濒死到点，尸体留在原地。` });
+          }
+          delete k.status;
+          continue;
         }
+        // 流血 / 中毒：先结算一次伤害，再减一回合。
+        const amount = st.damageDie !== undefined
+          ? Math.max(0, Math.round(roller(st.damageDie)))
+          : st.perRound !== undefined ? Math.max(0, Math.round(st.perRound)) : 0;
+        if (amount > 0) {
+          if ((st.damageTarget ?? 'hp') === 'me') {
+            const pc = k.pcId ? d.party.find((x) => x.id === k.pcId) : undefined;
+            if (pc) {
+              const before = pc.me ?? 0;
+              pc.me = Math.max(0, before - amount);
+              d.log.push({ id: uid(), at: Date.now(), session: d.session, kind: 'note', text: `${k.name} ${st.label} ${amount} 点，ME ${before}→${pc.me}` });
+            }
+          } else {
+            const pc = k.pcId ? d.party.find((x) => x.id === k.pcId) : undefined;
+            if (pc) {
+              const pool = hpOf(pc);
+              const after = applyDamage(pool.hp, amount);
+              pc.hp = after;
+              pc.hpMax ??= pool.max;
+              d.log.push({ id: uid(), at: Date.now(), session: d.session, kind: 'note', text: `${k.name} ${st.label} ${amount} 点，HP ${pool.hp}→${after}` });
+              if (after <= 0) {
+                // 流血倒地按锐器伤口算：进濒死，不直接昏厥。
+                k.status = { label: DYING_LABEL, roundsLeft: DYING_ROUNDS };
+                d.log.push({ id: uid(), at: Date.now(), session: d.session, kind: 'note', text: `${k.name} 流血倒下，进入濒死。` });
+                continue;
+              }
+            } else if ((k.hpMax ?? 0) > 0) {
+              const before = k.hp ?? k.hpMax!;
+              const after = applyDamage(before, amount);
+              k.hp = after;
+              d.log.push({ id: uid(), at: Date.now(), session: d.session, kind: 'note', text: `${k.name} ${st.label} ${amount} 点，HP ${before}→${after}` });
+              if (after <= 0) {
+                k.status = { label: DYING_LABEL, roundsLeft: DYING_ROUNDS };
+                d.log.push({ id: uid(), at: Date.now(), session: d.session, kind: 'note', text: `${k.name} 流血倒下，进入濒死。` });
+                continue;
+              }
+            }
+          }
+        }
+        st.roundsLeft -= 1;
+        if (st.roundsLeft <= 0) delete k.status;
       }
-      delete k.status;
-    }
-  });
+    });
+  }
   for (const name of died) {
     update((d) => { d.log.push({ id: uid(), at: Date.now(), session: d.session, kind: 'note', text: `${name} 濒死三回合无人救治，撕卡。尸体留在原地。` }); });
   }
-  // 自己行动完（结束回合）后，借机攻击重新亮起：每个人新一轮都能再借机一次。
+  // 结束自己的回合时消费眩晕：如果这个回合是 switch 跳过的，skipTurns 已经在 switch 里减过；
+  // 单人/当前角色没有 switch，就在这里减。减到 0 就解除。
   update((d) => {
+    const cur = findMap(d, t.mapId)?.tokens.find((k) => k.id === curId);
+    if (cur?.status?.skipTurns === undefined) return;
+    const skipped = !!(curId && t.acted?.[curId]);
+    const left = skipped ? cur.status.skipTurns : cur.status.skipTurns - 1;
+    if (left <= 0) delete cur.status;
+    else cur.status.skipTurns = left;
+  });
+  // 借机攻击按整轮重置；自己结束回合不替别人清。
+  if (endsRound) update((d) => {
     for (const k of findMap(d, t.mapId)?.tokens ?? []) delete k.opportunityUsed;
   });
-  // 每回合推进一次蓄力：移动力超出基准 25 点的人每回合攒 1/3 格，超出 38 点攒 1/2 格。
+  // 蓄力只在整轮边界推进：不能每有一个人结束就给全队涨蓄力。
   const charge = (() => {
+    if (!endsRound) return t.charge ?? {};
     const w = getWorld();
     const m = findMap(w, t.mapId);
     if (!m) return t.charge ?? {};
@@ -929,22 +1017,38 @@ export function trialEndTurn() {
     }
     return next;
   })();
-  // 新回合把移动点数池重置成各角色的移动值（加上蓄好的额外格）。
+  // 移动点数：整轮结束全队重算；只结束一个人时只重置这个人，别替别人清。
   const movePoints = (() => {
     const w = getWorld();
     const m = findMap(w, t.mapId);
     if (!m) return t.movePoints ?? {};
-    const next: Record<string, number> = {};
-    for (const pl of t.players) {
+    const next: Record<string, number> = endsRound ? {} : { ...(t.movePoints ?? {}) };
+    const targets = endsRound ? t.players : t.players.filter((p) => p.tokenId === curId);
+    for (const pl of targets) {
       const pc = w.party.find((p) => p.id === pl.pcId);
       next[pl.tokenId] = movePool(pc ? moveBudgetOn(pc, m.layer) : null, charge[pl.tokenId]?.cells ?? 0);
     }
     return next;
   })();
+  // 账本只清当前这个人的；整轮结束才全队清空。
+  const acted = endsRound ? {} : { ...(t.acted ?? {}) };
+  const moved = endsRound ? {} : { ...(t.moved ?? {}) };
+  const turned = endsRound ? {} : { ...(t.turned ?? {}) };
+  const runMode = endsRound ? {} : { ...(t.runMode ?? {}) };
+  const runTurns = endsRound ? {} : { ...(t.runTurns ?? {}) };
+  const sharpAttack = endsRound ? {} : { ...(t.sharpAttack ?? {}) };
+  if (!endsRound && curId) {
+    delete moved[curId]; delete turned[curId];
+    delete runMode[curId]; delete runTurns[curId]; delete sharpAttack[curId];
+    // 这个人这一轮已经结束了：行动点显示为已用，移动点清零，等下一轮再满。
+    acted[curId] = true;
+    movePoints[curId] = 0;
+  }
   // 换回合要把这一回合的账本清干净：跑了什么、拐了几次都是「本回合」的。
   // 不清的话「奔跑只准拐一次」会变成整场只准拐一次，下一回合还会白送一个跑法。
   // 锐器只对「这一击」有效：勾了没打就结束回合，也回默认钝器，别把上一轮的勾带进下一轮。
-  setTr({ moved: {}, turned: {}, turn: t.turn + 1, acted: {}, runMode: {}, runTurns: {}, sharpAttack: {},
+  setTr({ moved, turned, ended: endsRound ? {} : ended,
+    turn: endsRound ? t.turn + 1 : t.turn, acted, runMode, runTurns, sharpAttack,
     opportunity: null, msg: '', charge, movePoints });
 }
 
@@ -954,6 +1058,8 @@ export function currentTokenId(t: Trial | null | undefined): string | null {
 }
 /** 这一回合的行动点用掉没有——按人记，不是全队一份。 */
 const actedOf = (t: Trial, tokenId: string | null): boolean => !!(tokenId && t.acted?.[tokenId]);
+/** 这个角色这一整轮已经结束过回合：不能再动，按空格也不重复结算。 */
+const turnEnded = (t: Trial, tokenId: string | null | undefined): boolean => !!(t.combat && tokenId && t.ended?.[tokenId]);
 /** 这个棋子这一回合选的跑法。 */
 export const runModeOf = (t: Trial | null | undefined, tokenId: string | null): RunMode | null =>
   (tokenId && t?.runMode?.[tokenId]) || null;
@@ -989,6 +1095,8 @@ function attackContext(targetTokenId: string, sharp: boolean) {
   // 尸体/昏厥是单独两个字段，不在 status 里——不拦的话死了还能打人。
   if (attacker.corpse) return `${attacker.name}已经死了`;
   if (attacker.down) return `${attacker.name}昏厥中，打不了`;
+  if (turnEnded(t, attacker.id)) return `${attacker.name}这个回合已经结束了，等下一轮`;
+  if (statusBlocksAction(attacker.status)) return `${attacker.name}${attacker.status!.label}中，暂时不能行动`;
   if (target.corpse) return `${target.name} 已经死了，不用再打`;
   if (target.status?.label === '濒死') return `${target.name} 已经濒死了`;
   const dist = Math.abs(attacker.x - target.x) + Math.abs(attacker.y - target.y);
@@ -1114,6 +1222,8 @@ function doorContext(objectId: string): DoorCtx | string {
   const tok = m.tokens.find((x) => x.id === pl.tokenId);
   const pc = w.party.find((p) => p.id === pl.pcId);
   if (!tok || !pc) return '找不到当前角色';
+  if (turnEnded(t, tok.id)) return `${pl.name}这个回合已经结束了，等下一轮`;
+  if (statusBlocksAction(tok.status)) return `${pl.name}${tok.status!.label}中，暂时不能行动`;
   const access = doorAccess(m, door, tok, pc, 'initial');
   if (access) return access;
   if (t.combat && actedOf(t, pl.tokenId)) return '这回合的行动点已经用掉了，按空格结束回合';
@@ -1907,21 +2017,41 @@ export function toggleCombat() {
     }
   });
   // 新开一场战斗，点池和蓄力要重算；以前这里留着上一场的 300/414，第一回合直接「点数用完」。
-  setTr({ combat: toCombat, moved: {}, turned: {}, acted: {}, runMode: {}, runTurns: {}, sharpAttack: {},
+  setTr({ combat: toCombat, ended: {}, moved: {}, turned: {}, acted: {}, runMode: {}, runTurns: {}, sharpAttack: {},
     movePoints: {}, charge: {}, turn: 1, msg: '' });
 }
 
 /** 让当前角色暂时不能行动（晕厥、泡温泉……），时长按分钟给；战斗中自动换算成回合。 */
-export function setTrialStatus(label: string, minutes: number) {
+export interface TrialStatusOptions {
+  /** 战斗回合边界每回合掷一颗多少面的伤害骰。 */
+  damageDie?: number;
+  /** 固定每回合伤害；有 damageDie 时优先掷骰。 */
+  perRound?: number;
+  /** 伤害扣 HP 还是 ME，默认 HP。 */
+  damageTarget?: 'hp' | 'me';
+  /** 眩晕：跳过几个自己的回合。 */
+  skipTurns?: number;
+  /** 这个状态是否挡住行动；不填按标签判断。 */
+  blocksAction?: boolean;
+}
+/** 自定义输入“眩晕/流血/中毒”时也带默认机制，别只挂一个空标签。 */
+function defaultStatusOptions(label: string): TrialStatusOptions {
+  if (label === '流血') return { damageDie: 6, damageTarget: 'hp', blocksAction: false };
+  if (label === '中毒') return { damageDie: 6, damageTarget: 'hp', blocksAction: false };
+  if (label === '眩晕') return { skipTurns: 1, blocksAction: true };
+  return {};
+}
+export function setTrialStatus(label: string, minutes: number, opts: TrialStatusOptions = {}) {
   const t = tr();
   const pl = t?.players[t.current];
   if (!t || !pl) return;
+  const preset = defaultStatusOptions(label);
   update((d) => {
     const k = findMap(d, t.mapId)?.tokens.find((x) => x.id === pl.tokenId);
     if (!k) return;
     k.status = t.combat
-      ? { label, roundsLeft: Math.max(1, Math.ceil(minutes / ROUND_MINUTES)) }
-      : { label, endsAt: Date.now() + minutes * 60000 };
+      ? { label, roundsLeft: Math.max(1, Math.ceil(minutes / ROUND_MINUTES)), ...preset, ...opts }
+      : { label, endsAt: Date.now() + minutes * 60000, ...preset, ...opts };
   });
 }
 
@@ -1931,7 +2061,8 @@ export function clearTrialStatus(tokenId: string) {
 }
 
 /** 这个状态还剩多久：分秒、回合或持续至手动解除；已经结束返回 null。 */
-export function statusLeft(st: { endsAt?: number; roundsLeft?: number }) {
+export function statusLeft(st: { endsAt?: number; roundsLeft?: number; skipTurns?: number }) {
+  if (st.skipTurns !== undefined) return st.skipTurns > 0 ? `还将跳过 ${st.skipTurns} 个自己的回合` : '这个回合跳过';
   if (st.roundsLeft !== undefined) return st.roundsLeft > 0 ? `还剩 ${st.roundsLeft} 回合` : null;
   if (st.endsAt === undefined) return '持续至手动解除';
   const ms = st.endsAt - Date.now();
@@ -2000,7 +2131,7 @@ export function trialOpportunityAttack(): string | null {
     const dm = findMap(d, t.mapId)!;
     for (const enemyId of o.enemies) {
       const e = dm.tokens.find((k) => k.id === enemyId);
-      if (!e || e.opportunityUsed) continue;
+      if (!e || e.opportunityUsed || statusBlocksAction(e.status)) continue;
       e.opportunityUsed = true;
       // 借机攻击走攻击口径（作者已定）：000 特大成功 / 1–5 落空 / 95–99 大成功 / 其余命中。
       // 不是「纯幸运骰 51+」——那条是 resolveLuck 的口径，借机攻击不用它。
@@ -2052,6 +2183,8 @@ export function trialRescue(targetTokenId: string, opts: { roll?: number } = {})
   const rescuer = m?.tokens.find((x) => x.id === pl.tokenId);
   const target = m?.tokens.find((x) => x.id === targetTokenId);
   if (!m || !rescuer || !target) return '找不到角色或目标';
+  if (turnEnded(t, rescuer.id)) return `${rescuer.name}这个回合已经结束了，等下一轮`;
+  if (statusBlocksAction(rescuer.status)) return `${rescuer.name}${rescuer.status!.label}中，暂时不能行动`;
   const dist = Math.abs(rescuer.x - target.x) + Math.abs(rescuer.y - target.y);
   if (dist > ENGAGE_RANGE) return `救治要贴身（${dist} 格 > ${ENGAGE_RANGE}）`;
   if (target.corpse) return `${target.name} 已经死了，救不回来`; // 尸体不能治
@@ -2160,6 +2293,8 @@ export function trialSense(kind: SenseKind, opts: { targetObjectId?: string | nu
   const tok = m?.tokens.find((x) => x.id === pl.tokenId);
   if (!m || !tok) return '找不到你的棋子';
   if (tok.corpse) return '你已经死了';
+  if (turnEnded(t, tok.id)) return `${tok.name}这个回合已经结束了，等下一轮`;
+  if (statusBlocksAction(tok.status)) return `${tok.name}${tok.status!.label}中，暂时不能行动`;
   const pc = w.party.find((p) => p.id === pl.pcId);
   if (!pc) return '找不到角色卡';
 
@@ -2200,13 +2335,17 @@ export function trialRun(mode: RunMode | null): string | null {
   const t = tr();
   const pl = t?.players[t.current];
   if (!t || !pl) return '没有正在试玩的角色';
-  const w = getWorld();
-  const pc = w.party.find((p) => p.id === pl.pcId);
-  if (!pc) return '找不到角色卡';
+  // 取消跑法是无害操作：被状态挡住时也应该能清掉。
   if (mode === null) {
     setTr({ runMode: { ...(t.runMode ?? {}), [pl.tokenId]: null }, runTurns: { ...(t.runTurns ?? {}), [pl.tokenId]: 0 }, msg: '' });
     return null;
   }
+  const w = getWorld();
+  const pc = w.party.find((p) => p.id === pl.pcId);
+  if (!pc) return '找不到角色卡';
+  const tok = findMap(w, t.mapId)?.tokens.find((x) => x.id === pl.tokenId);
+  if (turnEnded(t, tok?.id)) return `${tok?.name ?? pl.name}这个回合已经结束了，等下一轮`;
+  if (statusBlocksAction(tok?.status)) return `${tok?.name ?? pl.name}${tok?.status?.label ?? '状态'}中，暂时不能行动`;
 
   const spec = RUN_MODES[mode];
   // 作者口径：扣 ME 换跑法只能在本回合还没挪步的时候做，一旦动了这回合就只能走路。
@@ -2243,7 +2382,8 @@ export function trialStance(stance: Stance | null): string | null {
   const tok = findMap(w, t.mapId)?.tokens.find((x) => x.id === pl.tokenId);
   if (!tok) return '找不到你的棋子';
   if (tok.corpse) return '你已经死了';
-  if (tok.status?.label === '昏厥') return `${pl.name}昏厥中，动不了`;
+  if (turnEnded(t, tok.id)) return `${pl.name}这个回合已经结束了，等下一轮`;
+  if (statusBlocksAction(tok.status)) return `${pl.name}${tok.status!.label}中，暂时不能行动`;
 
   const mMap = findMap(w, t.mapId)!;
   const mover = w.party.find((p) => p.id === pl.pcId);

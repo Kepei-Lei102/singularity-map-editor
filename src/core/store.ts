@@ -276,6 +276,8 @@ export interface UIState {
     /** paused：见证者暂停了这个玩家的操作（防止一个人把全场的骰子都掷了）。 */
     players: { tokenId: string; pcId: string; name: string; paused?: boolean }[];
     current: number;
+    /** 这一整轮已经结束过回合的棋子；所有人都结束过才结算状态、进下一轮。 */
+    ended?: Record<string, boolean>;
     combat: boolean; // 战斗模式：每回合 5 格；不开就是不限步数
     /** 每回合已经用掉的移动点数（按细分格记的老口径，保留给界面显示）。 */
     moved: Record<string, number>;

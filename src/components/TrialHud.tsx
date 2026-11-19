@@ -27,10 +27,17 @@ import {
   type CodeConsequence,
   toggleCombat, toggleMarkMode, trialAttack, trialAttackTargets, trialRescue, trialOpportunityAttack, trialSkipOpportunity,
   runModeOf, sharpOf,
+  type TrialStatusOptions,
 } from '../runtime/trial';
 
 const SYMBOLS = ['!', '?', '★', '✕', '→'];
 const STATUS_PRESETS: [string, number][] = [['晕厥', 15], ['泡温泉', 30]];
+// 战斗状态默认 1 回合（5 分钟）；流血/中毒每回合各掷 1D6，眩晕跳过下个自己的回合。
+const COMBAT_STATUS_PRESETS: [string, number, TrialStatusOptions][] = [
+  ['流血', 5, { damageDie: 6, damageTarget: 'hp', blocksAction: false }],
+  ['中毒', 5, { damageDie: 6, damageTarget: 'hp', blocksAction: false }],
+  ['眩晕', 5, { skipTurns: 1, blocksAction: true }],
+];
 
 /** 电子锁：主持人侧的一张密码尝试卡。有玩家窗口时等窗口输入；没有时主持人在卡片上代输。 */
 function CodeAttemptCard() {
@@ -157,6 +164,9 @@ export function TrialHud() {
         <span className="muted">{cur?.name}暂时不能行动</span>
         {STATUS_PRESETS.map(([l, mn]) => (
           <button key={l} className="small" onClick={() => setTrialStatus(l, mn)}>{l} {mn} 分钟</button>
+        ))}
+        {t.combat && COMBAT_STATUS_PRESETS.map(([l, mn, opt]) => (
+          <button key={l} className="small" onClick={() => setTrialStatus(l, mn, opt)}>{l} 1 回合</button>
         ))}
         <input className="mark-text" value={stLabel} placeholder="自己写" onChange={(e) => setStLabel(e.target.value)} />
         <input type="number" className="num-small" value={stMin} min={1} onChange={(e) => setStMin(Math.max(1, +e.target.value || 1))} />

@@ -177,6 +177,16 @@ export interface TokenStatus {
   label: string;
   endsAt?: number; // 自由行动：真实时间（毫秒）
   roundsLeft?: number; // 战斗中：还剩几回合
+  /** 战斗回合边界：每回合掷一颗伤害骰，骰面是 damageDie。 */
+  damageDie?: number;
+  /** 不想掷骰时直接扣的固定值；有 damageDie 时优先掷骰。 */
+  perRound?: number;
+  /** 每回合伤害扣 HP 还是 ME，默认 HP。 */
+  damageTarget?: 'hp' | 'me';
+  /** 眩晕：还要跳过几个自己的回合；有该字段时不再按整轮倒计时。 */
+  skipTurns?: number;
+  /** 这个状态是否挡住行动。不填时按标签判断：流血/中毒不挡，其余挡。 */
+  blocksAction?: boolean;
 }
 
 export interface Point { x: number; y: number }
