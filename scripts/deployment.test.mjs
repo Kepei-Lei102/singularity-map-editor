@@ -254,7 +254,18 @@ test('asset 账本随连接换代：reset/换工程清空，register 换新账�
   assert.match(mediaPanel, /ASSET_STATS_UI_MS = 150/);
   assert.match(mediaPanel, /const transfer = useThrottledAssetTransferStats\(\)/);
   assert.match(mediaPanel, /DockTransferLine transfer=\{transfer\}/);
-  assert.match(mediaPanel, /setStats\(snapshot\(\)\); \}, delayMs/);
+  assert.match(mediaPanel, /np\.broadcast && transfer\.players > 0 && <DockTransferLine/);
+  assert.match(mediaPanel, /setStats\(latest\.current\.snapshot\(\)\); \}, delayMs/);
+  assert.match(mediaPanel, /latest\.current\.subscribe\(/);
+  assert.match(mediaPanel, /\}, \[delayMs\]\);/);
+  assert.match(sync, /function stopAssetRateTickIfIdle\(\): void \{[\s\S]{0,160}clearTimeout\(assetRateTimer\)/);
+  assert.match(sync, /function endAssetFlow[\s\S]{0,320}stopAssetRateTickIfIdle\(\)/);
+  assert.match(sync, /if \(assetFlows\.size \|\| assetRateTimer === undefined\) return;/);
+  assert.equal((sync.match(/stopAssetRateTickIfIdle\(\)/g) ?? []).length, 6, 'end/reset/换工程/drop/register 都要清空闲 ticker');
+  assert.match(sync, /export function resetPlayerBindings\(\): void \{[\s\S]{0,600}stopAssetRateTickIfIdle\(\)/);
+  assert.match(sync, /assetFlows\.clear\(\); clearAssetRequestQueues\(\); stopAssetRateTickIfIdle\(\)/);
+  assert.match(sync, /function dropPlayerAssets\(binding: string\): void \{[\s\S]{0,400}stopAssetRateTickIfIdle\(\)/);
+  assert.match(sync, /export function registerOnlinePlayer[\s\S]{0,600}stopAssetRateTickIfIdle\(\)/);
   assert.match(mediaPanel, /if \(timer !== undefined\) window\.clearTimeout\(timer\)/);
   assert.match(mediaPanel, /近 2 秒/);
   // 试玩里只拦 play；stop 必须放行，否则 quiet 延迟的 stop 会卡在 trial 守卫里。

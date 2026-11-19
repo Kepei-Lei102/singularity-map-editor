@@ -1,4 +1,4 @@
-import { useEffect, useState, useSyncExternalStore } from 'react';
+import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { cleanupMedia, deleteMedia, offerDeleteOrphanBlob, stopMedia, playMedia } from '../runtime/actions';
 import { assetTransferStats, isOnlineTransport, subscribeAssetTransferStats, subscribeTransportKind, type AssetTransferStats } from '../runtime/sync';
 import { storeBlobStatus, useBlobUrl } from '../runtime/media';
@@ -89,15 +89,19 @@ export function useThrottledAssetTransferStats(
   snapshot: () => AssetTransferStats = assetTransferStats,
   delayMs = ASSET_STATS_UI_MS,
 ): AssetTransferStats {
+  // subscribe/snapshot 只用来注入测试替身；生产里是模块级稳定函数，所以 effect 只跟 delayMs 重订。
+  // 最新函数放 ref，在 commit 后更新，避免 render 里写 ref 被并发渲染的废弃分支污染。
+  const latest = useRef({ subscribe, snapshot });
+  useEffect(() => { latest.current = { subscribe, snapshot }; });
   const [stats, setStats] = useState<AssetTransferStats>(() => snapshot());
   useEffect(() => {
     let timer: number | undefined;
-    const off = subscribe(() => {
+    const off = latest.current.subscribe(() => {
       if (timer !== undefined) return;
-      timer = window.setTimeout(() => { timer = undefined; setStats(snapshot()); }, delayMs);
+      timer = window.setTimeout(() => { timer = undefined; setStats(latest.current.snapshot()); }, delayMs);
     });
     return () => { off(); if (timer !== undefined) window.clearTimeout(timer); };
-  }, [subscribe, snapshot, delayMs]);
+  }, [delayMs]);
   return stats;
 }
 

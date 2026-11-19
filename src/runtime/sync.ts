@@ -113,11 +113,17 @@ function cancelAssetFlow(binding: string, requestId: string, key?: string): void
   refreshAssetTransferStats();
 }
 
+function stopAssetRateTickIfIdle(): void {
+  if (assetFlows.size || assetRateTimer === undefined) return;
+  clearTimeout(assetRateTimer);
+  assetRateTimer = undefined;
+}
 function endAssetFlow(binding: string, requestId: string): void {
   const flows = assetFlows.get(binding);
   if (!flows) return;
   flows.delete(requestId);
   if (!flows.size) assetFlows.delete(binding);
+  stopAssetRateTickIfIdle();
   refreshAssetTransferStats();
 }
 function noteFlowSample(flow: AssetFlow): void {
@@ -275,6 +281,7 @@ export function resetPlayerBindings(): void {
   assetRequestLog.clear();
   assetFlows.clear();
   clearAssetRequestQueues();
+  stopAssetRateTickIfIdle();
   refreshAssetTransferStats();
   saveBindings();
 }
@@ -289,6 +296,7 @@ export function registerOnlinePlayer(binding: string, pcId: string): void {
   assetSessions.set(binding, AssetSession.fresh());
   assetRequestLog.delete(binding);
   assetFlows.delete(binding);
+  stopAssetRateTickIfIdle();
   refreshAssetTransferStats();
   saveBindings();
 }
@@ -615,7 +623,7 @@ onProjectReplaced(() => {
     transport.sendToPeer(binding, { type: 'clear', __ts: 'ts-map', seq: rand(), from: SESSION, inst: INST, born: BORN });
     transport.dropPeer(binding);
   }
-  players.clear(); assetBindingNames.clear(); saveBindings(); broadcastAsset = null; assetAllow.clear(); assetSessions.clear(); assetRequestLog.clear(); assetFlows.clear(); clearAssetRequestQueues(); refreshAssetTransferStats();
+  players.clear(); assetBindingNames.clear(); saveBindings(); broadcastAsset = null; assetAllow.clear(); assetSessions.clear(); assetRequestLog.clear(); assetFlows.clear(); clearAssetRequestQueues(); stopAssetRateTickIfIdle(); refreshAssetTransferStats();
 });
 
 let quietUntil = 0; // 编辑器刚启动、还在确认会话标识没撞车时，先不往外推
@@ -722,7 +730,7 @@ function refreshPlayerAssets(): void {
     setPlayerAssets(binding, playerWorld(w, w.playerMapId, p.pcId), true);
   }
 }
-function dropPlayerAssets(binding: string): void { clearAssetRequestQueues(binding); assetAllow.delete(binding); assetSessions.delete(binding); assetRequestLog.delete(binding); assetFlows.delete(binding); assetBindingNames.delete(binding); refreshAssetTransferStats(); }
+function dropPlayerAssets(binding: string): void { clearAssetRequestQueues(binding); assetAllow.delete(binding); assetSessions.delete(binding); assetRequestLog.delete(binding); assetFlows.delete(binding); assetBindingNames.delete(binding); stopAssetRateTickIfIdle(); refreshAssetTransferStats(); }
 
 function assetMsg(binding: string, body: AssetBody): boolean {
   return transport.sendToPeer(binding, { ...body, __ts: 'ts-map', seq: rand(), from: SESSION, inst: INST, born: BORN });

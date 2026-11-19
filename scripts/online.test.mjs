@@ -439,6 +439,63 @@ test('watchdog 收掉 active 后队列继续；reset 清掉排队请求', async 
   assert.equal(tickerStats.length, tickerEnd, 'flow 结束后 ticker 不再通知');
   offTicker();
 
+  // 快 flow 结束前 ticker 已排上，endAssetFlow 要把它清掉，不能留一个空转 timer。
+  const quickSet = globalThis.setTimeout;
+  const quickClear = globalThis.clearTimeout;
+  const tickIds = new Set();
+  const cleared = new Set();
+  let fakeTickId = 0;
+  // 500ms ticker 不真跑：假 handle 一定还在 pending，flow 结束时必须被 clearTimeout 清掉。
+  globalThis.setTimeout = (fn, ms, ...args) => {
+    if (ms === 500) { const id = ++fakeTickId; tickIds.add(id); return id; }
+    return quickSet(fn, ms, ...args);
+  };
+  globalThis.clearTimeout = (id) => { if (tickIds.has(id)) cleared.add(id); return quickClear(id); };
+  try {
+    const clearBefore = playerSeen.length;
+    player.send({ type: 'asset-request', requestId: 'r-ticker-clear', keys: ['k1'] });
+    await waitFor(() => host.assetTransferStats().requests === 0 && playerSeen.slice(clearBefore).some((m) => m.type === 'asset-end' && m.requestId === 'r-ticker-clear'), 6000);
+    assert.ok([...tickIds].some((id) => cleared.has(id)), 'flow 结束时清掉空闲 ticker');
+  } finally {
+    globalThis.setTimeout = quickSet;
+    globalThis.clearTimeout = quickClear;
+  }
+
+  // 一个 binding 有两条 flow 时，结束其中一条不能把 ticker 清掉；最后一条结束才清。
+  const manySet = globalThis.setTimeout;
+  const manyClear = globalThis.clearTimeout;
+  const manyTicks = new Set();
+  const manyCleared = new Set();
+  let manyId = 0;
+  globalThis.setTimeout = (fn, ms, ...args) => { if (ms === 500) { const id = ++manyId; manyTicks.add(id); return id; } return manySet(fn, ms, ...args); };
+  globalThis.clearTimeout = (id) => { if (manyTicks.has(id)) manyCleared.add(id); return manyClear(id); };
+  const realArrayBuffer2 = Blob.prototype.arrayBuffer;
+  const pending2 = [];
+  let sliced2 = 0;
+  Blob.prototype.arrayBuffer = function () {
+    sliced2++;
+    if (sliced2 === 1) return realArrayBuffer2.call(this);
+    return new Promise((resolve, reject) => { pending2.push(() => realArrayBuffer2.call(this).then(resolve, reject)); });
+  };
+  try {
+    player.send({ type: 'asset-request', requestId: 'r-many-a', keys: ['k1'] });
+    await waitFor(() => host.assetTransferStats().requests === 1);
+    player.send({ type: 'asset-request', requestId: 'r-many-b', keys: ['k1'] });
+    await waitFor(() => host.assetTransferStats().requests === 2);
+    player.send({ type: 'asset-cancel', requestId: 'r-many-b' });
+    await waitFor(() => host.assetTransferStats().requests === 1);
+    assert.equal(manyCleared.size, 0, '还有 flow 时不能清 ticker');
+    Blob.prototype.arrayBuffer = realArrayBuffer2;
+    for (const release of pending2) release();
+    await waitFor(() => host.assetTransferStats().requests === 0, 6000);
+    assert.ok([...manyTicks].some((id) => manyCleared.has(id)), '最后一条 flow 结束才清 ticker');
+  } finally {
+    Blob.prototype.arrayBuffer = realArrayBuffer2;
+    for (const release of pending2) release();
+    globalThis.setTimeout = manySet;
+    globalThis.clearTimeout = manyClear;
+  }
+
   // 两条 load 卡住的 active 被 watchdog 收掉；第三条排队，旧 serve 释放后要继续。
   const abortTimer = globalThis.setTimeout;
   const abortBefore = playerSeen.length;
@@ -462,16 +519,144 @@ test('watchdog 收掉 active 后队列继续；reset 清掉排队请求', async 
 
   // reset 同时清 active 账本和排队请求：不能留下一条会在后面启动的请求。
   const resetBefore = playerSeen.length;
-  player.send({ type: 'asset-request', requestId: 'r-reset1', keys: ['k1'] });
-  player.send({ type: 'asset-request', requestId: 'r-reset2', keys: ['k1'] });
-  player.send({ type: 'asset-request', requestId: 'r-reset-queued', keys: ['k1'] });
-  await waitFor(() => host.assetTransferStats().requests === 2);
-  host.resetPlayerBindings();
-  await waitFor(() => host.assetTransferStats().players === 0);
+  const resetSet = globalThis.setTimeout;
+  const resetClear = globalThis.clearTimeout;
+  const resetTicks = new Set();
+  const resetCleared = new Set();
+  let resetId = 0;
+  globalThis.setTimeout = (fn, ms, ...args) => { if (ms === 500) { const id = ++resetId; resetTicks.add(id); return id; } return resetSet(fn, ms, ...args); };
+  globalThis.clearTimeout = (id) => { if (resetTicks.has(id)) resetCleared.add(id); return resetClear(id); };
+  globalThis.__holdIDB('k1');
+  try {
+    player.send({ type: 'asset-request', requestId: 'r-reset1', keys: ['k1'] });
+    player.send({ type: 'asset-request', requestId: 'r-reset2', keys: ['k1'] });
+    player.send({ type: 'asset-request', requestId: 'r-reset-queued', keys: ['k1'] });
+    await waitFor(() => host.assetTransferStats().requests === 2);
+    host.resetPlayerBindings();
+    await waitFor(() => host.assetTransferStats().players === 0);
+    assert.ok([...resetTicks].some((id) => resetCleared.has(id)), 'reset 要清掉空闲 ticker');
+  } finally {
+    globalThis.__releaseIDB('k1');
+    globalThis.setTimeout = resetSet;
+    globalThis.clearTimeout = resetClear;
+  }
   await new Promise((r) => setTimeout(r, 120));
   assert.equal(host.assetTransferStats().requests, 0);
   assert.equal(playerSeen.slice(resetBefore).some((m) => m.requestId === 'r-reset-queued'), false);
 
   await host.closeOnlineHostRoom();
   assert.ok(created.roomId);
+});
+
+test('换工程时清掉空闲 ticker', async () => {
+  const server = await startServer({ port: 0, host: '127.0.0.1', playerOrigin: 'http://localhost:5179', allowNoOrigin: true });
+  servers.push(server);
+  const url = `ws://127.0.0.1:${server.port}`;
+  const host = await load('host4.cjs', 'host', '');
+  const w = host.emptyWorld();
+  w.party = [{ id: 'pc', name: '甲', tags: [], color: '#fff' }];
+  host.replaceWorld(w);
+  w.maps[0].spawn = { x: 1, y: 1 };
+  host.setUI({ mapId: w.maps[0].id });
+  host.update((d) => { d.media.push({ id: 'm1', name: '图', mime: 'image/png', size: 1_048_576, key: 'k1' }); });
+  await host.putRaw('k1', new Blob([new Uint8Array(1_048_576).fill(9)], { type: 'image/png' }));
+  globalThis.window.open = () => ({ closed: false, messages: [], postMessage() {} });
+  host.openPlayerWindow('pc');
+  await host.createOnlineHostRoom(url);
+  const joinUrl = await host.inviteOnlinePlayer('pc');
+  const u = new URL(joinUrl);
+  const player = await load('player4.cjs', 'player', u.search);
+  const joined = await player.joinOnlinePlayer(u.searchParams.get('room'), u.searchParams.get('invite'), url);
+  await waitFor(() => host.pcIdForBinding(joined.binding) === 'pc');
+  host.listenAsEditor(() => host.send({ type: 'world', world: host.getWorld() }));
+  const playerSeen = [];
+  player.listenAsPlayer((m) => playerSeen.push(m), { online: true, binding: joined.binding });
+  await waitFor(() => playerSeen.some((m) => m.type === 'world' && m.world.viewerId === 'pc'));
+  const playBefore = playerSeen.length;
+  host.playMedia('m1', '图', true);
+  await waitFor(() => playerSeen.slice(playBefore).some((m) => m.type === 'play'));
+
+  const realSet = globalThis.setTimeout;
+  const realClear = globalThis.clearTimeout;
+  const tickIds = new Set();
+  const cleared = new Set();
+  let id = 0;
+  globalThis.setTimeout = (fn, ms, ...args) => { if (ms === 500) { const next = ++id; tickIds.add(next); return next; } return realSet(fn, ms, ...args); };
+  globalThis.clearTimeout = (handle) => { if (tickIds.has(handle)) cleared.add(handle); return realClear(handle); };
+  globalThis.__holdIDB('k1');
+  try {
+    player.send({ type: 'asset-request', requestId: 'r-project', keys: ['k1'] });
+    await waitFor(() => host.assetTransferStats().requests === 1);
+    host.replaceWorld(host.getWorld());
+    await waitFor(() => host.assetTransferStats().players === 0);
+    assert.ok([...tickIds].some((handle) => cleared.has(handle)), '换工程要清掉空闲 ticker');
+  } finally {
+    globalThis.__releaseIDB('k1');
+    globalThis.setTimeout = realSet;
+    globalThis.clearTimeout = realClear;
+  }
+  await host.closeOnlineHostRoom();
+});
+
+test('重新登记和断线时清掉空闲 ticker', async () => {
+  const server = await startServer({ port: 0, host: '127.0.0.1', playerOrigin: 'http://localhost:5179', allowNoOrigin: true });
+  servers.push(server);
+  const url = `ws://127.0.0.1:${server.port}`;
+  const host = await load('host5.cjs', 'host', '');
+  const w = host.emptyWorld();
+  w.party = [{ id: 'pc', name: '甲', tags: [], color: '#fff' }];
+  host.replaceWorld(w);
+  w.maps[0].spawn = { x: 1, y: 1 };
+  host.setUI({ mapId: w.maps[0].id });
+  host.update((d) => { d.media.push({ id: 'm1', name: '图', mime: 'image/png', size: 1_048_576, key: 'k1' }); });
+  await host.putRaw('k1', new Blob([new Uint8Array(1_048_576).fill(9)], { type: 'image/png' }));
+  globalThis.window.open = () => ({ closed: false, messages: [], postMessage() {} });
+  host.openPlayerWindow('pc');
+  await host.createOnlineHostRoom(url);
+  const joinUrl = await host.inviteOnlinePlayer('pc');
+  const u = new URL(joinUrl);
+  const player = await load('player5.cjs', 'player', u.search);
+  const joined = await player.joinOnlinePlayer(u.searchParams.get('room'), u.searchParams.get('invite'), url);
+  await waitFor(() => host.pcIdForBinding(joined.binding) === 'pc');
+  host.listenAsEditor(() => host.send({ type: 'world', world: host.getWorld() }));
+  const playerSeen = [];
+  player.listenAsPlayer((m) => playerSeen.push(m), { online: true, binding: joined.binding });
+  await waitFor(() => playerSeen.some((m) => m.type === 'world' && m.world.viewerId === 'pc'));
+  const playBefore = playerSeen.length;
+  host.playMedia('m1', '图', true);
+  await waitFor(() => playerSeen.slice(playBefore).some((m) => m.type === 'play'));
+
+  const realSet = globalThis.setTimeout;
+  const realClear = globalThis.clearTimeout;
+  const tickIds = new Set();
+  const cleared = new Set();
+  let id = 0;
+  globalThis.setTimeout = (fn, ms, ...args) => { if (ms === 500) { const next = ++id; tickIds.add(next); return next; } return realSet(fn, ms, ...args); };
+  globalThis.clearTimeout = (handle) => { if (tickIds.has(handle)) cleared.add(handle); return realClear(handle); };
+  globalThis.__holdIDB('k1');
+  try {
+    player.send({ type: 'asset-request', requestId: 'r-reg', keys: ['k1'] });
+    await waitFor(() => host.assetTransferStats().requests === 1);
+    host.registerOnlinePlayer(joined.binding, 'pc');
+    await waitFor(() => host.assetTransferStats().requests === 0);
+    assert.ok([...tickIds].some((handle) => cleared.has(handle)), '重新登记要清掉空闲 ticker');
+    const phase1Cleared = cleared.size;
+
+    globalThis.__releaseIDB('k1');
+    await new Promise((r) => setTimeout(r, 50));
+    const playAgain = playerSeen.length;
+    host.playMedia('m1', '图', true);
+    await waitFor(() => playerSeen.slice(playAgain).some((m) => m.type === 'play'));
+    globalThis.__holdIDB('k1');
+    player.send({ type: 'asset-request', requestId: 'r-drop', keys: ['k1'] });
+    await waitFor(() => host.assetTransferStats().requests === 1);
+    host.unregisterOnlinePlayer(joined.binding);
+    await waitFor(() => host.assetTransferStats().players === 0);
+    assert.ok(cleared.size > phase1Cleared, '断线要清掉空闲 ticker');
+  } finally {
+    globalThis.__releaseIDB('k1');
+    globalThis.setTimeout = realSet;
+    globalThis.clearTimeout = realClear;
+  }
+  await host.closeOnlineHostRoom();
 });
