@@ -42,6 +42,12 @@ function mkWorld(mode = 'shared', size = [24, 16]) {
     { id: 'b', name: '乙', sex: '女', heightCm: 164, color: '' },
     { id: 'c', name: '丙', sex: '其他', heightCm: 170, color: '' },
   ];
+  if (mode === 'grouped') {
+    w.visionGroups = [{ id: 'g1', name: '甲组' }, { id: 'g2', name: '乙组' }];
+    w.party[0].visionGroupId = 'g1';
+    w.party[1].visionGroupId = 'g1';
+    w.party[2].visionGroupId = 'g2';
+  }
   const m = w.maps[0];
   m.tokens = [
     { id: 't1', pcId: 'a', name: '甲', color: '', x: 5, y: 5 },
@@ -87,7 +93,7 @@ test('diffWorld：转身/蹲下也算脏（原地），不能漏', () => {
 
 test('diffWorld：棋子换 pcId 也算脏，视野不能漏', () => {
   for (const mode of ['shared', 'individual', 'grouped']) {
-    for (const [label, pcId] of [['换人', 'b'], ['换成人 null', null]]) {
+    for (const [label, pcId] of [['换人同组', 'b'], ['换人跨组', 'c'], ['换成人 null', null]]) {
       const prev = withVision(mkWorld(mode), emptyWorldFallback(mode), { full: true });
       const next = produce(prev, (d) => { d.maps[0].tokens[0].pcId = pcId; });
       const dirty = diffWorld(prev, next);
@@ -99,6 +105,22 @@ test('diffWorld：棋子换 pcId 也算脏，视野不能漏', () => {
         sameFog(inc.maps[0].views[id].fog, full.maps[0].views[id].fog, `${mode}/${label}：${id}`);
       }
     }
+  }
+});
+
+test('换 pcId 后下一步移动仍只算两个圆盘', () => {
+  const prev = withVision(mkWorld('grouped'), emptyWorldFallback('grouped'), { full: true });
+  const changed = produce(prev, (d) => { d.maps[0].tokens[0].pcId = 'c'; });
+  const after = withVision(changed, prev);
+  const moved = produce(after, (d) => { d.maps[0].tokens[0].x += 1; });
+  const dirty = diffWorld(after, moved);
+  assert.equal(dirty[0].structure, false, '换完人再走一步不该退回整图');
+  assert.equal(planVision(moved, dirty).full, false, '换完人再走一步仍应只收窄圆盘');
+  const inc = withVision(moved, after);
+  const full = withVision(moved, after, { full: true });
+  sameFog(inc.maps[0].fog, full.maps[0].fog, '换 pcId 后移动：map');
+  for (const id of Object.keys(full.maps[0].views)) {
+    sameFog(inc.maps[0].views[id].fog, full.maps[0].views[id].fog, `换 pcId 后移动：${id}`);
   }
 });
 
