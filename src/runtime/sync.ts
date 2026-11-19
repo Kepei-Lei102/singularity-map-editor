@@ -725,7 +725,7 @@ export function onJudgeRoll(m: Extract<SyncMsg, { type: 'judge-roll' }>, ref: Pe
   if (m.from !== SESSION) return;
   if (!Number.isInteger(m.sides) || m.sides !== p.sides) return;
   if (!Number.isInteger(m.value) || m.value < 1 || m.value > m.sides) return;
-  const maxValues = p.check?.attrs.length ?? 2;
+  const maxValues = p.check?.attrs.length ?? (p.attack ? 1 : 2);
   if (m.values !== undefined) {
     if (!Array.isArray(m.values) || m.values.length > maxValues) return;
     if (m.values.some((v) => !Number.isInteger(v) || v < 1 || v > m.sides)) return;
@@ -733,8 +733,13 @@ export function onJudgeRoll(m: Extract<SyncMsg, { type: 'judge-roll' }>, ref: Pe
   }
   // 多属性判定必须把每个属性那颗都送齐；缺一颗别让它进结果、到结算才报错。
   if (p.check && (!m.values || m.values.length !== p.check.attrs.length)) return;
-  if (m.tens !== null && !(Number.isInteger(m.tens) && m.tens >= 0 && m.tens <= 90 && m.tens % 10 === 0)) return;
-  if (m.units !== null && !(Number.isInteger(m.units) && m.units >= 0 && m.units <= 9)) return;
+  // 百分骰的 tens/units 必须和采信值一致；D20 等别的骰面不能塞百分位字段。
+  if (m.sides === 100) {
+    if (m.tens == null || m.units == null
+      || !Number.isInteger(m.tens) || m.tens < 0 || m.tens > 90 || m.tens % 10 !== 0
+      || !Number.isInteger(m.units) || m.units < 0 || m.units > 9
+      || ((m.tens + m.units) || 100) !== m.value) return;
+  } else if (m.tens != null || m.units != null) return;
   setUI({
     judgmentResult: {
       judgmentId: m.id, title: m.title, sides: m.sides, value: m.value, values: m.values, tens: m.tens, units: m.units,

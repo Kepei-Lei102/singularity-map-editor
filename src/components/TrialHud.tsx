@@ -210,7 +210,7 @@ export function TrialHud() {
                   title={`${x.distance} 格${x.hp === null ? '' : ` · HP ${x.hp}`}；${bluntMode ? '钝器：打倒成昏厥' : '锐器：打倒成濒死'}`}
                   onClick={() => {
                     const skill = selectedSkill?.id;
-                    if (!confirm(`用${bluntMode ? '钝器' : '锐器'}${skill ? ` + 【${selectedSkill!.name}】` : ''}攻击 ${x.name}？（D100 攻击口径：000 特大 / 1–5 落空 / 95–99 大成功 / 其余命中，${bluntMode ? '打到 0 是昏厥' : '打到 0 是濒死'}；若这个角色开着玩家窗口，骰子会在他的窗口里掷）`)) return;
+                    if (!confirm(`用${bluntMode ? '钝器' : '锐器'}${skill ? ` + 【${selectedSkill!.name}】` : ''}攻击 ${x.name}？（D100 攻击口径：000 特大 / 1–5 落空 / 95–99 大成功 / 其余命中，${bluntMode ? '打到 0 是昏厥' : '打到 0 是濒死'}；若这个角色开着玩家窗口，骰子会在他的窗口里掷）`)) { setAttackSkill(null); return; }
                     const e = trialAttack(x.tokenId, { sharp: !bluntMode, skillId: skill });
                     setAttackSkill(null);
                     if (e) set({ msg: e });

@@ -1,7 +1,7 @@
 import { useEffect } from 'react';
 import { useUI, useWorld } from '../core/store';
 import { clearTrialEvent, damageLanded, damageLost } from '../runtime/trial';
-import { attackDiceLabels } from '../rules/combat';
+import { attackDiceMeta } from '../rules/combat';
 
 /** 试玩里的大事（攻击、伤害、濒死）：单独一张大卡片浮在地图上方，不跟下面那排小字挤在一起。 */
 export function TrialEventCard() {
@@ -28,9 +28,7 @@ export function TrialEventCard() {
   </>);
   const color = (pcId: string | null) => (pcId ? w.party.find((p) => p.id === pcId)?.color ?? '#fff' : '#fff');
   // 档位颗数和额外颗数分开报：007 暴击、009 打已眩晕的人都会让 dice 变大，但这不是大成功。
-  const diceBase = ev.diceBase ?? ev.dice ?? 1;
-  const extraDice = ev.extraDice ?? 0;
-  const diceLabels = attackDiceLabels(diceBase, extraDice);
+  const diceLabels = attackDiceMeta(ev).labels;
   return (
     <div className={`trial-event ${ev.kind}`} role="status">
       <div className="trial-event-head">

@@ -71,6 +71,11 @@ test('事件卡标签：档位颗数和额外颗数分开，不把暴击/5 倍�
   assert.deepEqual(api.attackDiceLabels(2, 1), { band: '大成功 ×2', extra: '额外 +1 颗伤害骰' });
   assert.deepEqual(api.attackDiceLabels(4, 16), { band: '特大成功 ×4', extra: '额外 +16 颗伤害骰' });
   assert.deepEqual(api.attackDiceLabels(1, 0), { band: null, extra: null });
+  // 旧事件没有 diceBase/extraDice：按总颗数兜底，不把 5 颗瞎猜成大成功。
+  assert.deepEqual(api.attackDiceMeta({ dice: 2 }), { diceBase: 2, extraDice: 0, labels: { band: '大成功 ×2', extra: null } });
+  assert.deepEqual(api.attackDiceMeta({ dice: 5 }), { diceBase: 5, extraDice: 0, labels: { band: null, extra: null } });
+  assert.deepEqual(api.attackDiceMeta({ dice: 4 }), { diceBase: 4, extraDice: 0, labels: { band: '特大成功 ×4', extra: null } });
+  assert.deepEqual(api.attackDiceMeta({ dice: 5, diceBase: 1, extraDice: 4 }), { diceBase: 1, extraDice: 4, labels: { band: null, extra: '额外 +4 颗伤害骰' } });
 });
 
 test('眩晕打击：伤害骰出 8 或已知物理弱点才触发；打眩晕的人 5 倍颗数', () => {
@@ -181,6 +186,42 @@ test('昏厥目标：降智的即时 ME 伤害照扣，但不往上叠状态', (
   assert.match(w.events.at(-1).note, /降智/);
 });
 
+test('昏厥目标中暴击：额外伤害照落，但流血不挂，note 要说清', () => {
+  setup({ skills: ['007-9-004'], target: { down: true, weakness: { physical: true } } });
+  assert.equal(api.trialAttack('tb', { roll: 50, roller: seq([3, 1, 1, 6]), skillId: '007-9-004' }), null);
+  const w = api.getWorld();
+  const tok = w.maps[0].tokens.find((x) => x.id === 'tb');
+  assert.equal(tok.hp, 31, '3 + 暴击额外 6');
+  assert.equal(tok.status, undefined);
+  assert.match(w.events.at(-1).note, /暴击/);
+  assert.match(w.events.at(-1).note, /流血没挂/);
+});
+
+test('昏厥目标：203 选中眩晕 + 009 被动眩晕，note 不重复状态名', () => {
+  setup({ skills: ['007-9-203', '009-9-003'], target: { down: true, weakness: { physical: true } } });
+  assert.equal(api.trialAttack('tb', { roll: 50, roller: seq([1, 1]), skillId: '007-9-203' }), null);
+  const note = api.getWorld().events.at(-1).note;
+  assert.match(note, /目标已经昏厥，眩晕没挂/);
+  assert.doesNotMatch(note, /眩晕、眩晕/);
+});
+
+test('锐器致死 + 暴击：暴击伤害照落，note 只说附加状态没落', () => {
+  setup({ skills: ['007-9-004'], partyB: true, target: { hp: 3, hpMax: 40, weakness: { physical: true } } });
+  api.update((d) => {
+    d.party.find((p) => p.id === 'a').sharp = true;
+    const b = d.party.find((p) => p.id === 'b');
+    b.hp = 3;
+    b.hpMax = 40;
+  });
+  assert.equal(api.trialAttack('tb', { roll: 50, sharp: true, skillId: '007-9-004', roller: seq([3, 1, 1, 6]) }), null);
+  const w = api.getWorld();
+  const tok = w.maps[0].tokens.find((x) => x.id === 'tb');
+  assert.equal(tok.status.label, '濒死');
+  assert.match(w.events.at(-1).note, /暴击：伤害骰 \+1/);
+  assert.match(w.events.at(-1).note, /附加状态没落/);
+  assert.doesNotMatch(w.events.at(-1).note, /附加效果没落/);
+});
+
 test('没有血条的 NPC：伤害没落地，但技能状态照样挂', () => {
   setup({ skills: ['007-9-203'], target: { hp: 0, hpMax: 0 } });
   assert.equal(api.trialAttack('tb', { roll: 50, roller: seq([2, 1]), skillId: '007-9-203' }), null);
@@ -247,6 +288,133 @@ test('攻击技能：没填 ME / 技能 id 不认识都挡在发起前', () => {
   assert.match(api.trialAttack('tb', { roll: 50, skillId: '007-9-004' }) ?? '', /还没填 ME/);
   setup();
   assert.match(api.trialAttack('tb', { roll: 50, skillId: '999-9-999' }) ?? '', /没有这个攻击技能/);
+});
+
+test('攻击挂起：非 D100 拒绝、不落账；目标跑了则收掉挂起', () => {
+  setup({ window: true, skills: ['007-9-004'] });
+  assert.equal(api.trialAttack('tb', { skillId: '007-9-004' }), null);
+  const bad = api.settlePendingJudgment({ rollId: 'r', sides: 4, value: 2, tens: null, units: null, material: 'wood', seed: 1 });
+  assert.match(bad ?? '', /骰面或骰子数量/);
+  assert.ok(api.getUI().pendingJudgment, '骰面不对时留着，让玩家用正确骰面重掷');
+  assert.equal(api.getWorld().party.find((x) => x.id === 'a').me, 5);
+
+  // value 和 values 对不上，不能按 values 过校验、再拿 value 落账。
+  const badValue = api.settlePendingJudgment({ rollId: 'r', sides: 100, value: 1, values: [50], tens: 50, units: 0, material: 'wood', seed: 1 });
+  assert.match(badValue ?? '', /骰面或骰子数量/);
+  assert.ok(api.getUI().pendingJudgment, 'value/values 不一致时留着让玩家重掷');
+  assert.equal(api.getWorld().party.find((x) => x.id === 'a').me, 5);
+  assert.equal(api.getWorld().maps[0].tokens.find((x) => x.id === 'tb').hp, 40);
+
+  // tens/units 和 value 对不上：D100 记录本身无效，不能先扣血再等 publish 报错。
+  const badTens = api.settlePendingJudgment({ rollId: 'r', sides: 100, value: 50, values: [50], tens: 5, units: 0, material: 'wood', seed: 1 });
+  assert.match(badTens ?? '', /百分骰结果不一致/);
+  assert.ok(api.getUI().pendingJudgment, '百分位不一致时留着让玩家重掷');
+  assert.equal(api.getWorld().party.find((x) => x.id === 'a').me, 5);
+  assert.equal(api.getWorld().maps[0].tokens.find((x) => x.id === 'tb').hp, 40);
+
+  // 目标移出攻击距离后，按正确 D100 结算也应当报错并收掉挂起，不能半截留账。
+  api.update((d) => { const t = d.maps[0].tokens.find((x) => x.id === 'tb'); t.x = 9; t.y = 9; });
+  const err = api.settlePendingJudgment({ rollId: 'r', sides: 100, value: 50, tens: 50, units: 0, material: 'wood', seed: 2 });
+  assert.match(err ?? '', /攻击距离|距离|不在/);
+  assert.equal(api.getUI().pendingJudgment, null);
+  assert.equal(api.getWorld().party.find((x) => x.id === 'a').me, 5, '失败结算不能扣 ME');
+});
+
+test('攻击挂起绑定发起者：切到乙之后仍由甲结算，不拿乙的手和 ME', () => {
+  setup({ window: true, skills: ['007-9-004'], partyB: true });
+  // 乙也有同一技能，确保旧实现能“借”乙结算；再放一个 NPC 当靶子。
+  api.update((d) => {
+    d.party.find((p) => p.id === 'b').skills = ['007-9-004'];
+    const tb = d.maps[0].tokens.find((t) => t.id === 'tb');
+    d.maps[0].tokens.push({ ...tb, id: 'tn', pcId: null, name: '靶', x: 3, y: 3, hp: 40, hpMax: 40, status: undefined, weakness: undefined });
+  });
+  assert.equal(api.trialAttack('tn', { skillId: '007-9-004' }), null);
+  assert.ok(api.getUI().pendingJudgment?.attack, '攻击判定应该挂着');
+  api.switchTrialPlayer(1);
+  const err = api.settlePendingJudgment({ rollId: 'switch', sides: 100, value: 50, tens: 50, units: 0, material: 'wood', seed: 3 });
+  assert.equal(err, null);
+  const w = api.getWorld();
+  assert.equal(w.events.at(-1).actor.id, 'a', '事件必须记发起者甲');
+  assert.equal(w.party.find((p) => p.id === 'a').me, 4, '扣甲的 ME');
+  assert.equal(w.party.find((p) => p.id === 'b').me, 5, '乙的 ME 不动');
+  assert.equal(api.getUI().trial.acted?.ta, true, '甲的 action 被用掉');
+  assert.equal(api.getUI().trial.acted?.tb, undefined, '乙的 action 不动');
+  assert.ok(w.maps[0].tokens.find((t) => t.id === 'tn').hp < 40, '靶子掉血');
+});
+
+test('攻击挂起：发起者眩晕/已行动时整笔收掉', () => {
+  setup({ window: true, skills: ['007-9-004'] });
+  assert.equal(api.trialAttack('tb', { skillId: '007-9-004' }), null);
+  api.update((d) => { d.maps[0].tokens.find((t) => t.id === 'ta').status = { label: '眩晕', roundsLeft: 1, skipTurns: 1, blocksAction: true }; });
+  const stun = api.settlePendingJudgment({ rollId: 'stun', sides: 100, value: 50, tens: 50, units: 0, material: 'wood', seed: 5 });
+  assert.match(stun ?? '', /眩晕/);
+  assert.equal(api.getUI().pendingJudgment, null);
+  assert.equal(api.getWorld().party.find((p) => p.id === 'a').me, 5);
+  assert.equal(api.getWorld().maps[0].tokens.find((t) => t.id === 'tb').hp, 40);
+
+  setup({ window: true, skills: ['007-9-004'] });
+  assert.equal(api.trialAttack('tb', { skillId: '007-9-004' }), null);
+  api.setUI({ trial: { ...api.getUI().trial, acted: { ta: true } } });
+  const acted = api.settlePendingJudgment({ rollId: 'acted', sides: 100, value: 50, tens: 50, units: 0, material: 'wood', seed: 6 });
+  assert.match(acted ?? '', /行动点/);
+  assert.equal(api.getUI().pendingJudgment, null);
+  assert.equal(api.getWorld().party.find((p) => p.id === 'a').me, 5);
+  assert.equal(api.getWorld().maps[0].tokens.find((t) => t.id === 'tb').hp, 40);
+});
+
+test('攻击挂起：结算后广播失败也收掉 pending，不留可重复结算', () => {
+  setup({ window: true, skills: ['007-9-004'] });
+  assert.equal(api.trialAttack('tb', { skillId: '007-9-004' }), null);
+  const p = api.getUI().pendingJudgment;
+  // 模拟广播前定时/标题被清掉这种边界：攻击已经落地，publish 会失败。
+  api.setUI({ pendingJudgment: { ...p, title: '' } });
+  const err = api.settlePendingJudgment({ rollId: 'broadcast-fail', sides: 100, value: 50, tens: 50, units: 0, material: 'wood', seed: 7 });
+  assert.match(err ?? '', /广播失败/);
+  assert.equal(api.getUI().pendingJudgment, null, '广播失败后不能再留一笔可重复结算的挂起');
+  const w = api.getWorld();
+  assert.equal(w.party.find((x) => x.id === 'a').me, 4);
+  assert.ok(w.maps[0].tokens.find((x) => x.id === 'tb').hp < 40);
+  assert.equal(w.events.length, 1);
+});
+
+test('攻击挂起：重复 rollId 在落地前拒绝，不改世界', () => {
+  setup({ window: true, skills: ['007-9-004'] });
+  assert.equal(api.trialAttack('tb', { skillId: '007-9-004' }), null);
+  api.update((d) => {
+    d.judgments = [{
+      id: 'old', title: '旧判定', ruling: '', recipients: [], subjectId: 'a', place: null, at: 1,
+      roll: { id: 'dup', sides: 100, value: 50, tens: 50, units: 0, material: 'wood', persona: 'player', seed: 1 },
+    }];
+  });
+  const err = api.settlePendingJudgment({ rollId: 'dup', sides: 100, value: 50, tens: 50, units: 0, material: 'wood', seed: 2 });
+  assert.match(err ?? '', /已经发布过/);
+  assert.ok(api.getUI().pendingJudgment, '重复这颗先别把 pending 收掉，让玩家换一颗');
+  assert.equal(api.getWorld().party.find((x) => x.id === 'a').me, 5);
+  assert.equal(api.getWorld().maps[0].tokens.find((x) => x.id === 'tb').hp, 40);
+  assert.equal((api.getWorld().events ?? []).length, 0);
+  assert.equal((api.getWorld().judgments ?? []).length, 1);
+});
+
+test('攻击挂起：判定角色从 party 消失时收掉挂起，不落账', () => {
+  setup({ window: true, skills: ['007-9-004'] });
+  assert.equal(api.trialAttack('tb', { skillId: '007-9-004' }), null);
+  api.update((d) => { d.party = []; });
+  const err = api.settlePendingJudgment({ rollId: 'gone', sides: 100, value: 50, tens: 50, units: 0, material: 'wood', seed: 8 });
+  assert.match(err ?? '', /角色已经不在了/);
+  assert.equal(api.getUI().pendingJudgment, null);
+  assert.equal((api.getWorld().events ?? []).length, 0);
+  assert.equal(api.getWorld().maps[0].tokens.find((x) => x.id === 'tb').hp, 40);
+});
+
+test('攻击挂起：发起者结束回合后不再结算，整笔收掉', () => {
+  setup({ window: true, skills: ['007-9-004'] });
+  assert.equal(api.trialAttack('tb', { skillId: '007-9-004' }), null);
+  api.setUI({ trial: { ...api.getUI().trial, ended: { ta: true } } });
+  const err = api.settlePendingJudgment({ rollId: 'ended', sides: 100, value: 50, tens: 50, units: 0, material: 'wood', seed: 4 });
+  assert.match(err ?? '', /结束了/);
+  assert.equal(api.getUI().pendingJudgment, null);
+  assert.equal(api.getWorld().party.find((p) => p.id === 'a').me, 5);
+  assert.equal(api.getWorld().maps[0].tokens.find((x) => x.id === 'tb').hp, 40);
 });
 
 test('挂起攻击判定带上技能，结算前不扣 ME', () => {

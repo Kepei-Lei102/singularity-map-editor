@@ -345,6 +345,67 @@ test('骰子数量对不上：拒绝结算，门和锁都不动', () => {
   } finally { stop(); }
 });
 
+test('门挂起：骰面或骰子记录不合法时不改门、不广播、留 pending', () => {
+  stage({ lock: { kind: 'physical', locked: true, keyable: true } });
+  try {
+    api.openPlayerWindow('a', true);
+    assert.equal(api.trialPickLock('door1', 'pick'), null);
+    const badSides = api.settlePendingJudgment({ rollId: 'bad-sides', sides: 4, value: 14, values: [14, 14], tens: null, units: null, material: 'wood', seed: 1 });
+    assert.match(badSides ?? '', /骰面或骰子数量/);
+    assert.equal(door().state, 0);
+    assert.equal(door().lock.locked, true);
+    assert.ok(api.getUI().pendingJudgment, '坏骰面时留着让玩家重掷');
+    assert.equal((api.getWorld().judgments ?? []).length, 0);
+
+    const badMaterial = api.settlePendingJudgment({ rollId: 'bad-material', sides: 20, value: 14, values: [14, 14], tens: null, units: null, material: 'bone', seed: 1 });
+    assert.match(badMaterial ?? '', /骰子记录无效/);
+    assert.equal(door().state, 0);
+    assert.equal(door().lock.locked, true);
+    assert.ok(api.getUI().pendingJudgment, '坏记录时不要半截落地');
+    assert.equal((api.getWorld().judgments ?? []).length, 0);
+
+    const badPercent = api.settlePendingJudgment({ rollId: 'bad-percent', sides: 20, value: 14, values: [14, 14], tens: 10, units: 0, material: 'wood', seed: 1 });
+    assert.match(badPercent ?? '', /骰子记录无效/);
+    assert.equal(door().state, 0);
+    assert.equal(door().lock.locked, true);
+    assert.ok(api.getUI().pendingJudgment, '非 D100 不能带百分位字段');
+    assert.equal((api.getWorld().judgments ?? []).length, 0);
+  } finally { stop(); }
+});
+
+test('挂起撬锁期间锁先被解开：仍按原判定开门，不把 pending 留成半截', () => {
+  stage({ lock: { kind: 'physical', locked: true, keyable: true } });
+  try {
+    api.openPlayerWindow('a', true);
+    const win = windows.at(-1);
+    assert.equal(api.trialPickLock('door1', 'pick'), null);
+    api.onJudgeRoll(rollMsg(15, [15, 15]), win);
+    api.update((d) => { d.maps[0].objects.find((o) => o.id === 'door1').lock.locked = false; });
+    assert.equal(settle([15, 15]), null);
+    assert.equal(door().state, 1, '锁已经解开但门没开，原判定仍能把门打开');
+    assert.equal(door().lock.locked, false);
+    assert.equal(api.getUI().pendingJudgment, null);
+    assert.ok(lastEvent(), '正常落一条开门事件');
+  } finally { stop(); }
+});
+
+test('门挂起：结算后广播失败也收掉 pending，门已开', () => {
+  stage({ lock: { kind: 'physical', locked: true, keyable: true } });
+  try {
+    api.openPlayerWindow('a', true);
+    const win = windows.at(-1);
+    assert.equal(api.trialPickLock('door1', 'pick'), null);
+    api.onJudgeRoll(rollMsg(15, [15, 15]), win);
+    const p = api.getUI().pendingJudgment;
+    api.setUI({ pendingJudgment: { ...p, title: '' } });
+    assert.match(settle([15, 15]) ?? '', /广播失败/);
+    assert.equal(api.getUI().pendingJudgment, null, '广播失败后别再留一笔可重复结算的挂起');
+    assert.equal(door().state, 1);
+    assert.equal(door().lock.locked, false);
+    assert.ok(lastEvent(), '门已开，事件也已经落地');
+  } finally { stop(); }
+});
+
 test('判定开着期间门被改成没有打开状态：结算也拒，不能先解锁', () => {
   stage({ lock: { kind: 'physical', locked: true, keyable: true } });
   try {
@@ -664,6 +725,22 @@ test('撞门拒绝：开着的门、缺打开状态的门', () => {
     api.update((d) => { d.maps[0].objects.find((o) => o.id === 'door1').opening.openStates = []; });
     assert.match(api.trialRamDoor('door1') ?? '', /缺少打开状态/);
     assert.equal(api.getUI().pendingJudgment, null);
+    assert.equal(lastEvent(), undefined);
+  } finally { stop(); }
+});
+
+test('开门判定开着时棋子被删：拒绝结算并收掉挂起，门和锁不动', () => {
+  stage({ lock: { kind: 'physical', locked: true, keyable: true } });
+  try {
+    api.openPlayerWindow('a', true);
+    const win = windows.at(-1);
+    assert.equal(api.trialPickLock('door1', 'pick'), null);
+    api.onJudgeRoll(rollMsg(14, [14, 14]), win);
+    api.update((d) => { d.maps[0].tokens = []; });
+    assert.match(api.settlePendingJudgment({ rollId: 'r', sides: 20, value: 14, values: [14, 14], tens: null, units: null, material: 'wood', seed: 1 }) ?? '', /找不到开门的人/);
+    assert.equal(api.getUI().pendingJudgment, null);
+    assert.equal(door().state, 0);
+    assert.equal(door().lock.locked, true);
     assert.equal(lastEvent(), undefined);
   } finally { stop(); }
 });

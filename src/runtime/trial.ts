@@ -1105,9 +1105,12 @@ export const actionsLeft = (t: Trial | null | undefined): number => {
  * 攻击的前置：校验 + 取攻击者/目标。返回错误字符串，或者一份可以直接用的上下文。
  * 校验只写这一份——发起（开判定）和结算（真扣血）都走它，免得两边口径漂。
  */
-function attackContext(targetTokenId: string, sharp: boolean, skillId?: string) {
+function attackContext(targetTokenId: string, sharp: boolean, skillId?: string, attackerTokenId?: string) {
   const t = tr();
-  const pl = t?.players[t.current];
+  // 挂起攻击属于发起者，不属于按下结算时的 current：主持人切人后仍要按发起者结算。
+  const pl = attackerTokenId
+    ? t?.players.find((x) => x.tokenId === attackerTokenId)
+    : t?.players[t.current];
   if (!t || !pl) return '没有正在试玩的角色';
   if (!t.combat) return '先打开战斗模式再攻击';
   const w = getWorld();
@@ -1756,9 +1759,9 @@ function settleDoorAttempt(
 /** 按掷出来的点数结算一次攻击。见证者点「按结果执行」，或 NPC 当场出手时走这里。 */
 export function settleAttack(
   targetTokenId: string, roll: number,
-  opts: { roller?: Roller; sharp?: boolean; rolledBy?: 'player' | 'witness' | 'host'; skillId?: string } = {},
+  opts: { roller?: Roller; sharp?: boolean; rolledBy?: 'player' | 'witness' | 'host'; skillId?: string; attackerTokenId?: string } = {},
 ): string | null {
-  const ctx = attackContext(targetTokenId, !!opts.sharp, opts.skillId);
+  const ctx = attackContext(targetTokenId, !!opts.sharp, opts.skillId, opts.attackerTokenId);
   if (typeof ctx === 'string') return ctx;
   const { t, pl, target, sharp, attackSkill } = ctx;
   const roller = opts.roller ?? randomDie;
@@ -1832,10 +1835,12 @@ export function settleAttack(
     // 命中后附加：状态和降智；目标已经倒地就不往上叠。
     const applyRiders = () => {
       if (!r.hit) return;
+      // 暴击是即时伤害，不管目标倒没倒地都该在事件里说明。
+      if (riderEffects.includes('暴击')) notes.push('暴击：伤害骰 +1');
       const statusEffects = riderEffects.filter((e) => riderStatus(e));
       // 尸体/濒死：连即时 ME 伤害也不落；昏厥：只落即时伤害，不叠状态。
       if (dt.corpse || dt.status?.label === DYING_LABEL) {
-        if (riderEffects.length || passiveStun) notes.push('目标已经倒地，附加效果没落');
+        if (riderEffects.length || passiveStun) notes.push('目标已经倒地，附加状态没落');
         return;
       }
       if (riderEffects.includes('降智')) {
@@ -1851,7 +1856,8 @@ export function settleAttack(
         }
       }
       if (dt.down) {
-        if (statusEffects.length || passiveStun) notes.push('目标已经昏厥，附加状态没挂');
+        const names = [...new Set([...statusEffects, ...(passiveStun ? ['眩晕' as const] : [])])];
+        if (names.length) notes.push(`目标已经昏厥，${names.join('、')}没挂`);
         return;
       }
       const labels = new Set<AttackRider>();
@@ -1864,7 +1870,6 @@ export function settleAttack(
         if (old !== st.label) deltas.push({ kind: 'status', id: dt.id, name: dt.name, from: old, to: st.label });
         else notes.push(`${st.label}刷新`);
       }
-      if (riderEffects.includes('暴击')) notes.push('暴击：伤害骰 +1');
       if (riderEffects.includes('去除武器')) notes.push('去除武器：1 回合不能用锐器');
       if (riderEffects.includes('恐惧')) notes.push('恐惧：1 回合不能行动');
       if (passiveStun) notes.push('眩晕打击：附带一回合眩晕');
@@ -1947,6 +1952,9 @@ export interface JudgmentRollInput {
   tens?: number | null; units?: number | null; material: string; seed: number;
 }
 
+/** 骰子记录里允许的材质；publishJudgment 也按这份表验。 */
+const ROLL_MATERIALS = new Set(['wood', 'plastic', 'metal', 'stone', 'rubber']);
+
 /** 见证者确认这颗骰子：先落地（跳跃挪棋子 / 攻击扣血），再广播，最后把两边的等待状态一起收掉。 */
 /** 广播这一棒的骰子；标题/裁定沿用这笔判定。 */
 function publishPendingRoll(p: PendingJudgment, input: JudgmentRollInput, byStandIn: boolean): string | null {
@@ -1975,7 +1983,33 @@ export function settlePendingJudgment(input: JudgmentRollInput, byStandIn = fals
   if (!p) return '没有待掷的判定';
   // 判定是在哪个工程/哪次试玩里开的，就只能在那儿结算：否则会静默写进另一个世界。
   if (p.context !== worldContext()) return '工程或试玩已切换，请重新掷骰';
+  // 攻击/门是「先落地后广播」的分支；publish 失败时用它决定要不要把 pending 收掉。
+  let settled = false;
   const diceValues = input.values?.length ? input.values : [input.value];
+  // 先把骰子记录按这笔判定自己的口径验一遍：不合法只报错，绝不进入挪人/开门/扣血分支。
+  // 以前攻击/门先落地再 publish，坏骰面会先改世界再在广播那一步失败，留下「已结算但没有正式判定」。
+  if (input.sides !== p.sides) return '骰面或骰子数量不对';
+  if (!Number.isInteger(input.value) || input.value < 1 || input.value > p.sides) return '骰面或骰子数量不对';
+  if (input.values !== undefined) {
+    if (!Array.isArray(input.values) || input.values.some((v) => !Number.isInteger(v) || v < 1 || v > p.sides)) return '骰面或骰子数量不对';
+    if (!input.values.includes(input.value)) return '骰面或骰子数量不对';
+  }
+  if (typeof input.rollId !== 'string' || !input.rollId.trim()
+    || typeof input.material !== 'string' || !ROLL_MATERIALS.has(input.material)
+    || !Number.isSafeInteger(input.seed) || input.seed < 0) return '骰子记录无效';
+  if (p.sides === 100) {
+    if (!Number.isInteger(input.tens) || !Number.isInteger(input.units)
+      || input.tens! < 0 || input.tens! > 90 || input.tens! % 10
+      || input.units! < 0 || input.units! > 9
+      || ((input.tens! + input.units!) || 100) !== input.value) return '百分骰结果不一致';
+  } else if (input.tens != null || input.units != null) return '骰子记录无效';
+  if (!getWorld().party.some((pc) => pc.id === p.subjectId)) {
+    closePendingJudgment();
+    return '判定的角色已经不在了';
+  }
+  // 攻击/门（非撞门）是先落地后广播：重复 rollId 必须在落地前挡掉，别让同一颗骰子改两次世界。
+  if ((p.attack || (p.door && p.door.method !== 'ram'))
+    && (getWorld().judgments ?? []).some((j) => j.roll.id === input.rollId)) return '这次掷骰已经发布过';
   // 撞门第二棒：第一颗已经落过，这一颗 1D4 反伤；结算时才落唯一一条总事件。
   if (p.ramImpact) {
     const imp = p.ramImpact;
@@ -2053,12 +2087,16 @@ export function settlePendingJudgment(input: JudgmentRollInput, byStandIn = fals
   if (p.door) {
     const tokenId = pendingTokenFor(p);
     const tok = tokenId ? findMap(getWorld(), p.door.mapId)?.tokens.find((x) => x.id === tokenId) : undefined;
-    if (tok) {
-      const blocked = actorStateError(tr(), tok);
-      if (blocked) { closePendingJudgment(); return blocked; }
-    }
+    if (!tok) { closePendingJudgment(); return '找不到开门的人'; }
+    const blocked = actorStateError(tr(), tok);
+    if (blocked) { closePendingJudgment(); return blocked; }
     const e = settleDoorAttempt(p, input, byStandIn);
-    if (e) return e;
+    // 骰子数量不对是输入问题，留着让玩家按正确颗数重掷；其余（门/人/状态变了）整笔收掉。
+    if (e) {
+      if (e !== '骰子数量不对') closePendingJudgment();
+      return e;
+    }
+    settled = true;
   }
   // 第二棒：属性骰已经落过，这一颗是摔伤骰；结算时才挪棋子/扣血，最后一条总事件。
   if (p.fall) {
@@ -2112,11 +2150,36 @@ export function settlePendingJudgment(input: JudgmentRollInput, byStandIn = fals
     return e || null;
   }
   if (p.attack) {
-    const e = settleAttack(p.attack.targetTokenId, input.value, { sharp: p.attack.sharp, skillId: p.attack.skillId, rolledBy: byStandIn ? 'witness' : 'player' });
-    if (e) return e;
+    const attack = p.attack;
+    // 挂起攻击属于发起者，不属于结算时的 current：主持人切人后也不能拿别人的手和 ME 打这一下。
+    const t = tr();
+    const pl = t?.players.find((x) => x.tokenId === attack.attackerTokenId);
+    const m = t ? findMap(getWorld(), t.mapId) : null;
+    const tok = m?.tokens.find((x) => x.id === attack.attackerTokenId);
+    if (!t || !m || !pl || !tok || pl.pcId !== p.subjectId || tok.pcId !== p.subjectId) {
+      closePendingJudgment();
+      return '发起攻击的人已经变了，这一击收掉';
+    }
+    const blocked = actorStateError(t, tok);
+    if (blocked) { closePendingJudgment(); return blocked; }
+    if (t.combat && actedOf(t, tok.id)) { closePendingJudgment(); return '这回合的行动点已经用掉了，按空格结束回合'; }
+    // 攻击骰只有 D100；别让玩家窗口回传的 D4/D20 也当成攻击骰落账。
+    if (input.sides !== 100 || diceValues.length !== 1 || !Number.isInteger(diceValues[0]) || diceValues[0] < 1 || diceValues[0] > 100 || input.value !== diceValues[0])
+      return '骰面或骰子数量不对';
+    const roll = diceValues[0];
+    const e = settleAttack(attack.targetTokenId, roll, {
+      sharp: attack.sharp, skillId: attack.skillId, attackerTokenId: attack.attackerTokenId,
+      rolledBy: byStandIn ? 'witness' : 'player',
+    });
+    if (e) { closePendingJudgment(); return e; }
+    settled = true;
   }
   const err = publishPendingRoll(p, input, byStandIn);
-  if (err) return err;
+  if (err) {
+    // 攻击/门在 publish 之前已经挪了世界；广播失败时至少把 pending 收掉，别让同一笔再结算一次。
+    if (settled) { closePendingJudgment(); return `判定已按结果执行，但广播失败：${err}`; }
+    return err;
+  }
   closePendingJudgment();
   return null;
 }

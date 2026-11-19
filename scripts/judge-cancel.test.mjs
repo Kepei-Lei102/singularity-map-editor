@@ -144,6 +144,25 @@ test('掷骰只认绑给判定角色的窗口：别的玩家窗口、无来源�
   assert.equal(api.getUI().judgmentResult?.value, 12);
 });
 
+test('百分骰：tens/units 和 value 不一致时不进结果，D20 也不许塞百分位字段', () => {
+  party();
+  api.openPlayerWindow('a');
+  const win = windows.at(-1);
+  api.openJudgment({ title: '观察', ruling: '', sides: 100, subjectId: 'a' });
+  const id = api.getUI().pendingJudgment.id;
+  const base = { id, title: '观察', sides: 100, material: 'wood', seed: 1, rollId: 'r1', from: api.SESSION };
+  api.onJudgeRoll({ ...base, value: 50, tens: 5, units: 0 }, win);
+  assert.equal(api.getUI().judgmentResult, null, 'tens/units 和 value 对不上，不能落结果');
+  api.onJudgeRoll({ ...base, value: 50, tens: 50, units: 0 }, win);
+  assert.equal(api.getUI().judgmentResult?.value, 50, '合法的 50 应该照常进结果');
+  api.cancelPendingJudgment();
+
+  api.openJudgment({ title: '观察', ruling: '', sides: 20, subjectId: 'a' });
+  const d20 = api.getUI().pendingJudgment.id;
+  api.onJudgeRoll({ id: d20, title: '观察', sides: 20, value: 12, tens: 10, units: 0, material: 'wood', seed: 1, rollId: 'r2', from: api.SESSION }, win);
+  assert.equal(api.getUI().judgmentResult, null, 'D20 不能带百分位字段');
+});
+
 test('确认广播后主持端和玩家窗口一起收盘（玩家亲手掷）', () => {
   party();
   api.openPlayerWindow('a');

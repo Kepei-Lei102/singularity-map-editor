@@ -42,6 +42,13 @@ export function attackDiceLabels(baseDice: number, extraDice: number): { band: s
   };
 }
 
+/** 卡片事件字段的兜底：旧事件没有 diceBase/extraDice 时按总颗数显示旧标签。 */
+export function attackDiceMeta(ev: { dice?: number; diceBase?: number; extraDice?: number }) {
+  const diceBase = ev.diceBase ?? ev.dice ?? 1;
+  const extraDice = ev.extraDice ?? 0;
+  return { diceBase, extraDice, labels: attackDiceLabels(diceBase, extraDice) };
+}
+
 /**
  * 按 D100 点数定档。100 就是 00。
  * 阈值只有一份：这里转调 `tierOfRoll` 的攻击分支，别在两处各写一遍。
