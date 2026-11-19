@@ -17,9 +17,21 @@ export interface Dirty {
 const samePoint = (a?: Point | null, b?: Point | null) =>
   (a?.x ?? null) === (b?.x ?? null) && (a?.y ?? null) === (b?.y ?? null);
 
+// 手动改过 fog/views 的图：这次 update 先保留手动结果，下一次有视野脏动的 update
+// 再按自动迷雾整图覆盖。和整图重算的旧行为一致，也不会让手动改的那一格永远漏算。
+const manualFog = new WeakSet<object>();
+function fogArrays(m: GameMap): object[] {
+  return [m.fog, ...Object.values(m.views ?? {}).map((v) => v.fog)];
+}
+export function markManualFog(m: GameMap): void {
+  for (const a of fogArrays(m)) manualFog.add(a);
+}
+export function isManualFog(m: GameMap): boolean {
+  return fogArrays(m).some((a) => manualFog.has(a));
+}
 function tokenMoved(a: Token, b: Token): boolean {
   return a.x !== b.x || a.y !== b.y || !samePoint(a.subcell, b.subcell)
-    || a.facing !== b.facing || a.stance !== b.stance;
+    || a.facing !== b.facing || a.stance !== b.stance || a.pcId !== b.pcId;
 }
 
 function mapStructureChanged(a: GameMap, b: GameMap): boolean {
@@ -49,7 +61,7 @@ export function diffWorld(prev: World, next: World): Dirty[] {
       if (tokenMoved(old, t)) moved.push({ from: { x: old.x, y: old.y }, to: { x: t.x, y: t.y } });
     }
     const added = m.tokens.length !== before.tokens.length || before.tokens.some((t) => !m.tokens.some((x) => x.id === t.id));
-    const structure = added || mapStructureChanged(before, m);
+    const structure = added || isManualFog(before) || mapStructureChanged(before, m);
     out.push({ mapId: m.id, moved, structure, full: structure });
   }
   return out;

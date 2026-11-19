@@ -85,6 +85,74 @@ test('diffWorld：转身/蹲下也算脏（原地），不能漏', () => {
   assert.deepEqual(dirty[0].moved[0].from, dirty[0].moved[0].to);
 });
 
+test('diffWorld：棋子换 pcId 也算脏，视野不能漏', () => {
+  for (const mode of ['shared', 'individual', 'grouped']) {
+    for (const [label, pcId] of [['换人', 'b'], ['换成人 null', null]]) {
+      const prev = withVision(mkWorld(mode), emptyWorldFallback(mode), { full: true });
+      const next = produce(prev, (d) => { d.maps[0].tokens[0].pcId = pcId; });
+      const dirty = diffWorld(prev, next);
+      assert.equal(dirty[0].moved.length, 1, `${mode}/${label}：换 pcId 必须进脏集`);
+      const inc = withVision(next, prev);
+      const full = withVision(next, prev, { full: true });
+      sameFog(inc.maps[0].fog, full.maps[0].fog, `${mode}/${label}：pcId`);
+      for (const id of Object.keys(full.maps[0].views)) {
+        sameFog(inc.maps[0].views[id].fog, full.maps[0].views[id].fog, `${mode}/${label}：${id}`);
+      }
+    }
+  }
+});
+
+test('D100 区改动必须重算视野，增量不能留旧雾', () => {
+  for (const mode of ['shared', 'individual', 'grouped']) {
+    for (const start of [0, 1]) {
+      const base = produce(mkWorld(mode), (d) => {
+        d.maps[0].tokens = [d.maps[0].tokens[0]];
+        d.maps[0].tokens[0].facing = '东';
+        d.maps[0].d100[5 * d.maps[0].width + 5] = start;
+      });
+      const prev = withVision(base, emptyWorldFallback(mode), { full: true });
+      const m = prev.maps[0];
+      const idx = 5 * m.width + 5;
+      const next = produce(prev, (d) => { d.maps[0].d100[idx] = 1 - start; });
+      const inc = withVision(next, prev);
+      const full = withVision(next, prev, { full: true });
+      assert.notDeepEqual(inc.maps[0].fog, prev.maps[0].fog, `${mode} ${start}→${1 - start} 必须真的改变视野`);
+      sameFog(inc.maps[0].fog, full.maps[0].fog, `${mode} ${start}→${1 - start}`);
+      for (const id of Object.keys(full.maps[0].views)) {
+        sameFog(inc.maps[0].views[id].fog, full.maps[0].views[id].fog, `${mode} ${start}→${1 - start} ${id}`);
+      }
+    }
+  }
+});
+
+test('手动雾先保留，下一次视野脏动按自动迷雾重算覆盖', () => {
+  const prev = withVision(mkWorld('shared'), emptyWorldFallback('shared'), { full: true });
+  const m = prev.maps[0];
+  // 选一个视野外、原本是黑的格手动点亮：它不在移动圆盘里，才测得出“漏算”。
+  const idx = m.fog.findIndex((f, i) => f === 0 && (i % m.width) >= 20 && Math.floor(i / m.width) >= 12);
+  assert.ok(idx >= 0, '需要一格视野外的黑格');
+  const painted = produce(prev, (d) => { d.maps[0].fog[idx] = 1; });
+  const held = withVision(painted, prev);
+  assert.equal(held.maps[0].fog[idx], 1, '本次 update 先保留手动雾（否则手动工具按下去就被覆盖）');
+  const unrelated = produce(held, (d) => { d.session += 1; });
+  assert.ok(diffWorld(held, unrelated)[0].structure, '手动 pending 的下一帧必须给全图计划，syncMemory 才不会漏');
+  assert.equal(withVision(unrelated, held).maps[0].fog[idx], 1, '只改无关数据时手动雾还不该被覆盖');
+  const moved = produce(held, (d) => { d.maps[0].tokens[0].x += 1; });
+  const inc = withVision(moved, held);
+  const full = withVision(moved, held, { full: true });
+  assert.equal(full.maps[0].fog[idx], 2, '全量会把手动点亮的视野外格降成记忆灰');
+  assert.equal(inc.maps[0].fog[idx], 2, '下一次有视野脏动时自动迷雾要接管');
+  sameFog(inc.maps[0].fog, full.maps[0].fog, '手动雾后的下一次移动');
+});
+
+test('关掉自动迷雾后，手动雾保留，不被重算覆盖', () => {
+  const base = produce(withVision(mkWorld('shared'), emptyWorldFallback('shared'), { full: true }), (d) => { d.maps[0].autoFog = false; });
+  const idx = base.maps[0].fog.findIndex((f) => f === 1);
+  assert.ok(idx >= 0, '起始视野里至少要有一格可见');
+  const next = produce(base, (d) => { d.maps[0].fog[idx] = 0; });
+  assert.equal(withVision(next, base).maps[0].fog[idx], 0, '手动雾不该被自动重算覆盖');
+});
+
 test('planVision：一格移动只圈两个圆盘，远小于全图', () => {
   const prev = mkWorld('shared', [60, 40]);
   const next = produce(prev, (d) => { d.maps[0].tokens[0].x += 2; });
