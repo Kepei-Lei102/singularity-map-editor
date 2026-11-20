@@ -237,7 +237,11 @@ test('clipArchitecture 丢弃浮点裁剪出的零面积碎片', () => {
   const fragments = clipArchitecture(m, { fog }, 1, [
     { x: 0.5, y: 0.5, w: 1e-12, h: 1, material: 'wall' },
   ]);
-  assert.equal(fragments.length, 0, '宽度小于 1e-9 的碎片不该进记忆');
+  assert.equal(fragments.length, 0, '面积小于 1e-12 的碎片不该进记忆');
+  const square = clipArchitecture(m, { fog }, 1, [
+    { x: 0.5, y: 0.5, w: 1e-8, h: 1e-8, material: 'wall' },
+  ]);
+  assert.equal(square.length, 0, '两个边长都过 1e-9、但面积仍为零的碎片也不该进记忆');
   const kept = clipArchitecture(m, { fog }, 1, [
     { x: 0.5, y: 0.5, w: 0.25, h: 1, material: 'wall' },
   ]);

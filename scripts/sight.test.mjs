@@ -194,6 +194,37 @@ test('玻璃不挡“看见建筑本身”：索引路径保持旧过滤口径',
   assert.equal(hit?.id, 't1', '六面玻璃不该把建筑本身的可见性累加掉');
 });
 
+test('SightCache 在边界/整点上也一致', () => {
+  const map = mkMap(12, 9);
+  map.architecture = { walls: [{ id: 'w1', a: { x: 4.5, y: 2 }, b: { x: 4.5, y: 7 }, thickness: 0.25, material: 'wall' }], doors: [] };
+  const eye = { x: 1.5, y: 4.5, sex: '男' };
+  const cache = sightCacheFor(world, map, eye, sightCtxFor(world, map));
+  const points = [
+    { x: 0, y: 0 }, { x: 0.5, y: 0 }, { x: 11, y: 8 }, { x: 11.5, y: 8.5 },
+    { x: 6, y: 4 }, { x: 6.5, y: 4 }, { x: 6, y: 4.5 }, { x: 0, y: 8 },
+    { x: 12, y: 8 }, { x: 11, y: 9 },
+  ];
+  for (const t of points) {
+    assert.equal(visiblePoint(world, map, eye, t, undefined, cache), visiblePoint(world, map, eye, t), `(${t.x}, ${t.y})`);
+  }
+});
+
+test('SightCache 在墙分桶边界也一致', () => {
+  const map = mkMap(20, 20);
+  // 建筑坐标是 1/3 格：x=24 就是第 8 格，正好落在 8 格分桶边界上。
+  map.architecture = { walls: [{ id: 'w1', a: { x: 24, y: 6 }, b: { x: 24, y: 60 }, thickness: 0.25, material: 'wall' }], doors: [] };
+  const eye = { x: 1.5, y: 10, sex: '男' };
+  const cache = sightCacheFor(world, map, eye, sightCtxFor(world, map));
+  assert.ok(cache.walls, '跨桶测试必须有墙索引');
+  for (const t of [
+    { x: 7.5, y: 10 }, { x: 8, y: 10 }, { x: 8.5, y: 10 },
+    { x: 7.5, y: 8 }, { x: 8, y: 8 }, { x: 8.5, y: 8 },
+    { x: 7.5, y: 12 }, { x: 8, y: 12 }, { x: 8.5, y: 12 },
+  ]) {
+    assert.equal(visiblePoint(world, map, eye, t, undefined, cache), visiblePoint(world, map, eye, t), `(${t.x}, ${t.y})`);
+  }
+});
+
 test('SightCache 与逐次建表逐点一致（带物件、小格、朝向）', () => {
   const map = mkMap(12, 9);
   map.objects = [{ id: 'o1', name: '箱子', kind: 'object', x: 3, y: 3, w: 2, h: 1, height: 1.4, color: '', icon: '', secrets: [], states: [], state: '', tags: [] }];

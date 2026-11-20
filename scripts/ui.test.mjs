@@ -442,6 +442,24 @@ function autoFogWorld(autoFog, mode = 'shared') {
   return map;
 }
 
+test('store：autoFog=true 的棋子移动仍同步记忆', () => {
+  for (const mode of ['shared', 'individual', 'grouped']) {
+    autoFogWorld(true, mode);
+    const before = api.getWorld();
+    const seq = before.observationSeq, fog = before.maps[0].fog;
+    api.update((d) => { d.maps[0].tokens[0].x += 1; });
+    assert.ok(api.getWorld().observationSeq > seq, `${mode} 开着自动雾移动必须跑 syncMemory`);
+    assert.notEqual(api.getWorld().maps[0].fog, fog, `${mode} 开着自动雾移动必须重新写雾`);
+  }
+});
+
+test('store：只改 architectureFragments 不跑 syncMemory', () => {
+  manualFogWorld();
+  const seq = api.getWorld().observationSeq;
+  api.update((d) => { d.maps[0].architectureFragments = []; });
+  assert.equal(api.getWorld().observationSeq, seq, 'architectureFragments 不参与记忆，不该增加观察序号');
+});
+
 test('store：autoFog=false 的棋子移动不再 clone 视图层', () => {
   for (const mode of ['shared', 'individual', 'grouped']) {
     autoFogWorld(false, mode);
