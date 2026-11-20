@@ -21,12 +21,12 @@ export { syncMemory } from './src/scene/memory';
 export { diffWorld } from './src/scene/dirty';
 export { planVision } from './src/scene/visionPlan';
 export { emptyWorld, newMap } from './src/core/defaults';
-export { clipArchitecture } from './src/scene/architecture';`,
+export { clipArchitecture, architectureGeometry } from './src/scene/architecture';`,
     resolveDir: root,
   },
   outfile: bundle, bundle: true, platform: 'node', format: 'cjs', logLevel: 'silent',
 });
-const { produce, withVision, syncMemory, diffWorld, planVision, emptyWorld, newMap, clipArchitecture } = await import(bundle);
+const { produce, withVision, syncMemory, diffWorld, planVision, emptyWorld, newMap, clipArchitecture, architectureGeometry } = await import(bundle);
 after(() => rm(temp, { recursive: true, force: true }));
 
 function mkWorld(mode = 'shared') {
@@ -229,6 +229,26 @@ test('记忆合并：独立/分组模式下 mergeLayers 不能丢材质记忆', 
     world = inc;
     remember('甲走一格后');
   }
+});
+
+test('真实 1mm 墙裁剪后仍保留，不被面积阈值误杀', () => {
+  const m = emptyWorld().maps[0];
+  m.architecture = { walls: [
+    { id: 'mm', a: { x: 30, y: 6 }, b: { x: 30, y: 30 }, thickness: 1, material: 'wall' },
+  ], doors: [] };
+  const geometry = architectureGeometry(m, true);
+  assert.ok(geometry.length > 0, '1mm 墙应该有几何');
+  // thickness=1 → half=1/1500（原始 1/3 格坐标）；竖向墙横向厚度 half×2=2/1500≈0.001333 格。
+  const thin = geometry.filter((r) => Math.abs(r.w - 2 / 1500) < 1e-9);
+  assert.ok(thin.length > 0, '应该能生成 1mm 宽的构件');
+  const fragments = clipArchitecture(m, { fog: new Array(m.width * m.height * 9).fill(1) }, 1, geometry);
+  assert.ok(fragments.length > 0, '1mm 墙的片段必须保留');
+  let minArea = Infinity;
+  for (const f of fragments) {
+    assert.ok(f.w > 0 && f.h > 0, '保留的片段必须有正尺寸');
+    minArea = Math.min(minArea, f.w * f.h);
+  }
+  assert.ok(minArea > 1e-12, `1mm 墙最小片段面积 ${minArea} 不该被 1e-12 阈值丢掉`);
 });
 
 test('clipArchitecture 丢弃浮点裁剪出的零面积碎片', () => {
