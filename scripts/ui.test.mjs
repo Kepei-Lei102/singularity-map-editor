@@ -401,9 +401,9 @@ function manualFogWorld(mode = 'shared') {
   return map;
 }
 
-test('store：手动雾 redo 与 autoFog 开关', () => {
+test('store：手动雾 redo 链按自动雾覆盖结果回放', () => {
   // redo：手动 1 → 移动 2 → undo 1 → redo 2 → undo 1 → 再移动 2。
-  let map = manualFogWorld();
+  const map = manualFogWorld();
   api.paintFog(map.id, [[40, 30]], 'fogReveal');
   api.update((d) => { d.session += 1; });
   api.update((d) => { d.maps[0].tokens[0].x += 1; });
@@ -416,9 +416,10 @@ test('store：手动雾 redo 与 autoFog 开关', () => {
   assert.equal(api.getWorld().maps[0].fog[30 * 50 + 40], 1);
   api.update((d) => { d.maps[0].tokens[0].x += 1; });
   assert.equal(api.getWorld().maps[0].fog[30 * 50 + 40], 2);
+});
 
-  // autoFog 开→关→开：关着时保留，开回来时自动覆盖。
-  map = manualFogWorld();
+test('store：autoFog 开→关→开，关着保留手动雾、开回来覆盖', () => {
+  const map = manualFogWorld();
   api.paintFog(map.id, [[40, 30]], 'fogReveal');
   assert.equal(api.getWorld().maps[0].fog[30 * 50 + 40], 1);
   api.update((d) => { d.maps[0].autoFog = false; });
@@ -510,15 +511,33 @@ test('store：手动雾不会被改名/队员改名这类普通元数据覆盖',
   assert.equal(api.getWorld().maps[0].fog[30 * 50 + 40], 2, '真正移动后才自动覆盖');
 });
 
-test('store：材质/高度/贴图组改动不算视野脏，不覆盖手动雾', () => {
+function manualFogMarkedCell() {
   const map = manualFogWorld();
   api.paintFog(map.id, [[40, 30]], 'fogReveal');
-  const idx = 30 * 50 + 40;
+  return { map, idx: 30 * 50 + 40 };
+}
+
+test('store：材质改动不算视野脏，不覆盖手动雾', () => {
+  const { map, idx } = manualFogMarkedCell();
   assert.equal(api.getWorld().maps[0].fog[idx], 1);
   api.paintMaterialCells(map.id, [[40, 30]], 'wood');
   assert.equal(api.getWorld().maps[0].fog[idx], 1, '材质改动不该覆盖手动雾');
+  api.update((d) => { d.maps[0].tokens[0].x += 1; });
+  assert.equal(api.getWorld().maps[0].fog[idx], 2, '真正移动后才自动覆盖');
+});
+
+test('store：贴图组改动不算视野脏，不覆盖手动雾', () => {
+  const { map, idx } = manualFogMarkedCell();
+  assert.equal(api.getWorld().maps[0].fog[idx], 1);
   api.addCellGroup(map.id, '贴图组');
   assert.equal(api.getWorld().maps[0].fog[idx], 1, '贴图组改动不该覆盖手动雾');
+  api.update((d) => { d.maps[0].tokens[0].x += 1; });
+  assert.equal(api.getWorld().maps[0].fog[idx], 2, '真正移动后才自动覆盖');
+});
+
+test('store：高度改动不算视野脏，不覆盖手动雾', () => {
+  const { map, idx } = manualFogMarkedCell();
+  assert.equal(api.getWorld().maps[0].fog[idx], 1);
   api.update((d) => { const n = d.maps[0].width * d.maps[0].height; d.maps[0].heights = new Array(n).fill(0); });
   assert.ok(api.getWorld().maps[0].heights, '高度确实变了');
   assert.equal(api.getWorld().maps[0].fog[idx], 1, '高度改动不该覆盖手动雾');

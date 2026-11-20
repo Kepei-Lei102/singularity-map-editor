@@ -303,10 +303,14 @@ test('autoReveal 按棋子建视野表：同一角色两个棋子姿态不同，
   assert.ok(target.secrets[0].discoveries?.a, '站姿棋子看得见，线索应当浮现');
 });
 
-test('存档校验：真事件能过校验；events 不是数组/超 200 条要报错，导入时裁到 200', () => {
+function worldWithOneEvent() {
   fight();
   api.trialAttack('tb', { roll: 50, roller: () => 3 }); // 先落一条真事件
-  const w = api.getWorld();
+  return api.getWorld();
+}
+
+test('存档校验：合法事件通过；events 非数组/超 200 条拒绝', () => {
+  const w = worldWithOneEvent();
   api.checkWorld(w); // 真事件必须能过校验
   const bad = JSON.parse(JSON.stringify(w));
   bad.events = 'x';
@@ -320,7 +324,17 @@ test('存档校验：真事件能过校验；events 不是数组/超 200 条要�
     deltas: [],
   }));
   assert.throws(() => api.checkWorld(many), /200/);
+});
 
+test('导入 events：超 200 裁到 200，坏形状条目丢掉', () => {
+  const w = worldWithOneEvent();
+  const many = JSON.parse(JSON.stringify(w));
+  many.events = Array.from({ length: 205 }, (_, i) => ({
+    id: `e${i}`, at: i, session: 0,
+    actor: { kind: 'pc', id: 'a', name: '攻击者' },
+    action: { name: '攻击', source: '临场' },
+    deltas: [],
+  }));
   const fixed = api.repairWorld(many);
   assert.match(fixed.join('；'), /200/);
   assert.equal(many.events.length, 200);
