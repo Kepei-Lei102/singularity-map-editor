@@ -20,12 +20,12 @@ export { withVision } from './src/scene/perception';
 export { syncMemory } from './src/scene/memory';
 export { diffWorld } from './src/scene/dirty';
 export { planVision } from './src/scene/visionPlan';
-export { emptyWorld } from './src/core/defaults';`,
+export { emptyWorld, newMap } from './src/core/defaults';`,
     resolveDir: root,
   },
   outfile: bundle, bundle: true, platform: 'node', format: 'cjs', logLevel: 'silent',
 });
-const { produce, withVision, syncMemory, diffWorld, planVision, emptyWorld } = await import(bundle);
+const { produce, withVision, syncMemory, diffWorld, planVision, emptyWorld, newMap } = await import(bundle);
 after(() => rm(temp, { recursive: true, force: true }));
 
 function mkWorld(mode = 'shared') {
@@ -36,6 +36,12 @@ function mkWorld(mode = 'shared') {
     { id: 'b', name: '乙', sex: '女', heightCm: 164, color: '' },
     { id: 'c', name: '丙', sex: '其他', heightCm: 170, color: '' },
   ];
+  if (mode === 'grouped') {
+    w.visionGroups = [{ id: 'g1', name: '甲组' }, { id: 'g2', name: '乙组' }];
+    w.party[0].visionGroupId = 'g1';
+    w.party[1].visionGroupId = 'g1';
+    w.party[2].visionGroupId = 'g2';
+  }
   const m = w.maps[0];
   m.tokens = [
     { id: 't1', pcId: 'a', name: '甲', color: '', x: 5, y: 5 },
@@ -130,7 +136,8 @@ function runSequence(mode, steps = 24, seed0 = 20261120) {
     if (!plan.full) narrowed++;
     const visioned = withVision(next, prev, { plan });
     const inc = produce(visioned, (d) => syncMemory(d, plan));
-    const full = produce(visioned, (d) => syncMemory(d));
+    // full 必须从原始 prev 独立走全量视野，而不是拿已经 merge 过的 visioned 再 sync。
+    const full = produce(withVision(next, prev, { full: true }), (d) => syncMemory(d));
     compareSeen(inc, full, k, mode);
     // 每 20 步做一次收敛检查：从增量状态再跑一遍全量，必须和从全量状态再跑一遍全量结果一致。
     if (k === steps - 1) {
@@ -183,4 +190,42 @@ test('记忆同步：看得见的材质格要记下材质，看不见后要保�
   assert.equal(seenAt(synced, foot), 'wood', '灰格的材质记忆要保留');
   // 灰格里记得的地形也应该是当时看到的
   assert.equal(synced.maps[0].seen.cells[foot], world.maps[0].cells[foot]);
+});
+
+test('记忆合并：独立/分组模式下 mergeLayers 不能丢材质记忆', () => {
+  for (const mode of ['individual', 'grouped']) {
+    const w = emptyWorld();
+    w.visionMode = mode;
+    w.party = [
+      { id: 'a', name: '甲', sex: '男', heightCm: 173, color: '', visionGroupId: mode === 'grouped' ? 'g1' : undefined },
+      { id: 'b', name: '乙', sex: '女', heightCm: 164, color: '', visionGroupId: mode === 'grouped' ? 'g1' : undefined },
+    ];
+    if (mode === 'grouped') w.visionGroups = [{ id: 'g1', name: '甲组' }];
+    const map = newMap('材质', '现实', 0, 40, 30, 'floor', false);
+    map.autoFog = true;
+    map.tokens = [
+      { id: 'ta', pcId: 'a', name: '甲', color: '', x: 5, y: 5 },
+      { id: 'tb', pcId: 'b', name: '乙', color: '', x: 25, y: 20 },
+    ];
+    const tileCell = 20 * map.width + 25;
+    map.materialCells = { [tileCell]: 'tile' };
+    w.maps = [map];
+
+    let world = withVision(w, emptyWorld(), { full: true });
+    world = produce(world, (d) => syncMemory(d));
+    const remember = (label) => {
+      const m = world.maps[0];
+      assert.equal(m.seen.materialCells?.[tileCell], 'tile', `${mode}/${label}：地图层材质记忆`);
+      assert.equal(m.views.b.seen.materialCells?.[tileCell], 'tile', `${mode}/${label}：乙的材质记忆`);
+      if (mode === 'grouped') assert.equal(m.views.a.seen.materialCells?.[tileCell], 'tile', `${mode}/${label}：同组甲也继承材质记忆`);
+    };
+    remember('初始');
+
+    const next = produce(world, (d) => { d.maps[0].tokens[0].x = 6; });
+    const dirty = diffWorld(world, next);
+    const plan = planVision(next, dirty);
+    const inc = produce(withVision(next, world, { plan }), (d) => syncMemory(d, plan));
+    world = inc;
+    remember('甲走一格后');
+  }
 });

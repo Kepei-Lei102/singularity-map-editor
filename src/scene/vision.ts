@@ -1,8 +1,8 @@
-import type { GameMap, VisionLayer, World } from '../core/types';
+import type { GameMap, Id, VisionLayer, World } from '../core/types';
 import { current, isDraft } from 'immer';
 import { clipArchitecture } from './architecture';
 
-export const emptyVision = (n: number): VisionLayer => ({ fog: Array(n).fill(0), seen: { cells: Array(n).fill(''), objects: [], groups: [], groupRevs: {} } });
+export const emptyVision = (n: number): VisionLayer => ({ fog: Array(n).fill(0), seen: { cells: Array(n).fill(''), objects: [], groups: [], groupRevs: {}, materialCells: {} } });
 export const cloneLayer = (L: VisionLayer): VisionLayer => JSON.parse(JSON.stringify({ fog: L.fog, seen: L.seen }));
 
 export function visionKey(w: World, pcId: string): string {
@@ -44,11 +44,12 @@ export function mergeLayers(m: GameMap, layers: VisionLayer[]): VisionLayer {
   if (layers.length === 1) return cloneLayer(layers[0]);
   const out = emptyVision(m.width * m.height);
   out.seen.cellRevs = []; out.seen.observed = {}; out.seen.objectRevs = {}; out.seen.architectureRevs = {}; out.seen.groups = []; out.seen.groupRevs = {};
-  const choose = <T,>(items: { rev: number; value: T }[]) => items.sort((a, b) => b.rev - a.rev || JSON.stringify(b.value).localeCompare(JSON.stringify(a.value)))[0];
+  const choose = <T,>(items: { rev: number; value: T; material?: Id }[]) => items.sort((a, b) => b.rev - a.rev || JSON.stringify(b.value).localeCompare(JSON.stringify(a.value)))[0];
   for (let i = 0; i < out.fog.length; i++) {
     out.fog[i] = layers.some(L => L.fog[i] === 1) ? 1 : layers.some(L => L.fog[i]) ? 2 : 0;
-    const best = choose(layers.filter(L => L.fog[i]).map(L => ({ rev: L.seen.cellRevs?.[i] ?? 0, value: L.seen.cells[i] })));
+    const best = choose(layers.filter(L => L.fog[i]).map(L => ({ rev: L.seen.cellRevs?.[i] ?? 0, value: L.seen.cells[i], material: L.seen.materialCells?.[i] })));
     out.seen.cells[i] = best?.value ?? ''; out.seen.cellRevs[i] = best?.rev ?? 0;
+    if (best?.material) out.seen.materialCells![i] = best.material; else delete out.seen.materialCells![i];
   }
   const fragments = layers.map(L => {
     const bins = new Map<number, NonNullable<typeof L.seen.architecture>>();
