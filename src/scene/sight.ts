@@ -21,6 +21,8 @@ export const VISION_BUDGET = 1.56;
 export const BASE_CELL_COST = 0.1;
 /** 完全挡住：够高或者性质挡死。 */
 export const FULL_BLOCK = 99;
+/** 视野半径（主格）：预算 ÷ 每格最低消耗，向上取整。脏区圆盘用它，别自己写 15。 */
+export const VISION_RADIUS_CELLS = Math.ceil(VISION_BUDGET / BASE_CELL_COST);
 
 /** 眼高占身高的比例。 */
 export const EYE_RATIO = 0.93;
@@ -169,6 +171,64 @@ export function wallSightSum(geometry: ReturnType<typeof architectureGeometry>, 
   return sum;
 }
 
+/** 分桶边长（格）。100×80 是 13×10 个桶，一条 15 格的视线最多碰到 3×3 个桶。 */
+export const WALL_BUCKET_CELLS = 8;
+
+/** 墙段索引：每个桶记下和它相交的构件下标。 */
+export interface WallIndex {
+  cell: number;
+  cols: number;
+  rows: number;
+  buckets: number[][];
+  geometry: ReturnType<typeof architectureGeometry>;
+  /** 查询时给扫过的构件打标记，同一个构件跨多个桶只累加一次。 */
+  stamp: Int32Array;
+  tick: number;
+}
+
+export function buildWallIndex(map: GameMap, geometry: ReturnType<typeof architectureGeometry>): WallIndex {
+  const cell = WALL_BUCKET_CELLS;
+  const cols = Math.max(1, Math.ceil(map.width / cell));
+  const rows = Math.max(1, Math.ceil(map.height / cell));
+  const buckets: number[][] = Array.from({ length: cols * rows }, () => []);
+  for (let i = 0; i < geometry.length; i++) {
+    const r = geometry[i];
+    const x0 = Math.max(0, Math.floor(r.x / cell)), x1 = Math.min(cols - 1, Math.floor((r.x + r.w) / cell));
+    const y0 = Math.max(0, Math.floor(r.y / cell)), y1 = Math.min(rows - 1, Math.floor((r.y + r.h) / cell));
+    for (let by = y0; by <= y1; by++) for (let bx = x0; bx <= x1; bx++) buckets[by * cols + bx].push(i);
+  }
+  return { cell, cols, rows, buckets, geometry, stamp: new Int32Array(geometry.length), tick: 0 };
+}
+
+/**
+ * 和 `wallSightSum` 逐项等价：只测线段 bbox 覆盖到的桶里的构件。
+ * 桶按构件 bbox 登记，所以「线段与构件相交」必然意味着两者 bbox 相交、必然落在同一个桶里。
+ */
+export function wallSightSumIndexed(idx: WallIndex, from: Point, to: Point): number {
+  const { cell, cols, rows, geometry } = idx;
+  const x0 = Math.max(0, Math.floor(Math.min(from.x, to.x) / cell));
+  const x1 = Math.min(cols - 1, Math.floor(Math.max(from.x, to.x) / cell));
+  const y0 = Math.max(0, Math.floor(Math.min(from.y, to.y) / cell));
+  const y1 = Math.min(rows - 1, Math.floor(Math.max(from.y, to.y) / cell));
+  if (x0 > x1 || y0 > y1) return 0;
+  if (idx.tick >= 0x7ffffffe) { idx.stamp.fill(0); idx.tick = 0; }
+  const tick = ++idx.tick;
+  let sum = 0;
+  for (let by = y0; by <= y1; by++) for (let bx = x0; bx <= x1; bx++) {
+    for (const i of idx.buckets[by * cols + bx]) {
+      if (idx.stamp[i] === tick) continue;
+      idx.stamp[i] = tick;
+      const r = geometry[i];
+      const c = wallSightCostOf(r);
+      if (c <= 0) continue;
+      const inside = to.x >= r.x && to.x <= r.x + r.w && to.y >= r.y && to.y <= r.y + r.h;
+      if (inside) continue;
+      if (segmentHitsRect(from, to, r)) sum += c;
+    }
+  }
+  return sum;
+}
+
 /** 沿视线累加（逐格系数 + 穿过的墙按 2 记）；超过预算就看不见。 */
 export function canSee(cost: Float32Array, width: number, x0: number, y0: number, x1: number, y1: number, budget = VISION_BUDGET): boolean {
   return cellSightTotal(cost, width, x0, y0, x1, y1) <= budget;
@@ -254,44 +314,102 @@ function subcellLineBlocked(block: Uint8Array, width3: number, x0: number, y0: n
  *   3. 细分格的挡死小块（visionCoef ≥ 99）。
  * 细分过的主格按 3×3 小格判，任意一小格看得见就整格可见。
  */
-export function visionOf(world: World, map: GameMap, viewer: Viewer): Uint8Array {
-  const eye = eyeHeight(viewer);
-  const cost = cellSightCost(world, map, eye);
+export function visionOf(world: World, map: GameMap, viewer: Viewer, ctx?: SightCtx): Uint8Array {
+  const tables = (ctx ?? localSightCtx(world, map)).tablesFor(eyeHeight(viewer));
+  return visionWithTables(map, viewer, tables);
+}
+
+/** 一次视野判定要用的表。建表是 O(格数 + 建筑段)，所以一批观察者应该共用。 */
+export interface SightTables {
+  cost: Float32Array;
+  geometry: ReturnType<typeof architectureGeometry>;
+  block: Uint8Array | null;
+  /** 墙段按格分桶；没有索引时退回全扫（`wallSightSum`）。 */
+  walls?: WallIndex;
+}
+
+/** 一批观察者共用的表：同眼高只建一次，和地图有关的只建一次。 */
+export interface SightCtx { tablesFor(eye: number): SightTables }
+
+export function buildSightTables(world: World, map: GameMap, eye: number): SightTables {
   const geometry = architectureGeometry(map);
-  const block = sightSubcellBlockers(world, map);
+  return {
+    cost: cellSightCost(world, map, eye),
+    geometry,
+    block: sightSubcellBlockers(world, map),
+    walls: buildWallIndex(map, geometry),
+  };
+}
+
+/** 一次调用内自己管表（没有外部缓存时的兜底）；同眼高复用。 */
+export function localSightCtx(world: World, map: GameMap): SightCtx {
+  const byEye = new Map<number, SightTables>();
+  return {
+    tablesFor(eye: number): SightTables {
+      let t = byEye.get(eye);
+      if (!t) { t = buildSightTables(world, map, eye); byEye.set(eye, t); }
+      return t;
+    },
+  };
+}
+
+/** 用现成的三张表算一个观察者看得见哪些格。 */
+export function visionWithTables(
+  map: GameMap, viewer: Viewer, tables: SightTables, cells?: Iterable<number>,
+): Uint8Array {
+  const { cost, geometry, block } = tables;
   const w3 = map.width * SUB, h3 = map.height * SUB;
   const cone = viewer.facing ? coneFor(map, viewer.x, viewer.y) : 360;
   const p = eyePoint(viewer);
+  // 有分桶就走索引，没有就退回「逐段全扫」，两条路结果必须一样。
+  const wallSum = tables.walls
+    ? (to: Point) => wallSightSumIndexed(tables.walls!, p, to)
+    : (to: Point) => wallSightSum(geometry, p, to);
   const vis = new Uint8Array(map.width * map.height);
-  const maxCells = Math.ceil(VISION_BUDGET / BASE_CELL_COST); // 15
+  const maxCells = VISION_RADIUS_CELLS;
   const clear = (target: Point) => {
     const total = cellSightTotal(cost, map.width, Math.floor(p.x), Math.floor(p.y), Math.floor(target.x), Math.floor(target.y));
     if (total > VISION_BUDGET) return false;
     // 墙按系数 2 记：穿过一道就 2 > 1.56，等于挡住；开门的话几何里没有这块，不额外加。
-    if (total + wallSightSum(geometry, p, target) > VISION_BUDGET) return false;
+    if (total + wallSum(target) > VISION_BUDGET) return false;
     return !subcellBlockedWith(block, w3, h3, p, target);
   };
-  for (let y = 0; y < map.height; y++) for (let x = 0; x < map.width; x++) {
-    if (gridDist(x - viewer.x, y - viewer.y) > maxCells) continue;
-    if (viewer.facing && !inCone(viewer.facing, viewer.x, viewer.y, x, y, cone)) continue;
+  // 单个主格看得见吗；每个格子只依赖三张表和眼睛位置，所以可以只算指定格。
+  const look = (x: number, y: number): boolean => {
+    if (gridDist(x - viewer.x, y - viewer.y) > maxCells) return false;
+    if (viewer.facing && !inCone(viewer.facing, viewer.x, viewer.y, x, y, cone)) return false;
     const n = hasFineDetail(map, x, y) ? SUB : 1;
-    let seen = false;
-    for (let sy = 0; sy < n && !seen; sy++) for (let sx = 0; sx < n && !seen; sx++) {
-      if (clear({ x: x + (sx + 0.5) / n, y: y + (sy + 0.5) / n })) seen = true;
+    for (let sy = 0; sy < n; sy++) for (let sx = 0; sx < n; sx++)
+      if (clear({ x: x + (sx + 0.5) / n, y: y + (sy + 0.5) / n })) return true;
+    return false;
+  };
+  if (cells) {
+    for (const i of cells) {
+      const x = i % map.width, y = Math.floor(i / map.width);
+      if (look(x, y)) vis[i] = 1;
     }
-    if (seen) vis[y * map.width + x] = 1;
+    return vis;
   }
+  for (let y = 0; y < map.height; y++) for (let x = 0; x < map.width; x++) if (look(x, y)) vis[y * map.width + x] = 1;
   return vis;
 }
 
 /** 队伍视野：各人取并集。 */
-export function partyVisionOf(world: World, map: GameMap, viewers: Viewer[]): Uint8Array {
+export function partyVisionOf(world: World, map: GameMap, viewers: Viewer[], ctx?: SightCtx, cells?: Iterable<number>): Uint8Array {
+  const tables = ctx ?? localSightCtx(world, map);
   const out = new Uint8Array(map.width * map.height);
+  const list = cells ? [...cells] : null;
   for (const v of viewers) {
-    const one = visionOf(world, map, v);
-    for (let i = 0; i < out.length; i++) if (one[i]) out[i] = 1;
+    const one = visionWithTables(map, v, tables.tablesFor(eyeHeight(v)), list ?? undefined);
+    if (list) { for (const i of list) if (one[i]) out[i] = 1; }
+    else for (let i = 0; i < out.length; i++) if (one[i]) out[i] = 1;
   }
   return out;
+}
+
+/** 只算给定格集合（脏区）的队伍视野；网格外的格子保持 0。 */
+export function partyVisionCells(world: World, map: GameMap, viewers: Viewer[], cells: Iterable<number>, ctx?: SightCtx): Uint8Array {
+  return partyVisionOf(world, map, viewers, ctx, cells);
 }
 
 
@@ -301,7 +419,9 @@ export function partyVisionOf(world: World, map: GameMap, viewers: Viewer[]): Ui
  */
 export interface SightCache { cost: Float32Array; block: Uint8Array | null }
 
-export function sightCacheFor(world: World, map: GameMap, eye: Viewer): SightCache {
+export function sightCacheFor(world: World, map: GameMap, eye: Viewer, ctx?: SightCtx): SightCache {
+  // 传了 ctx 就复用已经建好的表（交互判定里会被反复取，别再按人重建全图）。
+  if (ctx) { const t = ctx.tablesFor(eyeHeight(eye)); return { cost: t.cost, block: t.block }; }
   return { cost: cellSightCost(world, map, eyeHeight(eye)), block: sightSubcellBlockers(world, map) };
 }
 

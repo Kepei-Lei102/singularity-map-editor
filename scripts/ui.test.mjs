@@ -311,3 +311,193 @@ test('改地图尺寸时高度跟着重排', () => {
   assert.equal(m.heights[2 * 5 + 3], 5, '同一格高度不变');
   assert.equal(m.heights[2 * 5 + 1], 0, '没抬高过的格子还是 0');
 });
+
+test('store.update：改 D100 区既重算视野，也同步记忆', () => {
+  const world = api.emptyWorld();
+  world.party = [{ id: 'a', name: '甲', sex: '男', heightCm: 173, color: '' }];
+  const map = api.newMap('D100 视野', '现实', 0, 24, 20, 'floor', false);
+  map.autoFog = true;
+  map.tokens = [{ id: 't1', pcId: 'a', name: '甲', color: '', x: 4, y: 10, facing: '东' }];
+  map.d100[10 * map.width + 4] = 1; // 站在 D100 区里：60° 锥
+  world.maps = [map];
+  api.replaceWorld(world);
+
+  const before = api.getWorld().maps[0];
+  const beforeFog = before.fog.slice();
+  api.update((d) => { d.maps[0].d100[10 * d.maps[0].width + 4] = 0; }); // 移出 D100 区：120° 锥
+  const after = api.getWorld().maps[0];
+  const idx = after.fog.findIndex((f, i) => f === 1 && beforeFog[i] !== 1);
+  assert.ok(idx >= 0, 'D100 改动后应该有新看见的格');
+  assert.equal(after.seen.cells[idx], after.cells[idx], '新看见的格要进记忆');
+});
+
+test('store：独立/分组手动雾在 syncMemory clone 后仍按自动迷雾覆盖', () => {
+  for (const mode of ['individual', 'grouped']) {
+    const world = api.emptyWorld();
+    world.visionMode = mode;
+    if (mode === 'grouped') world.visionGroups = [{ id: 'g1', name: '甲组' }, { id: 'g2', name: '乙组' }];
+    world.party = [
+      { id: 'a', name: '甲', sex: '男', heightCm: 173, color: '', visionGroupId: mode === 'grouped' ? 'g1' : undefined },
+      { id: 'b', name: '乙', sex: '女', heightCm: 164, color: '', visionGroupId: mode === 'grouped' ? 'g1' : undefined },
+      { id: 'c', name: '丙', sex: '其他', heightCm: 170, color: '', visionGroupId: mode === 'grouped' ? 'g2' : undefined },
+    ];
+    const map = api.newMap('手动雾', '现实', 0, 50, 40, 'floor', false);
+    map.autoFog = true;
+    map.tokens = [
+      { id: 'ta', pcId: 'a', name: '甲', color: '', x: 5, y: 5 },
+      { id: 'tb', pcId: 'b', name: '乙', color: '', x: 8, y: 8 },
+      { id: 'tc', pcId: 'c', name: '丙', color: '', x: 12, y: 9 },
+    ];
+    world.maps = [map];
+    api.replaceWorld(world);
+    const idx = 30 * 50 + 40;
+    // individual 只涂甲；grouped 涂另一组的丙，锁“按目标角色”而不是整图一起涂。
+    const target = mode === 'individual' ? { pc: 'a', token: 0 } : { pc: 'c', token: 2 };
+    api.paintFog(map.id, [[40, 30]], 'fogReveal', [target.pc]);
+    assert.equal(api.getWorld().maps[0].views[target.pc].fog[idx], 1, `${mode}：手动点亮远处格`);
+    assert.equal(api.getWorld().maps[0].fog[idx], 1, `${mode}：地图并集先变可见`);
+    for (const other of mode === 'individual' ? ['b'] : ['a', 'b']) {
+      assert.equal(api.getWorld().maps[0].views[other].fog[idx], 0, `${mode}：非目标 ${other} 不该被涂`);
+    }
+    api.update((d) => { d.session += 1; });
+    assert.equal(api.getWorld().maps[0].views[target.pc].fog[idx], 1, `${mode}：无关 update 先保留手动雾`);
+    api.update((d) => { d.maps[0].tokens[target.token].x += 1; });
+    assert.equal(api.getWorld().maps[0].views[target.pc].fog[idx], 2, `${mode}：下一次移动自动覆盖成记忆灰`);
+    assert.equal(api.getWorld().maps[0].fog[idx], 2, `${mode}：地图并集也变记忆灰`);
+  }
+});
+
+test('store：手动雾自动覆盖后 undo 再移动仍会覆盖', () => {
+  const world = api.emptyWorld();
+  world.party = [{ id: 'a', name: '甲', sex: '男', heightCm: 173, color: '' }];
+  const map = api.newMap('手动雾', '现实', 0, 50, 40, 'floor', false);
+  map.autoFog = true;
+  map.tokens = [{ id: 'ta', pcId: 'a', name: '甲', color: '', x: 5, y: 5 }];
+  world.maps = [map];
+  api.replaceWorld(world);
+  const idx = 30 * 50 + 40;
+  api.paintFog(map.id, [[40, 30]], 'fogReveal');
+  assert.equal(api.getWorld().maps[0].fog[idx], 1);
+  api.update((d) => { d.session += 1; });
+  assert.equal(api.getWorld().maps[0].fog[idx], 1);
+  api.update((d) => { d.maps[0].tokens[0].x += 1; });
+  assert.equal(api.getWorld().maps[0].fog[idx], 2, '移动时自动覆盖');
+  api.undo();
+  assert.equal(api.getWorld().maps[0].fog[idx], 1, 'undo 回到手动雾');
+  api.update((d) => { d.maps[0].tokens[0].x += 1; });
+  assert.equal(api.getWorld().maps[0].fog[idx], 2, 'undo 后再移动仍要覆盖');
+});
+
+function manualFogWorld() {
+  const world = api.emptyWorld();
+  world.party = [{ id: 'a', name: '甲', sex: '男', heightCm: 173, color: '' }];
+  const map = api.newMap('手动雾', '现实', 0, 50, 40, 'floor', false);
+  map.autoFog = true;
+  map.tokens = [{ id: 'ta', pcId: 'a', name: '甲', color: '', x: 5, y: 5 }];
+  world.maps = [map];
+  api.replaceWorld(world);
+  return map;
+}
+
+test('store：手动雾 redo 与 autoFog 开关', () => {
+  // redo：手动 1 → 移动 2 → undo 1 → redo 2 → undo 1 → 再移动 2。
+  let map = manualFogWorld();
+  api.paintFog(map.id, [[40, 30]], 'fogReveal');
+  api.update((d) => { d.session += 1; });
+  api.update((d) => { d.maps[0].tokens[0].x += 1; });
+  assert.equal(api.getWorld().maps[0].fog[30 * 50 + 40], 2);
+  api.undo();
+  assert.equal(api.getWorld().maps[0].fog[30 * 50 + 40], 1);
+  api.redo();
+  assert.equal(api.getWorld().maps[0].fog[30 * 50 + 40], 2);
+  api.undo();
+  assert.equal(api.getWorld().maps[0].fog[30 * 50 + 40], 1);
+  api.update((d) => { d.maps[0].tokens[0].x += 1; });
+  assert.equal(api.getWorld().maps[0].fog[30 * 50 + 40], 2);
+
+  // autoFog 开→关→开：关着时保留，开回来时自动覆盖。
+  map = manualFogWorld();
+  api.paintFog(map.id, [[40, 30]], 'fogReveal');
+  assert.equal(api.getWorld().maps[0].fog[30 * 50 + 40], 1);
+  api.update((d) => { d.maps[0].autoFog = false; });
+  assert.equal(api.getWorld().maps[0].fog[30 * 50 + 40], 1);
+  api.update((d) => { d.session += 1; });
+  assert.equal(api.getWorld().maps[0].fog[30 * 50 + 40], 1);
+  api.update((d) => { d.maps[0].autoFog = true; });
+  assert.equal(api.getWorld().maps[0].fog[30 * 50 + 40], 2);
+});
+
+test('store：individual 手动雾第二笔单独一步，不靠第一笔标记', () => {
+  const world = api.emptyWorld();
+  world.visionMode = 'individual';
+  world.party = [
+    { id: 'a', name: '甲', sex: '男', heightCm: 173, color: '' },
+    { id: 'b', name: '乙', sex: '女', heightCm: 164, color: '' },
+  ];
+  const map = api.newMap('手动雾', '现实', 0, 50, 40, 'floor', false);
+  map.autoFog = true;
+  map.tokens = [{ id: 'ta', pcId: 'a', name: '甲', color: '', x: 5, y: 5 }];
+  world.maps = [map];
+  api.replaceWorld(world);
+  api.paintFog(map.id, [[40, 30]], 'fogReveal', ['a']);
+  assert.equal(api.getWorld().maps[0].views.a.fog[30 * 50 + 40], 1);
+  api.undo();
+  assert.equal(api.getWorld().maps[0].views.a.fog[30 * 50 + 40], 0, '第一笔撤销后不留下标记');
+  api.paintFog(map.id, [[35, 35]], 'fogReveal', ['a']);
+  assert.equal(api.getWorld().maps[0].views.a.fog[35 * 50 + 35], 1);
+  api.update((d) => { d.session += 1; });
+  assert.equal(api.getWorld().maps[0].views.a.fog[35 * 50 + 35], 1);
+  api.update((d) => { d.maps[0].tokens[0].x += 1; });
+  assert.equal(api.getWorld().maps[0].views.a.fog[35 * 50 + 35], 2, '第二笔单独一步也要被下一次移动覆盖');
+});
+
+test('store：individual 手动雾后 groups 触发的记忆同步仍保留 pending', () => {
+  const world = api.emptyWorld();
+  world.visionMode = 'individual';
+  world.party = [
+    { id: 'a', name: '甲', sex: '男', heightCm: 173, color: '' },
+    { id: 'b', name: '乙', sex: '女', heightCm: 164, color: '' },
+  ];
+  const map = api.newMap('手动雾', '现实', 0, 50, 40, 'floor', false);
+  map.autoFog = true;
+  map.tokens = [
+    { id: 'ta', pcId: 'a', name: '甲', color: '', x: 5, y: 5 },
+    { id: 'tb', pcId: 'b', name: '乙', color: '', x: 8, y: 8 },
+  ];
+  world.maps = [map];
+  api.replaceWorld(world);
+  const idx = 30 * 50 + 40;
+  api.paintFog(map.id, [[40, 30]], 'fogReveal', ['a']);
+  assert.equal(api.getWorld().maps[0].views.a.fog[idx], 1);
+  api.addCellGroup(map.id, '贴图组'); // 记忆脏但非视野脏：syncMemory 会 clone 视野层
+  assert.equal(api.getWorld().maps[0].views.a.fog[idx], 1);
+  api.update((d) => { d.maps[0].tokens[0].x += 1; });
+  assert.equal(api.getWorld().maps[0].views.a.fog[idx], 2, 'clone 后下一次移动仍要覆盖');
+});
+
+test('store：D100 改动在 individual/grouped 下也同步 seen', () => {
+  for (const mode of ['individual', 'grouped']) {
+    const world = api.emptyWorld();
+    world.visionMode = mode;
+    if (mode === 'grouped') world.visionGroups = [{ id: 'g1', name: '甲组' }];
+    world.party = [
+      { id: 'a', name: '甲', sex: '男', heightCm: 173, color: '', visionGroupId: mode === 'grouped' ? 'g1' : undefined },
+      { id: 'b', name: '乙', sex: '女', heightCm: 164, color: '', visionGroupId: mode === 'grouped' ? 'g1' : undefined },
+    ];
+    const map = api.newMap('D100 视野', '现实', 0, 24, 20, 'floor', false);
+    map.autoFog = true;
+    map.tokens = [{ id: 'ta', pcId: 'a', name: '甲', color: '', x: 4, y: 10, facing: '东' }];
+    map.d100[10 * map.width + 4] = 1;
+    world.maps = [map];
+    api.replaceWorld(world);
+    const before = api.getWorld().maps[0].views.a.fog.slice();
+    api.update((d) => { d.maps[0].d100[10 * d.maps[0].width + 4] = 0; });
+    const after = api.getWorld().maps[0];
+    const idx = after.views.a.fog.findIndex((f, i) => f === 1 && before[i] !== 1);
+    assert.ok(idx >= 0, `${mode}：D100 改动后应该有新看见的格`);
+    assert.equal(after.views.a.seen.cells[idx], after.cells[idx], `${mode}：新看见的格要进这个玩家的记忆`);
+    if (mode === 'grouped') {
+      assert.equal(after.views.b.seen.cells[idx], after.cells[idx], 'grouped：同组第二个人也要有这份记忆');
+    }
+  }
+});

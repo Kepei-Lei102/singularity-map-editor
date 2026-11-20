@@ -9,6 +9,8 @@ import { migrateWorld, syncMemory } from '../scene/memory';
 import type { CombatNotice } from './types';
 import { setMediaIndex } from '../runtime/media';
 import { withVision } from '../scene/perception';
+import { markManualFog, diffWorld } from '../scene/dirty';
+import { planVision } from '../scene/visionPlan';
 import { loadSlot, saveSlot } from './persist';
 import { onSessionRenewed } from './session';
 
@@ -135,7 +137,7 @@ function memoryDirty(a: World, b: World): boolean {
   for (const m of b.maps) {
     const o = a.maps.find((x) => x.id === m.id);
     if (!o) return true;
-    if (o.cells !== m.cells || o.fineCells !== m.fineCells || o.objects !== m.objects || o.tokens !== m.tokens
+    if (o.cells !== m.cells || o.fineCells !== m.fineCells || o.d100 !== m.d100 || o.objects !== m.objects || o.tokens !== m.tokens
       || o.architecture !== m.architecture || o.architectureFragments !== m.architectureFragments
       || o.heights !== m.heights || o.fog !== m.fog
       || o.views !== m.views || o.autoFog !== m.autoFog
@@ -158,8 +160,17 @@ export function update(fn: (d: Draft<World>) => void, opts: { coalesce?: string;
     if (error) { toast(error); return; }
   }
   const needMemory = memoryDirty(world, next);
-  next = produce(withVision(next, world), (d) => { if (needMemory) syncMemory(d); });
+  // 脏集只算一次：视野只写脏格，记忆也只同步脏格。
+  const plan = planVision(next, diffWorld(world, next));
+  const manualPending = new Set<string>();
+  next = produce(withVision(next, world, { plan, onManualPending: (id) => manualPending.add(id) }), (d) => { if (needMemory) syncMemory(d, plan); });
   next = bumpStateRevs(world, next);
+  // syncMemory 在独立/分组模式会 clone fog 数组，withVision 里打的标记会落在旧数组上。
+  // 标记必须跟着最终落盘的数组走，否则下一次视野脏动不会整图覆盖。
+  for (const id of manualPending) {
+    const m = next.maps.find((x) => x.id === id);
+    if (m?.autoFog) markManualFog(m);
+  }
   if (batching && batchStart) { pushHistory(batchStart); batchStart = null; } // 拖动里第一次真的改了东西，才记一步撤销
   else if (!batching && opts.history !== false) {
     const now = Date.now();

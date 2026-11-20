@@ -2,7 +2,10 @@ import { objectEnabled } from '../core/objectData.js';
 import { architectureBlocksSight, architectureGeometry, isArchitectureObject, tokenPosition, isSubdivided } from './architecture';
 import { produce } from 'immer';
 import type { GameMap, MapObject, Token, VisionLayer, World } from '../core/types';
-import { partyVisionOf, sightCacheFor, visiblePoint, viewerOf, type SightCache, type Viewer } from './sight';
+import { partyVisionOf, sightCacheFor, visiblePoint, viewerOf, type SightCache, type SightCtx, type Viewer } from './sight';
+import { sightCtxFor } from './sightIndex';
+import { diffWorld, isManualFog, markManualFog } from './dirty';
+import { planVision, type MapScope, type VisionPlan } from './visionPlan';
 import { cloneLayer, emptyVision, mergeLayers, visionKey } from './vision';
 import { cellLine, gridDist } from '../core/util';
 
@@ -41,7 +44,7 @@ function sightToObject(world: World, map: GameMap, eye: Viewer, o: MapObject, sh
   const p = tokenPosition(eye);
   // 代价表跟眼睛有关、挡死表跟地图有关，一次判定内不变：建一次，物件每个子格都复用。
   // 调用方（autoReveal）可以传入按队员建好的表，避免物件 × 队员次重建。
-  const cache = shared ?? sightCacheFor(world, map, eye);
+  const cache = shared ?? sightCacheFor(world, map, eye, sightCtxFor(world, map));
   let best = { d: Infinity, los: false };
   if (isArchitectureObject(o)) {
     const geometry = architectureGeometry(map, true), others = geometry.filter(r => r.objectId !== o.id && r.blocksSight);
@@ -66,12 +69,14 @@ function sightToObject(world: World, map: GameMap, eye: Viewer, o: MapObject, sh
  * 规则书视野。只有棋子才有朝向和姿态，所以这里收棋子列表而不是坐标。
  * 迷雾按大格记；小格地形仍参与线遮挡，但不会再单独生成一份小格迷雾。
  */
-export function detailedVisionRulebook(world: World, map: GameMap, tokens: Token[]): Uint8Array {
+export function detailedVisionRulebook(
+  world: World, map: GameMap, tokens: Token[], ctx?: SightCtx, cells?: Iterable<number>,
+): Uint8Array {
   const viewers = tokens.map((t) => {
     const pc = world.party.find((p) => p.id === t.pcId);
     return viewerOf(t, { sex: pc?.sex, heightCm: pc?.heightCm });
   });
-  return partyVisionOf(world, map, viewers);
+  return partyVisionOf(world, map, viewers, ctx, cells);
 }
 
 const step = (f: number, seeing: number) => (seeing ? 1 : f === 1 ? 2 : f);
@@ -81,39 +86,66 @@ const step = (f: number, seeing: number) => (seeing ? 1 : f === 1 ? 2 : f);
  * 全队共享：全队一份，看得见 → 1，原来看得见、现在看不见 → 2（记忆）。
  * 各自独立：每个玩家角色一份（map.views），只算他自己的眼睛；地图上那份是所有人的并集，给主持人看。
  */
-export function withVision(next: World, prev: World): World {
-  return produce(next, d => {
+export function withVision(next: World, prev: World, opts: { full?: boolean; plan?: VisionPlan; onManualPending?: (mapId: string) => void } = {}): World {
+  // 只有「纯棋子移动」才收窄到圆盘；结构变化和世界级変化一律整图重算。
+  const plan = opts.full ? null : opts.plan ?? planVision(next, diffWorld(prev, next));
+  const scopeOf = (mapId: string): MapScope | undefined => {
+    if (!plan || plan.full) return undefined; // 整图
+    return plan.maps.get(mapId);
+  };
+  const markAfter = new Set<string>();
+  const out = produce(next, d => {
     const membershipChanged = next.party !== prev.party || next.visionGroups !== prev.visionGroups || next.visionMode !== prev.visionMode;
     for (const m of d.maps) {
       const src = next.maps.find(x => x.id === m.id)!;
       const before = prev.maps.find(x => x.id === m.id);
-      const dirty = membershipChanged || !before || !before.autoFog || before.cells !== src.cells || before.fineCells !== src.fineCells || before.objects !== src.objects || before.tokens !== src.tokens || before.architecture !== src.architecture || before.materialCells !== src.materialCells || before.fineMaterials !== src.fineMaterials || next.terrains !== prev.terrains;
+      // 视野表按眼高复用：全队 9 个人多半只有一两种眼高，别每人重建一遍。
+      const sightCtx = sightCtxFor(next, src);
+      const manual = !!before && isManualFog(before);
+      const manualChanged = !!before && (before.fog !== src.fog || before.views !== src.views);
+      const otherDirty = membershipChanged || !before || !before.autoFog || before.cells !== src.cells || before.fineCells !== src.fineCells || before.d100 !== src.d100 || before.objects !== src.objects || before.tokens !== src.tokens || before.architecture !== src.architecture || before.materialCells !== src.materialCells || before.fineMaterials !== src.fineMaterials || next.terrains !== prev.terrains;
       const ids = new Set(d.party.map(p => p.id));
       for (const id of Object.keys(m.views)) if (!ids.has(id)) delete m.views[id];
       for (const p of d.party) m.views[p.id] ??= emptyVision(m.width * m.height);
+      // 手动雾要等下一次“有别的视野脏动”的 update 才让自动迷雾接管；只在改雾的 update 里不能覆盖。
+      const manualApply = manual && (otherDirty || !!opts.full);
+      const scope = manualApply ? undefined : scopeOf(src.id);
+      const manualPending = src.autoFog && ((manual && !manualApply) || (manualChanged && !(otherDirty || opts.full)));
+      if (manualPending) opts.onManualPending?.(src.id);
+      if (manualChanged && src.autoFog && !(otherDirty || opts.full)) markAfter.add(src.id);
       const apply = (L: VisionLayer, members: Set<string>) => {
+        if (scope && scope.size === 0) return; // 这张图没变
         const mine = src.tokens.filter(t => t.pcId && members.has(t.pcId));
-        const vis = detailedVisionRulebook(next, src, mine);
-        L.fog = L.fog.map((f, i) => step(f, vis[i]));
+        const cells = scope ? [...scope] : undefined;
+        const vis = detailedVisionRulebook(next, src, mine, sightCtx, cells);
+        if (cells) for (const i of cells) L.fog[i] = step(L.fog[i], vis[i]);
+        else L.fog = L.fog.map((f, i) => step(f, vis[i]));
       };
       if (prev.visionMode === 'shared' && next.visionMode !== 'shared' && before)
         for (const p of d.party) m.views[p.id] = cloneLayer(before);
       if (next.visionMode === 'shared') {
         if (prev.visionMode !== 'shared') Object.assign(m, mergeLayers(src, d.party.map(p => m.views[p.id])));
-        if (m.autoFog && dirty) apply(m, ids);
-        for (const p of d.party) m.views[p.id] = cloneLayer(m);
+        if (m.autoFog && (otherDirty || opts.full)) apply(m, ids);
+        // 共享模式下每个人的视野和地图那份内容完全相同，没必要复制一份：共用 fog/seen 两个数组。
+        // 切到「各自独立」时上面的 cloneLayer(before) 会补上真正的副本。
+        for (const p of d.party) m.views[p.id] = { fog: m.fog, seen: m.seen };
       } else {
         const groups = new Map<string, string[]>();
         for (const p of d.party) { const key = visionKey(next, p.id); groups.set(key, [...groups.get(key) ?? [], p.id]); }
         for (const members of groups.values()) {
           const L = members.length === 1 ? cloneLayer(m.views[members[0]]) : mergeLayers(src, members.map(id => m.views[id]));
-          if (m.autoFog && dirty) apply(L, new Set(members));
+          if (m.autoFog && (otherDirty || opts.full)) apply(L, new Set(members));
           for (const id of members) m.views[id] = cloneLayer(L);
         }
         Object.assign(m, mergeLayers(src, d.party.map(p => m.views[p.id])));
       }
     }
   });
+  for (const id of markAfter) {
+    const m = out.maps.find((x) => x.id === id);
+    if (m?.autoFog) markManualFog(m);
+  }
+  return out;
 }
 
 export interface Nearest { tokenId: string; name: string; d: number; los: boolean }

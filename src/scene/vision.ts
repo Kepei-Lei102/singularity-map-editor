@@ -98,14 +98,59 @@ export function mergeLayers(m: GameMap, layers: VisionLayer[]): VisionLayer {
   return out;
 }
 
-export function pruneMemory(m: GameMap, L: VisionLayer) {
+/** 脏区的外接矩形（主格）。只用来快速排除和脏区无关的记忆条目。 */
+function scopeRect(m: { width: number }, scope: Set<number>) {
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  for (const i of scope) {
+    const x = i % m.width, y = Math.floor(i / m.width);
+    if (x < x0) x0 = x; if (x > x1) x1 = x;
+    if (y < y0) y0 = y; if (y > y1) y1 = y;
+  }
+  return { x0, y0, x1, y1 };
+}
+
+const rectHits = (box: { x0: number; y0: number; x1: number; y1: number }, r: { x: number; y: number; w: number; h: number }) =>
+  r.x <= box.x1 && r.x + r.w - 1 >= box.x0 && r.y <= box.y1 && r.y + r.h - 1 >= box.y0;
+
+/**
+ * 清掉已经不该存在的记忆。给了 scope 就只处理脏区：脏区外的雾没变，
+ * 那里的记忆条目也不可能变成“全都没去过”。
+ */
+export function pruneMemory(m: GameMap, L: VisionLayer, scope?: Set<number>) {
   const source = isDraft(m) ? current(m) : m;
   const layer = isDraft(L) ? current(L) : L;
-  L.seen.objects = layer.seen.objects.filter(o => spatialKeys(source, o).some(key => spatialFog(source, layer, key)));
-  L.seen.groups = (layer.seen.groups ?? []).flatMap((g) => {
+  const box = scope ? scopeRect(source, scope) : null;
+  if (!box) L.seen.objects = layer.seen.objects.filter(o => spatialKeys(source, o).some(key => spatialFog(source, layer, key)));
+  else {
+    const kept = layer.seen.objects.filter((o) => !rectHits(box, o) || spatialKeys(source, o).some((key) => spatialFog(source, layer, key)));
+    if (kept.length !== layer.seen.objects.length) L.seen.objects = kept;
+  }
+  if (!box) L.seen.groups = (layer.seen.groups ?? []).flatMap((g) => {
     const cells = g.cells.filter((key) => spatialFog(source, layer, key) > 0);
     return cells.length ? [{ ...g, cells }] : [];
   });
+  else {
+    const w3 = source.width * 3;
+    const inBox = (key: number) => {
+      const x = Math.floor((key % w3) / 3), y = Math.floor(Math.floor(key / w3) / 3);
+      return x >= box.x0 && x <= box.x1 && y >= box.y0 && y <= box.y1;
+    };
+    L.seen.groups = (layer.seen.groups ?? []).flatMap((g) => {
+      if (!g.cells.some(inBox)) return [g]; // 脏区外：原样留着
+      const cells = g.cells.filter((key) => spatialFog(source, layer, key) > 0);
+      return cells.length ? [{ ...g, cells }] : [];
+    });
+  }
   L.seen.architecture = [...clipArchitecture(source, layer, 1, layer.seen.architecture ?? []), ...clipArchitecture(source, layer, 2, layer.seen.architecture ?? [])];
-  for (const key of Object.keys(layer.seen.observed ?? {})) if (!spatialFog(source, layer, +key)) delete L.seen.observed![+key];
+  if (!box) { for (const key of Object.keys(layer.seen.observed ?? {})) if (!spatialFog(source, layer, +key)) delete L.seen.observed![+key]; }
+  else {
+    const w3 = source.width * 3;
+    for (const i of scope!) {
+      const cx = i % source.width, cy = Math.floor(i / source.width);
+      for (let sy = 0; sy < 3; sy++) for (let sx = 0; sx < 3; sx++) {
+        const key = (cy * 3 + sy) * w3 + (cx * 3 + sx);
+        if (layer.seen.observed?.[key] && !spatialFog(source, layer, key)) delete L.seen.observed![key];
+      }
+    }
+  }
 }
