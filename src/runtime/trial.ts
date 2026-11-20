@@ -2350,31 +2350,73 @@ export function trialOpportunityAttack(opts: { roll?: number; roller?: Roller } 
       // 不是「纯幸运骰 51+」——那条是 resolveLuck 的口径，借机攻击不用它。
       const roll = opts.roll ?? 1 + Math.floor(Math.random() * 100);
       const r = rollAttack(roll, 8, opts.roller, diceMultiplier);
+      const deltas: Delta[] = [];
+      const oldLabel = mv.status?.label ?? (mv.down ? downedLabel('down') : null);
       let noted = '';
-      if (r.hit && mv.pcId) {
-        const p = d.party?.find((x) => x.id === mv.pcId);
-        if (p) {
-          const { hp, max } = hpOf(p);
-          const next = Math.max(0, hp - r.damage);
-          p.hp = next; p.hpMax ??= max;
-          noted = ` HP ${hp}→${next}/${max}`;
-          // 借机攻击默认钝器：HP 归零按战斗口径昏厥，不是濒死，也不能再挂眩晕。
-          if (next <= 0 && !mv.corpse && mv.status?.label !== DYING_LABEL) {
+      let stunNote = '';
+      let noPoolNote = '';
+      let noChangeNote = '';
+      // 目标 PC 看角色卡；NPC 棋子看自己的 hp/hpMax。以前只处理 PC，NPC 走位被借机打中会白挨。
+      const targetPc = mv.pcId ? d.party?.find((x) => x.id === mv.pcId) : undefined;
+      const tokenPool = !targetPc && (mv.hpMax ?? 0) > 0 ? { hp: mv.hp ?? mv.hpMax!, max: mv.hpMax! } : null;
+      const pool = targetPc ? hpOf(targetPc) : tokenPool;
+      if (pool && r.hit) {
+        const before = pool.hp;
+        const next = Math.max(0, before - r.damage);
+        if (next !== before) deltas.push({ kind: 'hp', id: mv.pcId ?? mv.id, name: mv.name, from: before, to: next });
+        if (targetPc) { targetPc.hp = next; targetPc.hpMax ??= pool.max; }
+        else mv.hp = next;
+        noted = next !== before ? ` HP ${before}→${next}/${pool.max}` : ' 这一下没有掉血';
+        if (next === before) noChangeNote = '这一下没有掉血';
+        // HP 归零按战斗口径处理：濒死保留濒死，已昏厥只清掉旧状态；
+        // 其余情况才改成昏厥（借机攻击默认钝器，不标濒死）。
+        if (next <= 0 && !mv.corpse) {
+          const already = oldLabel === DYING_LABEL ? 'dying' : mv.down ? 'down' : null;
+          if (already !== 'dying') {
             mv.down = true;
             delete mv.status;
+            const newLabel = downedLabel('down');
+            if (already === 'down') {
+              // 已经昏厥但身上还挂着别的状态：这一刀把那个状态清掉，from→null。
+              if (oldLabel !== null && oldLabel !== newLabel) deltas.push({ kind: 'status', id: mv.id, name: mv.name, from: oldLabel, to: null });
+            } else if (oldLabel !== newLabel) {
+              deltas.push({ kind: 'status', id: mv.id, name: mv.name, from: oldLabel, to: newLabel });
+            }
             noted += '，昏厥';
           }
         }
+      } else if (r.hit) {
+        noted = ' 目标没有血条，伤害没落地';
+        noPoolNote = '目标没有血条，伤害没落地';
       }
-      let stunNote = '';
       if (hasStunPassive && r.hit && !mv.corpse && !mv.down && mv.status?.label !== DYING_LABEL
         && passiveStunTriggers({ hit: true, damageRolls: r.rolls, physicalWeaknessKnown: !!mv.weakness?.physical })) {
         const hadStun = mv.status?.label === '眩晕';
+        if (!hadStun) deltas.push({ kind: 'status', id: mv.id, name: mv.name, from: oldLabel, to: '眩晕' });
         mv.status = riderStatus('眩晕')!;
         stunNote = hadStun ? '；眩晕打击：眩晕刷新' : '；眩晕打击：附带一回合眩晕';
       }
       const tag = r.dice > 1 ? `（${ATTACK_BAND_LABEL[r.band]}，${r.dice} 颗伤害骰）` : '';
       hits.push(`${e.name} 借机攻击 ${mv.name}：D100=${r.roll === 100 ? '00' : r.roll}${tag}${r.hit ? `，伤害 ${r.damage}` : '，落空'}${noted}${stunNote}`);
+      // 借机攻击也要进事件账本：一次敌人一条，别把多个人的攻击揉成一条没 actor 的记录。
+      // deltas 已经渲染 HP/状态变化，note 只放“为什么没变化”的补充，避免日志里重复一遍 HP。
+      const eventNote = [noPoolNote, noChangeNote, stunNote.replace(/^；/, '')].filter(Boolean).join('；');
+      appendEvent(d, newEvent(d, Date.now(),
+        { kind: e.pcId ? 'pc' : 'npc', id: e.pcId ?? e.id, name: e.name },
+        { name: '借机攻击', source: '临场' },
+        {
+          target: { kind: mv.pcId ? 'pc' : 'npc', id: mv.pcId ?? mv.id, name: mv.name },
+          check: {
+            kind: 'attack', band: r.band, scale: 'd100', attrs: [], merge: 'single', total: r.roll, success: r.hit,
+            tier: r.band === 'super' || r.band === 'great' ? 'crit' : r.band === 'miss' ? 'fumble' : null,
+            level: r.band === 'super' ? '特大' : null,
+            outcome: ATTACK_BAND_LABEL[r.band],
+            rolledBy: 'host',
+          },
+          deltas,
+          ...(eventNote ? { note: eventNote } : {}),
+        },
+      ));
     }
   });
   setTr({ opportunity: null, msg: hits.join('；') });

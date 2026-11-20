@@ -255,7 +255,7 @@ test('借机攻击每个人回合外只能一次', () => {
   assert.equal(api.getUI().trial.opportunity, null);
 });
 
-function opportunityFight({ skills = [], weakness, hp = 50, hpMax = 50 } = {}) {
+function opportunityFight({ skills = [], weakness, hp = 50, hpMax = 50, moverNpc = false } = {}) {
   const w = api.emptyWorld();
   const m = api.newMap('借机技能', '现实', 1, 12, 12, 'floor', false);
   m.objects = [];
@@ -266,7 +266,9 @@ function opportunityFight({ skills = [], weakness, hp = 50, hpMax = 50 } = {}) {
     { id: 'b', name: '敌人', color: '#f00', tags: [], attributes: attrs, skills, me: 5 },
   ];
   m.tokens = [
-    { id: 'ta', pcId: 'a', name: '走的人', color: '#fff', x: 2, y: 2, ...(weakness ? { weakness } : {}) },
+    moverNpc
+      ? { id: 'ta', pcId: null, name: '走的人', color: '#fff', x: 2, y: 2, hp, hpMax, ...(weakness ? { weakness } : {}) }
+      : { id: 'ta', pcId: 'a', name: '走的人', color: '#fff', x: 2, y: 2, ...(weakness ? { weakness } : {}) },
     { id: 'tb', pcId: 'b', name: '敌人', color: '#f00', x: 2, y: 4 },
   ];
   w.maps = [m];
@@ -287,6 +289,9 @@ test('借机攻击接入 009：已知物理弱点命中就眩晕，不扣 ME', (
   assert.equal(api.getWorld().party.find((p) => p.id === 'a').hp, 47);
   assert.equal(api.getWorld().party.find((p) => p.id === 'b').me, 5, '009 是被动，不扣 ME');
   assert.match(api.getUI().trial.msg, /眩晕打击/);
+  const ev = api.getWorld().events.at(-1);
+  assert.equal(ev.action.name, '借机攻击');
+  assert.ok(ev.deltas.some((d) => d.kind === 'status' && d.from === null && d.to === '眩晕'));
 });
 
 test('借机攻击接入 009：伤害骰出 8 也眩晕', () => {
@@ -349,6 +354,72 @@ test('借机攻击把 PC 打到 0：标昏厥，不再挂眩晕', () => {
   assert.equal(a.down, true);
   assert.equal(a.status, undefined);
   assert.match(api.getUI().trial.msg, /昏厥/);
+});
+
+test('借机攻击不把濒死目标改成昏厥', () => {
+  opportunityFight({ hp: 4, hpMax: 4 });
+  api.update((d) => {
+    d.maps[0].tokens.find((k) => k.id === 'ta').status = { label: '濒死', roundsLeft: 3 };
+  });
+  assert.equal(api.trialOpportunityAttack({ roll: 50, roller: () => 4 }), null);
+  const w = api.getWorld();
+  const ta = w.maps[0].tokens.find((k) => k.id === 'ta');
+  assert.equal(w.party.find((p) => p.id === 'a').hp, 0);
+  assert.equal(ta.status.label, '濒死');
+  assert.equal(ta.down, undefined);
+  const ev = w.events.at(-1);
+  assert.equal(ev.deltas.some((d) => d.kind === 'status'), false, '濒死不该记成昏厥');
+});
+
+test('借机攻击打已昏厥且挂状态的目标：清旧状态并记 from→null', () => {
+  opportunityFight({ hp: 4, hpMax: 4 });
+  api.update((d) => {
+    const ta = d.maps[0].tokens.find((k) => k.id === 'ta');
+    ta.down = true;
+    ta.status = { label: '眩晕', skipTurns: 1, blocksAction: true };
+  });
+  assert.equal(api.trialOpportunityAttack({ roll: 50, roller: () => 4 }), null);
+  const w = api.getWorld();
+  const ta = w.maps[0].tokens.find((k) => k.id === 'ta');
+  assert.equal(w.party.find((p) => p.id === 'a').hp, 0);
+  assert.equal(ta.down, true);
+  assert.equal(ta.status, undefined);
+  const ev = w.events.at(-1);
+  assert.ok(ev.deltas.some((d) => d.kind === 'status' && d.from === '眩晕' && d.to === null));
+});
+
+test('借机攻击命中：落一条事件账本，记 actor/target 和 HP delta', () => {
+  opportunityFight();
+  assert.equal(api.trialOpportunityAttack({ roll: 50, roller: () => 4 }), null);
+  const ev = api.getWorld().events.at(-1);
+  assert.equal(ev.action.name, '借机攻击');
+  assert.deepEqual(ev.actor, { kind: 'pc', id: 'b', name: '敌人' });
+  assert.deepEqual(ev.target, { kind: 'pc', id: 'a', name: '走的人' });
+  assert.equal(ev.check.band, 'hit');
+  assert.equal(ev.note, undefined, 'HP 已由 delta 渲染，note 不重复');
+  assert.ok(ev.deltas.some((d) => d.kind === 'hp' && d.from === 50 && d.to === 46));
+});
+
+test('借机攻击落空：也记事件，但不写 HP delta', () => {
+  opportunityFight();
+  assert.equal(api.trialOpportunityAttack({ roll: 3 }), null);
+  const w = api.getWorld();
+  assert.equal(w.party.find((p) => p.id === 'a').hp, 50);
+  const ev = w.events.at(-1);
+  assert.equal(ev.action.name, '借机攻击');
+  assert.equal(ev.check.band, 'miss');
+  assert.equal(ev.deltas.length, 0);
+});
+
+test('借机攻击打有血条的 NPC：扣 token HP 并记 HP delta', () => {
+  opportunityFight({ moverNpc: true, hp: 10, hpMax: 10 });
+  assert.equal(api.trialOpportunityAttack({ roll: 50, roller: () => 4 }), null);
+  const w = api.getWorld();
+  const ta = w.maps[0].tokens.find((k) => k.id === 'ta');
+  assert.equal(ta.hp, 6);
+  const ev = w.events.at(-1);
+  assert.deepEqual(ev.target, { kind: 'npc', id: 'ta', name: '走的人' });
+  assert.ok(ev.deltas.some((d) => d.kind === 'hp' && d.from === 10 && d.to === 6));
 });
 
 test('救治：解锁急救技能才能做，D100 投 1 失败', () => {
