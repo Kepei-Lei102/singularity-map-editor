@@ -63,8 +63,8 @@ export function mergeLayers(m: GameMap, layers: VisionLayer[]): VisionLayer {
   }
   const hasArchitecture = layers.some((L) => (L.seen.architecture?.length ?? 0) > 0);
   if (!hasArchitecture) {
-    // 没有建筑片时不要扫「所有图层都没看过」的键；只扫任一 layer fog 非 0 的主格，
-    // 但键仍按升序插入，保证 observed/architectureRevs 的键顺序与全量一致。
+    // 没有建筑片时仍按升序扫一遍 key（保证 observed/architectureRevs 的键顺序与全量一致），
+    // 但主格 fog 为 0 的键直接跳过，不对空键做逐图层的 spatialFog 合并。
     const w3 = m.width * 3;
     for (let key = 0; key < m.width * m.height * 9; key++) {
       const x = key % w3, y = Math.floor(key / w3);

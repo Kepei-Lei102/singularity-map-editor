@@ -388,9 +388,11 @@ test('store：手动雾自动覆盖后 undo 再移动仍会覆盖', () => {
   assert.equal(api.getWorld().maps[0].fog[idx], 2, 'undo 后再移动仍要覆盖');
 });
 
-function manualFogWorld() {
+function manualFogWorld(mode = 'shared') {
   const world = api.emptyWorld();
-  world.party = [{ id: 'a', name: '甲', sex: '男', heightCm: 173, color: '' }];
+  world.visionMode = mode;
+  world.party = [{ id: 'a', name: '甲', sex: '男', heightCm: 173, color: '', visionGroupId: mode === 'grouped' ? 'g' : undefined }];
+  if (mode === 'grouped') world.visionGroups = [{ id: 'g', name: '组' }];
   const map = api.newMap('手动雾', '现实', 0, 50, 40, 'floor', false);
   map.autoFog = true;
   map.tokens = [{ id: 'ta', pcId: 'a', name: '甲', color: '', x: 5, y: 5 }];
@@ -427,9 +429,11 @@ test('store：手动雾 redo 与 autoFog 开关', () => {
   assert.equal(api.getWorld().maps[0].fog[30 * 50 + 40], 2);
 });
 
-function autoFogWorld(autoFog) {
+function autoFogWorld(autoFog, mode = 'shared') {
   const world = api.emptyWorld();
-  world.party = [{ id: 'a', name: '甲', sex: '男', heightCm: 173, color: '' }];
+  world.visionMode = mode;
+  world.party = [{ id: 'a', name: '甲', sex: '男', heightCm: 173, color: '', visionGroupId: mode === 'grouped' ? 'g' : undefined }];
+  if (mode === 'grouped') world.visionGroups = [{ id: 'g', name: '组' }];
   const map = api.newMap('自动雾', '现实', 0, 50, 40, 'floor', false);
   map.autoFog = autoFog;
   map.tokens = [{ id: 'ta', pcId: 'a', name: '甲', color: '', x: 5, y: 5 }];
@@ -487,6 +491,46 @@ test('store：材质/高度/贴图组改动不算视野脏，不覆盖手动雾'
   assert.equal(api.getWorld().maps[0].fog[idx], 1, '高度改动不该覆盖手动雾');
   api.update((d) => { d.maps[0].tokens[0].x += 1; });
   assert.equal(api.getWorld().maps[0].fog[idx], 2, '真正移动后才自动覆盖');
+});
+
+test('store：只改高度不跑 syncMemory', () => {
+  manualFogWorld();
+  const before = api.getWorld();
+  const seq = before.observationSeq;
+  assert.equal(typeof seq, 'number');
+  const views = before.maps[0].views;
+  api.update((d) => { d.maps[0].heights = new Array(d.maps[0].width * d.maps[0].height).fill(0); });
+  assert.ok(api.getWorld().maps[0].heights, '高度确实变了');
+  assert.equal(api.getWorld().observationSeq, seq, '高度不参与记忆，不该增加观察序号');
+  assert.equal(api.getWorld().maps[0].views, views, '也不该复制视图层');
+});
+
+test('store：autoFog=false 的 independent/grouped 改名不复制视图层', () => {
+  for (const mode of ['individual', 'grouped']) {
+    autoFogWorld(false, mode);
+    const before = api.getWorld().maps[0];
+    const views = before.views, fog = before.fog, seen = before.seen;
+    api.update((d) => { d.maps[0].tokens[0].name = '改名'; });
+    const after = api.getWorld().maps[0];
+    assert.equal(after.views, views, `${mode} 普通元数据不该 clone/merge 视图`);
+    assert.equal(after.fog, fog, `${mode} 普通元数据不该重写地图雾`);
+    assert.equal(after.seen, seen, `${mode} 普通元数据不该重写地图记忆`);
+  }
+});
+
+test('store：手动雾的 independent/grouped 改名不复制视图层', () => {
+  for (const mode of ['individual', 'grouped']) {
+    const map = manualFogWorld(mode);
+    api.paintFog(map.id, [[40, 30]], 'fogReveal');
+    const before = api.getWorld().maps[0];
+    const views = before.views, fog = before.fog, seen = before.seen;
+    api.update((d) => { d.maps[0].tokens[0].name = '改名'; });
+    const after = api.getWorld().maps[0];
+    assert.equal(after.views, views, `${mode} 手动雾 pending 不该 clone/merge 视图`);
+    assert.equal(after.fog, fog, `${mode} 手动雾 pending 不该重写地图雾`);
+    assert.equal(after.seen, seen, `${mode} 手动雾 pending 不该重写地图记忆`);
+    assert.equal(after.fog[30 * 50 + 40], 1, `${mode} 手动雾仍保留`);
+  }
 });
 
 test('store：individual 手动雾第二笔单独一步，不靠第一笔标记', () => {

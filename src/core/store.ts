@@ -127,8 +127,7 @@ function memoryDirty(a: World, b: World): boolean {
     const o = a.maps.find((x) => x.id === m.id);
     if (!o) return true;
     if (o.cells !== m.cells || o.fineCells !== m.fineCells || o.d100 !== m.d100 || o.objects !== m.objects || tokensVisionChanged(o.tokens, m.tokens)
-      || o.architecture !== m.architecture || o.architectureFragments !== m.architectureFragments
-      || o.heights !== m.heights || o.fog !== m.fog
+      || o.architecture !== m.architecture || o.fog !== m.fog
       || o.views !== m.views || o.autoFog !== m.autoFog
       || o.materialCells !== m.materialCells || o.fineMaterials !== m.fineMaterials || o.groups !== m.groups) return true;
   }
