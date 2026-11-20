@@ -34,6 +34,21 @@ export const ATTACK_DICE: Record<AttackBand, number> = { miss: 0, hit: 1, great:
 
 export const ATTACK_BAND_LABEL: Record<AttackBand, string> = { miss: '落空', hit: '命中', great: '大成功', super: '特大成功' };
 
+/** 事件卡把“档位本身”和“额外加骰”分开报：007 暴击、009 打已眩晕目标都可能让总颗数变多。 */
+export function attackDiceLabels(baseDice: number, extraDice: number): { band: string | null; extra: string | null } {
+  return {
+    band: baseDice === 4 ? '特大成功 ×4' : baseDice === 2 ? '大成功 ×2' : null,
+    extra: extraDice > 0 ? `额外 +${extraDice} 颗伤害骰` : null,
+  };
+}
+
+/** 卡片事件字段的兜底：旧事件没有 diceBase/extraDice 时按总颗数显示旧标签。 */
+export function attackDiceMeta(ev: { dice?: number; diceBase?: number; extraDice?: number }) {
+  const diceBase = ev.diceBase ?? ev.dice ?? 1;
+  const extraDice = ev.extraDice ?? 0;
+  return { diceBase, extraDice, labels: attackDiceLabels(diceBase, extraDice) };
+}
+
 /**
  * 按 D100 点数定档。100 就是 00。
  * 阈值只有一份：这里转调 `tierOfRoll` 的攻击分支，别在两处各写一遍。
@@ -62,13 +77,15 @@ export interface AttackRoll {
   crit: boolean;
 }
 
-export function rollAttack(roll: number, damageDie = DEFAULT_DAMAGE_DIE, roller?: Roller): AttackRoll {
+export function rollAttack(roll: number, damageDie = DEFAULT_DAMAGE_DIE, roller?: Roller, diceMultiplier = 1): AttackRoll {
   const band = attackBand(roll);
-  const dice = ATTACK_DICE[band];
+  // 眩晕打击打已经眩晕的人：伤害骰颗数 ×5；落空仍是 0 颗。
+  const dice = ATTACK_DICE[band] * Math.max(1, Math.floor(diceMultiplier));
   const r = roller ?? randomDie;
   const rolls = Array.from({ length: dice }, () => r(damageDie));
   const damageRoll = rolls.reduce((a, b) => a + b, 0);
-  return { roll, band, hit: dice > 0, dice, rolls, damageRoll, damage: damageRoll, crit: dice > 1 };
+  // crit 只表示攻击档位本身是大成功/特大成功，不表示额外加骰（007 暴击、眩晕打击 ×5）。
+  return { roll, band, hit: dice > 0, dice, rolls, damageRoll, damage: damageRoll, crit: ATTACK_DICE[band] > 1 };
 }
 
 /** 浏览器里的骰子：crypto 取随机。测试里传自己的 Roller。 */

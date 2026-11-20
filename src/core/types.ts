@@ -215,6 +215,11 @@ export interface Token {
   /** 棋子自己的 hp/hpMax（NPC 用；玩家角色的血在角色卡上）。 */
   hp?: number;
   hpMax?: number;
+  /** 棋子自己的 me/meMax（NPC 用；玩家角色的 ME 在角色卡上）。 */
+  me?: number;
+  meMax?: number;
+  /** 队里已经知道的弱点；攻击技能的附加效果按它决定能不能叠第二种。 */
+  weakness?: { physical?: boolean; psychological?: boolean };
   /** 钝器把人打晕：昏厥中，不能行动。 */
   down?: boolean;
 }
@@ -666,7 +671,7 @@ export interface PendingJudgment {
   /** 只告诉玩家这颗骰要掷几次（优/劣势）；不含落点、摔伤档等结算数据。 */
   dice?: 'single' | 'advantage' | 'disadvantage';
   /** 这一发判定是为一次攻击开的：掷完按攻击口径结算知会。 */
-  attack?: { attackerTokenId: string; targetTokenId: string; sharp?: boolean } | null;
+  attack?: { attackerTokenId: string; targetTokenId: string; sharp?: boolean; skillId?: string } | null;
   /** 这一发判定是为一次撬锁/暴力开锁开的：掷完按门锁规则结算。 */
   door?: { mapId: Id; objectId: Id; method: 'pick' | 'force' | 'ram' } | null;
   /** 第二棒：撞门大失败后，等这颗 1D4 反伤。 */
@@ -698,8 +703,12 @@ export interface CombatNotice {
   targetPcId: string | null;
   roll: number;
   crit: boolean;
-  /** 伤害骰颗数：普通 1、大成功 2、特大成功 4。旧卡片没有就当 1 颗。 */
+  /** 这一击实际掷的伤害骰颗数（含暴击补骰 / 眩晕打击 ×5）。旧卡片没有就当 1 颗。 */
   dice?: number;
+  /** 攻击档位本来的伤害骰颗数：普通 1、大成功 2、特大成功 4。旧卡片没有就按 dice 兜底。 */
+  diceBase?: number;
+  /** 在档位之外额外加的伤害骰颗数（007 暴击 +1、眩晕打击 ×5 多出来的部分）。 */
+  extraDice?: number;
   damage: number;
   hpBefore: number | null;
   hpAfter: number | null;

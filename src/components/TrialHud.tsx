@@ -4,6 +4,7 @@ import { pendingUtterances, resolveUtterance } from '../rules/dialogue';
 import { TALK_ACTIONS, guessTalkAction } from '../rules/talkActions';
 import { moveBudgetOn } from '../rules/move';
 import { intentEnabled, requestTalkIntent, setIntentEnabled, type AdvisorSettings } from '../runtime/sessionAI';
+import { ATTACK_SKILLS, STUN_PASSIVE_ID, type AttackSkillDef } from '../rules/attackSkills';
 
 /**
  * 猜动作用的连接设置。跟「本场 AI」面板是两套：
@@ -91,6 +92,13 @@ export function TrialHud() {
   const w = useWorld();
   const [stLabel, setStLabel] = useState('');
   const [stMin, setStMin] = useState(15);
+  /** 这一击选的攻击技能；没选＝普通攻击。 */
+  const [attackSkill, setAttackSkill] = useState<AttackSkillDef | null>(null);
+  // 换人/结束回合/翻轮都把上一击的选择清掉：技能选择只属于“这一击”。
+  const curTokenId = ui.trial?.players[ui.trial?.current]?.tokenId ?? null;
+  const curEnded = !!(curTokenId && ui.trial?.ended?.[curTokenId]);
+  const trialTurn = ui.trial?.turn ?? 0;
+  useEffect(() => { setAttackSkill(null); }, [curTokenId, curEnded, trialTurn]);
   /** 正在把哪句话接成动作，以及接成什么。 */
   const [taking, setTaking] = useState<string | null>(null);
   const [actLabel, setActLabel] = useState('');
@@ -181,12 +189,32 @@ export function TrialHud() {
             const bluntMode = !sharpOf(t, cur?.tokenId ?? null);
             const targets = trialAttackTargets().filter((x) => x.canHit);
             const label = (x: typeof targets[number]) => `${x.name}${x.hp === null ? '' : ` · HP ${x.hp}`}`;
+            const card = w.party.find((p) => p.id === cur?.pcId);
+            const unlockedAttackSkills = card ? ATTACK_SKILLS.filter((s) => card.skills?.includes(s.id)) : [];
+            const selectedSkill = unlockedAttackSkills.find((s) => s.id === attackSkill?.id) ?? null;
+            const hasStunPassive = !!card?.skills?.includes(STUN_PASSIVE_ID);
+            const meShort = !!selectedSkill && (card?.me == null || card.me < selectedSkill.me);
             return <>
+              {unlockedAttackSkills.map((s) => (
+                <button key={s.id} className={`small chip ${selectedSkill?.id === s.id ? 'on' : ''}`} disabled={!actionsLeft(t) || card?.me == null || (card.me ?? 0) < s.me}
+                  title={card?.me == null ? `${s.name} 要 ${s.me} ME；这个角色还没填 ME` : `【${s.name}】${s.me} ME，只对下一击生效`}
+                  onClick={() => setAttackSkill(selectedSkill?.id === s.id ? null : s)}>
+                  {s.name}
+                </button>
+              ))}
+              {hasStunPassive && <span className="muted" title="近战伤害骰出 8，或已知物理弱点并命中，会附带一回合眩晕；打已眩晕目标伤害骰颗数×5">眩晕打击 · 被动</span>}
+              {selectedSkill && <span className="muted">下一击：{selectedSkill.name} · {selectedSkill.me} ME{meShort ? '（ME 不够）' : ''}</span>}
               {!targets.length && <span className="muted">攻击距离内没有看得见的目标</span>}
               {targets.map((x) => (
                 <button key={x.tokenId} className="small" disabled={!actionsLeft(t)}
                   title={`${x.distance} 格${x.hp === null ? '' : ` · HP ${x.hp}`}；${bluntMode ? '钝器：打倒成昏厥' : '锐器：打倒成濒死'}`}
-                  onClick={() => { if (confirm(`用${bluntMode ? '钝器' : '锐器'}攻击 ${x.name}？（D100 攻击口径：000 特大 / 1–5 落空 / 95–99 大成功 / 其余命中，${bluntMode ? '打到 0 是昏厥' : '打到 0 是濒死'}；若这个角色开着玩家窗口，骰子会在他的窗口里掷）`)) trialAttack(x.tokenId, { sharp: !bluntMode }); }}>
+                  onClick={() => {
+                    const skill = selectedSkill?.id;
+                    if (!confirm(`用${bluntMode ? '钝器' : '锐器'}${skill ? ` + 【${selectedSkill!.name}】` : ''}攻击 ${x.name}？（D100 攻击口径：000 特大 / 1–5 落空 / 95–99 大成功 / 其余命中，${bluntMode ? '打到 0 是昏厥' : '打到 0 是濒死'}；若这个角色开着玩家窗口，骰子会在他的窗口里掷）`)) { setAttackSkill(null); return; }
+                    const e = trialAttack(x.tokenId, { sharp: !bluntMode, skillId: skill });
+                    setAttackSkill(null);
+                    if (e) set({ msg: e });
+                  }}>
                   {label(x)}
                 </button>
               ))}

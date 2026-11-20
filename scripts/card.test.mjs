@@ -98,3 +98,11 @@ test('没有血条的 NPC：没有伤害块，note 说出原因，没有倒地 t
   assert.match(html, /没有血条/);
   assert.doesNotMatch(html, /昏厥|濒死/);
 });
+
+test('事件卡档位：旧 dice 字段仍按档位显示，额外颗数不被当成大成功', () => {
+  const four = render({ ...hit, dice: 4 });
+  assert.match(four, /特大成功 ×4/);
+  const extra = render({ ...hit, dice: 5, diceBase: 1, extraDice: 4 });
+  assert.match(extra, /额外 \+4 颗伤害骰/);
+  assert.doesNotMatch(extra, /特大成功|大成功/);
+});

@@ -1,6 +1,7 @@
 import { useEffect } from 'react';
 import { useUI, useWorld } from '../core/store';
 import { clearTrialEvent, damageLanded, damageLost } from '../runtime/trial';
+import { attackDiceMeta } from '../rules/combat';
 
 /** 试玩里的大事（攻击、伤害、濒死）：单独一张大卡片浮在地图上方，不跟下面那排小字挤在一起。 */
 export function TrialEventCard() {
@@ -26,6 +27,8 @@ export function TrialEventCard() {
     {ev.downed === 'down' && <span className="down-tag">昏厥</span>}
   </>);
   const color = (pcId: string | null) => (pcId ? w.party.find((p) => p.id === pcId)?.color ?? '#fff' : '#fff');
+  // 档位颗数和额外颗数分开报：007 暴击、009 打已眩晕的人都会让 dice 变大，但这不是大成功。
+  const diceLabels = attackDiceMeta(ev).labels;
   return (
     <div className={`trial-event ${ev.kind}`} role="status">
       <div className="trial-event-head">
@@ -37,7 +40,8 @@ export function TrialEventCard() {
       </div>
       <div className="trial-event-dice">
         <span className={isHit ? 'dice-hit' : 'dice-miss'}>D100 = {ev.roll === 100 ? '00' : ev.roll}</span>
-        {(ev.dice ?? 1) > 1 && <span className="dice-crit">{(ev.dice ?? 1) === 4 ? '特大成功 ×4' : '大成功 ×2'}</span>}
+        {diceLabels.band && <span className="dice-crit">{diceLabels.band}</span>}
+        {diceLabels.extra && <span className="dice-crit">{diceLabels.extra}</span>}
         {!isHit && <span className="dice-miss-tag">大失败 · 落空</span>}
       </div>
       {landed ? (
