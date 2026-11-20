@@ -187,6 +187,8 @@ export interface TokenStatus {
   skipTurns?: number;
   /** 这个状态是否挡住行动。不填时按标签判断：流血/中毒不挡，其余挡。 */
   blocksAction?: boolean;
+  /** ME 恢复到至少 1 点时自动解除（被驱逐）；一般不需要手动填。 */
+  endsWhenMePositive?: boolean;
 }
 
 export interface Point { x: number; y: number }

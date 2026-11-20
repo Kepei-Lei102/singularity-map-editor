@@ -13,6 +13,7 @@ import { markManualFog, partyVisionChanged, diffWorld, tokensVisionChanged } fro
 import { planVision } from '../scene/visionPlan';
 import { loadSlot, saveSlot } from './persist';
 import { onSessionRenewed } from './session';
+import { uid } from './util';
 
 /** 浏览器允不允许本页保存数据。 */
 export const storageOK = (() => {
@@ -155,6 +156,21 @@ export function update(fn: (d: Draft<World>) => void, opts: { coalesce?: string;
   const manualPending = new Set<string>();
   next = produce(withVision(next, world, { plan, onManualPending: (id) => manualPending.add(id) }), (d) => { if (needMemory) syncMemory(d, plan); });
   next = bumpStateRevs(world, next);
+  // 被驱逐是「ME 归零」状态，ME 回到至少 1 点后自动解除；不论 ME 是怎么恢复的，
+  // 都从这里统一收口，避免每个恢复入口各自记得清状态。
+  next = produce(next, (d) => {
+    for (const m of d.maps) {
+      for (const k of m.tokens) {
+        if (!k.status?.endsWhenMePositive) continue;
+        const pc = k.pcId ? d.party.find((x) => x.id === k.pcId) : undefined;
+        if (pc && pc.me !== undefined && pc.me >= 1) {
+          const label = k.status.label;
+          delete k.status;
+          d.log.push({ id: uid(), at: Date.now(), session: d.session, kind: 'note', text: `${k.name} ME 恢复到 ${pc.me}，解除${label}。` });
+        }
+      }
+    }
+  });
   // syncMemory 在独立/分组模式会 clone fog 数组，withVision 里打的标记会落在旧数组上。
   // 标记必须跟着最终落盘的数组走，否则下一次视野脏动不会整图覆盖。
   for (const id of manualPending) {

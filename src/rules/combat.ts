@@ -19,6 +19,8 @@ export const ATTACK_RANGE = 8;
 export const CLOSE_RANGE = 4;
 /** 濒死状态剩几回合不救就……现在只标状态，不推进死亡。 */
 export const DYING_LABEL = '濒死';
+/** ME 归零后的状态；不是 HP 濒死，ME 恢复到至少 1 点后解除。 */
+export const BANISHED_LABEL = '被驱逐';
 
 /** 掷一颗骰（1..sides）。 */
 export type Roller = (sides: number) => number;
@@ -128,7 +130,7 @@ export function applyDamage(current: number, damage: number): number {
   return Math.max(0, current - Math.max(0, Math.round(damage)));
 }
 
-/** 濒死判定：HP 归零就是濒死（作者：不自动死，标状态即可）。ME 归零走另一条（被驱逐），不在这里。 */
+/** 濒死判定：HP 归零就是濒死（作者：不自动死，标状态即可）。ME 归零走另一条（被驱逐，见 BANISHED_LABEL），不在这里。 */
 export function isDying(hp: number): boolean {
   return hp <= 0;
 }

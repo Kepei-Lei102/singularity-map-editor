@@ -914,6 +914,71 @@ test('中毒按 ME 结算，整轮扣一次', () => {
   assert.equal(w2.maps[0].tokens.find((k) => k.id === 'ta').status, undefined);
 });
 
+test('中毒把 ME 扣到 0：挂被驱逐，不能行动，整轮不再倒计时', () => {
+  const attrs = { 力量: 30, 敏捷: 30, 意志: 30, 观察: 30, 智慧: 30, 魅力: 30 };
+  const w = api.emptyWorld();
+  const m = api.newMap('中毒归零', '现实', 1, 10, 10, 'floor', false);
+  m.objects = [];
+  w.party = [{ id: 'a', name: '甲', color: '#fff', tags: [], attributes: attrs, me: 3, meMax: 10, hp: 10, hpMax: 10 }];
+  m.tokens = [{ id: 'ta', pcId: 'a', name: '甲', color: '#fff', x: 2, y: 2, status: { label: '中毒', roundsLeft: 1, damageDie: 6, damageTarget: 'me' } }];
+  m.fog = m.fog.map(() => 1);
+  w.maps = [m];
+  api.replaceWorld(w);
+  api.startTrial();
+  api.setUI({ trial: { mapId: m.id, players: [{ tokenId: 'ta', pcId: 'a', name: '甲' }], current: 0, combat: true, moved: {}, turn: 1, msg: '', markSymbol: '!', markText: '', markMode: false } });
+  api.trialEndTurn(() => 5);
+  const w2 = api.getWorld();
+  assert.equal(w2.party.find((p) => p.id === 'a').me, 0);
+  const st = w2.maps[0].tokens.find((k) => k.id === 'ta').status;
+  assert.equal(st.label, '被驱逐');
+  assert.equal(st.blocksAction, true);
+  assert.equal(st.endsWhenMePositive, true);
+  assert.equal(st.roundsLeft, undefined, '不跟整轮倒计时');
+  assert.match(api.trialStance('趴') ?? '', /被驱逐中，暂时不能行动/);
+  assert.ok(w2.log.some((x) => /ME 归零，被驱逐/.test(x.text)));
+  api.trialEndTurn(() => 5);
+  assert.equal(api.getWorld().maps[0].tokens.find((k) => k.id === 'ta').status.label, '被驱逐', '第二整轮也不自动掉');
+});
+
+test('ME 恢复到 1：被驱逐自动解除', () => {
+  const attrs = { 力量: 30, 敏捷: 30, 意志: 30, 观察: 30, 智慧: 30, 魅力: 30 };
+  const w = api.emptyWorld();
+  const m = api.newMap('解除驱逐', '现实', 1, 10, 10, 'floor', false);
+  m.objects = [];
+  w.party = [{ id: 'a', name: '甲', color: '#fff', tags: [], attributes: attrs, me: 2, meMax: 10, hp: 10, hpMax: 10 }];
+  m.tokens = [{ id: 'ta', pcId: 'a', name: '甲', color: '#fff', x: 2, y: 2, status: { label: '中毒', roundsLeft: 1, damageDie: 6, damageTarget: 'me' } }];
+  m.fog = m.fog.map(() => 1);
+  w.maps = [m];
+  api.replaceWorld(w);
+  api.startTrial();
+  api.setUI({ trial: { mapId: m.id, players: [{ tokenId: 'ta', pcId: 'a', name: '甲' }], current: 0, combat: true, moved: {}, turn: 1, msg: '', markSymbol: '!', markText: '', markMode: false } });
+  api.trialEndTurn(() => 5);
+  assert.equal(api.getWorld().maps[0].tokens.find((k) => k.id === 'ta').status.label, '被驱逐');
+  api.update((d) => { d.party.find((p) => p.id === 'a').me = 1; });
+  const w2 = api.getWorld();
+  assert.equal(w2.maps[0].tokens.find((k) => k.id === 'ta').status, undefined);
+  assert.match(w2.log.at(-1).text, /ME 恢复到 1，解除被驱逐/);
+});
+
+test('PC 没填 ME：中毒 ME 伤害不落地，也不挂被驱逐', () => {
+  const attrs = { 力量: 30, 敏捷: 30, 意志: 30, 观察: 30, 智慧: 30, 魅力: 30 };
+  const w = api.emptyWorld();
+  const m = api.newMap('没填ME', '现实', 1, 10, 10, 'floor', false);
+  m.objects = [];
+  w.party = [{ id: 'a', name: '甲', color: '#fff', tags: [], attributes: attrs, hp: 10, hpMax: 10 }];
+  m.tokens = [{ id: 'ta', pcId: 'a', name: '甲', color: '#fff', x: 2, y: 2, status: { label: '中毒', roundsLeft: 1, damageDie: 6, damageTarget: 'me' } }];
+  m.fog = m.fog.map(() => 1);
+  w.maps = [m];
+  api.replaceWorld(w);
+  api.startTrial();
+  api.setUI({ trial: { mapId: m.id, players: [{ tokenId: 'ta', pcId: 'a', name: '甲' }], current: 0, combat: true, moved: {}, turn: 1, msg: '', markSymbol: '!', markText: '', markMode: false } });
+  api.trialEndTurn(() => 5);
+  const w2 = api.getWorld();
+  assert.equal(w2.party.find((p) => p.id === 'a').me, undefined, '不要凭空写 0');
+  assert.equal(w2.maps[0].tokens.find((k) => k.id === 'ta').status, undefined, '中毒一回合到期，也不该换成被驱逐');
+  assert.ok(w2.log.some((x) => /没填 ME/.test(x.text)));
+});
+
 test('0 个玩家时空格不结算；尸体/昏厥自动算已结束', () => {
   const attrs = { 力量: 30, 敏捷: 30, 意志: 30, 观察: 30, 智慧: 30, 魅力: 30 };
   const w = api.emptyWorld();

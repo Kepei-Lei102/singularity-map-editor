@@ -665,7 +665,7 @@ export function checkWorld(w, migrated = false) {
         if (Math.floor(t.subcell.x / 3) !== t.x || Math.floor(t.subcell.y / 3) !== t.y) fail(ta, '子格位置与主格锚点不一致');
       }
       if (t.pcId !== null) str(t.pcId, `${ta}.pcId`);
-      if (t.status !== undefined) { obj(t.status, `${ta}.status`); str(t.status.label, `${ta}.status.label`); optNum(t.status.endsAt, `${ta}.status.endsAt`); optNum(t.status.roundsLeft, `${ta}.status.roundsLeft`); }
+      if (t.status !== undefined) { obj(t.status, `${ta}.status`); str(t.status.label, `${ta}.status.label`); optNum(t.status.endsAt, `${ta}.status.endsAt`); optNum(t.status.roundsLeft, `${ta}.status.roundsLeft`); optBool(t.status.endsWhenMePositive, `${ta}.status.endsWhenMePositive`); }
       if (t.opportunityUsed !== undefined) optBool(t.opportunityUsed, `${ta}.opportunityUsed`);
       if (t.hp !== undefined) num(t.hp, `${ta}.hp`, 0);
       if (t.hpMax !== undefined) num(t.hpMax, `${ta}.hpMax`, 0);

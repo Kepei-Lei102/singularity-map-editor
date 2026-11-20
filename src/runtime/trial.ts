@@ -25,7 +25,7 @@ import { appendEvent, newEvent } from '../rules/events';
 import { CELL_METERS, heightAt } from '../scene/height';
 import { cellFloor, hasPitBottom } from '../scene/terrain';
 import { canAffordStep, canTurn, chargeUsedThisTurn, moveBudgetOn, movePool, RUN_MODES, runMeShort, spendCharge, stepPrice, tickCharge, STAND_UP_COST, ROLL_OVER_COST, type ChargeState, type RunMode } from '../rules/move';
-import { ATTACK_BAND_LABEL, ATTACK_DICE, ATTACK_RANGE, DYING_LABEL, DYING_ROUNDS, ENGAGE_RANGE, RESCUED_HP, ROBOT_LABEL, applyDamage, attackTargets, canRescue, canUseSharp, downedBy, downedLabel, hpOf, opportunityTriggers, randomDie, robotArrived, robotIncoming, rollAttack, rollRescue, settleDeath, statusBlocksAction, stepLimitNear, type AttackTarget, type Downed, type Roller } from '../rules/combat';
+import { ATTACK_BAND_LABEL, ATTACK_DICE, ATTACK_RANGE, BANISHED_LABEL, DYING_LABEL, DYING_ROUNDS, ENGAGE_RANGE, RESCUED_HP, ROBOT_LABEL, applyDamage, attackTargets, canRescue, canUseSharp, downedBy, downedLabel, hpOf, opportunityTriggers, randomDie, robotArrived, robotIncoming, rollAttack, rollRescue, settleDeath, statusBlocksAction, stepLimitNear, type AttackTarget, type Downed, type Roller } from '../rules/combat';
 import { attackSkillById, passiveStunTriggers, pickRiderEffects, riderStatus, STUN_PASSIVE_ID, stunnedDamageDiceMultiplier, type AttackRider } from '../rules/attackSkills';
 
 // 试玩：放白板玩家进去，用 WASD 走，体验视野。退出时一切恢复原样（沙盒）。
@@ -969,9 +969,21 @@ export function trialEndTurn(roller: Roller = randomDie) {
           if ((st.damageTarget ?? 'hp') === 'me') {
             const pc = k.pcId ? d.party.find((x) => x.id === k.pcId) : undefined;
             if (pc) {
-              const before = pc.me ?? 0;
-              pc.me = Math.max(0, before - amount);
-              d.log.push({ id: uid(), at: Date.now(), session: d.session, kind: 'note', text: `${k.name} ${st.label} ${amount} 点，ME ${before}→${pc.me}` });
+              // 没填 ME 的角色不扣也不拦（和技能/移动的 ME 口径一致），中毒伤害不落地。
+              if (pc.me === undefined) {
+                d.log.push({ id: uid(), at: Date.now(), session: d.session, kind: 'note', text: `${k.name} ${st.label} ${amount} 点，但没填 ME，伤害没落地。` });
+              } else {
+                const before = pc.me;
+                pc.me = Math.max(0, before - amount);
+                d.log.push({ id: uid(), at: Date.now(), session: d.session, kind: 'note', text: `${k.name} ${st.label} ${amount} 点，ME ${before}→${pc.me}` });
+                // 作者口径（2026-11-20）：ME 归零触发被驱逐，不能行动；
+                // ME 恢复到至少 1 点后由 store 统一解除（endsWhenMePositive）。
+                if (pc.me <= 0 && !k.corpse && !k.down && st.label !== DYING_LABEL) {
+                  k.status = { label: BANISHED_LABEL, blocksAction: true, endsWhenMePositive: true };
+                  d.log.push({ id: uid(), at: Date.now(), session: d.session, kind: 'note', text: `${k.name} ME 归零，被驱逐；ME 恢复到 1 点后解除。` });
+                  continue;
+                }
+              }
             }
           } else {
             const pc = k.pcId ? d.party.find((x) => x.id === k.pcId) : undefined;
@@ -2256,7 +2268,8 @@ export function clearTrialStatus(tokenId: string) {
 }
 
 /** 这个状态还剩多久：分秒、回合或持续至手动解除；已经结束返回 null。 */
-export function statusLeft(st: { endsAt?: number; roundsLeft?: number; skipTurns?: number }) {
+export function statusLeft(st: { endsAt?: number; roundsLeft?: number; skipTurns?: number; endsWhenMePositive?: boolean }) {
+  if (st.endsWhenMePositive) return '持续到 ME 恢复';
   if (st.skipTurns !== undefined) return st.skipTurns > 0 ? `还将跳过 ${st.skipTurns} 个自己的回合` : '这个回合跳过';
   if (st.roundsLeft !== undefined) return st.roundsLeft > 0 ? `还剩 ${st.roundsLeft} 回合` : null;
   if (st.endsAt === undefined) return '持续至手动解除';
