@@ -10,10 +10,10 @@ const root = fileURLToPath(new URL('..', import.meta.url));
 const temp = await mkdtemp(join(tmpdir(), 'ts-sight-test-'));
 const bundle = join(temp, 'editor.cjs');
 await build({
-  stdin: { contents: `export * from './src/scene/sight'; export { sightCtxFor } from './src/scene/sightIndex';`, resolveDir: root },
+  stdin: { contents: `export * from './src/scene/sight'; export { sightCtxFor } from './src/scene/sightIndex'; export { architectureGeometry } from './src/scene/architecture'; export { pcWithin } from './src/scene/perception';`, resolveDir: root },
   outfile: bundle, bundle: true, platform: 'node', format: 'cjs', logLevel: 'silent',
 });
-const { eyeHeight, coneFor, cellSightCost, canSee, inCone, visionOf, visiblePoint, sightCacheFor, sightCtxFor, VISION_BUDGET, BASE_CELL_COST, objectSightCost } = await import(bundle);
+const { eyeHeight, coneFor, cellSightCost, canSee, inCone, visionOf, visiblePoint, sightCacheFor, sightCtxFor, VISION_BUDGET, BASE_CELL_COST, objectSightCost, architectureGeometry, pcWithin } = await import(bundle);
 after(() => rm(temp, { recursive: true, force: true }));
 
 const world = { terrains: [
@@ -125,6 +125,23 @@ test('小格视野：挡死小块按 1/3 细化，衰减仍按整格', () => {
   assert.equal(visiblePoint(world, map, eye, { x: 7.5, y: 1.5 }), true);
 });
 
+test('过滤目标自身几何时，墙索引也排除自己的构件', () => {
+  const map = mkMap(14, 8);
+  // 建筑的 a/b 是 1/3 格坐标：x=4.5 是第 1.5 格，x=7.5 是第 2.5 格。
+  map.architecture = { walls: [
+    { id: 'w1', a: { x: 4.5, y: 6 }, b: { x: 4.5, y: 21 }, thickness: 0.25, material: 'wall' },
+    { id: 'w2', a: { x: 7.5, y: 6 }, b: { x: 7.5, y: 21 }, thickness: 0.25, material: 'wall' },
+  ], doors: [] };
+  const eye = { x: 0.5, y: 4, sex: '男' };
+  const cache = sightCacheFor(world, map, eye, sightCtxFor(world, map));
+  const geometry = architectureGeometry(map, true);
+  const filtered = geometry.filter((r) => r.objectId !== 'w1');
+  const target = { x: 2.5, y: 4 }; // 站在 w2 上，视线要先穿过同一目标物件的 w1
+  assert.equal(visiblePoint(world, map, eye, target, filtered, cache), true, '过滤几何路径应该看得见');
+  assert.equal(visiblePoint(world, map, eye, target, undefined, cache, { excludeObjectId: 'w1' }), true, '索引路径排除 w1 后应该看得见');
+  assert.equal(visiblePoint(world, map, eye, target, undefined, cache), false, '不排除时 w1 会挡住');
+});
+
 test('共用 ctx 的 SightCache 带几何和墙索引，点判定结果不变', () => {
   const map = mkMap(12, 9);
   map.architecture = { walls: [{ id: 'w1', a: { x: 4.5, y: 2 }, b: { x: 4.5, y: 7 }, thickness: 0.25, material: 'wall' }], doors: [] };
@@ -135,6 +152,46 @@ test('共用 ctx 的 SightCache 带几何和墙索引，点判定结果不变', 
     const t = { x: x + 0.5, y: y + 0.5 };
     assert.equal(visiblePoint(world, map, eye, t, undefined, cache), visiblePoint(world, map, eye, t), `(${x}, ${y})`);
   }
+});
+
+function pcFixture() {
+  const w = { ...world, party: [{ id: 'p', name: '甲', sex: '男', heightCm: 173, color: '' }] };
+  return w;
+}
+
+test('开着的门仍然看得见：cache 几何不包含 opened door 的构件', () => {
+  for (const state of [0, 1]) {
+    const map = mkMap(20, 10);
+    map.architecture = { walls: [{ id: 'w1', a: { x: 9, y: 6 }, b: { x: 9, y: 27 }, thickness: 0.25, material: 'wall' }], doors: [] };
+    map.tokens = [{ id: 't1', pcId: 'p', name: '甲', color: '', x: 1, y: 4 }];
+    map.objects = [{
+      id: 'd1', kind: 'object', name: '门', x: 2, y: 3, w: 2, h: 2, height: 2.4, color: '', icon: '',
+      states: ['关闭', '打开'], state, opening: { wallId: 'w1', offset: 6, width: 6, openStates: [1] },
+    }];
+    const w = pcFixture();
+    const eye = { x: 1.5, y: 4.5, sex: '男' };
+    const cache = sightCacheFor(w, map, eye, sightCtxFor(w, map));
+    const hit = pcWithin(w, map, map.objects[0], 30, cache);
+    assert.equal(hit?.id, 't1', state === 1 ? '开着的门应该看得见' : '关着的门应该看得见');
+  }
+});
+
+test('玻璃不挡“看见建筑本身”：索引路径保持旧过滤口径', () => {
+  const map = mkMap(25, 8);
+  map.tokens = [{ id: 't1', pcId: 'p', name: '甲', color: '', x: 1, y: 4 }];
+  map.architecture = { walls: [12, 18, 24, 30, 36, 42].map((x, i) => ({
+    id: 'glass' + i, a: { x, y: 6 }, b: { x, y: 21 }, thickness: 0.25, material: 'glass',
+  })), doors: [] };
+  map.objects = [{
+    id: 'target', kind: 'object', name: '目标墙', x: 3, y: 3, w: 2, h: 2, height: 2.4, color: '', icon: '',
+    states: ['固定'], state: 0,
+    geometry: { kind: 'wall', a: { x: 45, y: 6 }, b: { x: 45, y: 21 }, thickness: 0.25, material: 'wall' },
+  }];
+  const w = pcFixture();
+  const eye = { x: 1.5, y: 4.5, sex: '男' };
+  const cache = sightCacheFor(w, map, eye, sightCtxFor(w, map));
+  const hit = pcWithin(w, map, map.objects[0], 30, cache);
+  assert.equal(hit?.id, 't1', '六面玻璃不该把建筑本身的可见性累加掉');
 });
 
 test('SightCache 与逐次建表逐点一致（带物件、小格、朝向）', () => {

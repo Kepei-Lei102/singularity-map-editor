@@ -204,7 +204,13 @@ export function buildWallIndex(map: GameMap, geometry: ReturnType<typeof archite
  * 和 `wallSightSum` 逐项等价：只测线段 bbox 覆盖到的桶里的构件。
  * 桶按构件 bbox 登记，所以「线段与构件相交」必然意味着两者 bbox 相交、必然落在同一个桶里。
  */
-export function wallSightSumIndexed(idx: WallIndex, from: Point, to: Point): number {
+export interface WallSightFilter {
+  excludeObjectId?: string;
+  /** 只看会挡视线的构件：玻璃这类 blocksSight=false 的不要累计。 */
+  onlyBlocksSight?: boolean;
+}
+
+export function wallSightSumIndexed(idx: WallIndex, from: Point, to: Point, filter?: WallSightFilter): number {
   const { cell, cols, rows, geometry } = idx;
   const x0 = Math.max(0, Math.floor(Math.min(from.x, to.x) / cell));
   const x1 = Math.min(cols - 1, Math.floor(Math.max(from.x, to.x) / cell));
@@ -219,6 +225,8 @@ export function wallSightSumIndexed(idx: WallIndex, from: Point, to: Point): num
       if (idx.stamp[i] === tick) continue;
       idx.stamp[i] = tick;
       const r = geometry[i];
+      if (filter?.excludeObjectId && r.objectId === filter.excludeObjectId) continue;
+      if (filter?.onlyBlocksSight && !r.blocksSight) continue;
       const c = wallSightCostOf(r);
       if (c <= 0) continue;
       const inside = to.x >= r.x && to.x <= r.x + r.w && to.y >= r.y && to.y <= r.y + r.h;
@@ -443,6 +451,8 @@ export function visiblePoint(
   world: World, map: GameMap, eye: Viewer, target: Point,
   geometry?: ReturnType<typeof architectureGeometry>,
   cache?: SightCache,
+  /** 只用于过滤几何的调用：走墙索引时排除目标自己的构件，并可只看挡视线的构件。 */
+  wallFilter?: WallSightFilter,
 ): boolean {
   const p = eyePoint(eye);
   // 用 >= 而不是 >：越界点以前会读到下一行第一格（甚至算出 NaN），现在一律不可见。
@@ -459,7 +469,7 @@ export function visiblePoint(
   // 调用方传了过滤后的 geometry（比如看某个建筑物件时要排除自己）时，
   // 不能用 cache 里那份全量墙索引，否则会把目标自己的别的墙也算进去。
   const useIndexed = !!cache?.walls && (!geometry || geometry === cache.geometry);
-  const wallCost = useIndexed ? wallSightSumIndexed(cache.walls!, p, target) : wallSightSum(g, p, target);
+  const wallCost = useIndexed ? wallSightSumIndexed(cache.walls!, p, target, wallFilter) : wallSightSum(g, p, target);
   if (sum + wallCost > VISION_BUDGET) return false;
   const block = cache ? cache.block : sightSubcellBlockers(world, map);
   if (subcellBlockedWith(block, map.width * SUB, map.height * SUB, p, target)) return false;

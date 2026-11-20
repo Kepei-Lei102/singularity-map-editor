@@ -47,10 +47,18 @@ function sightToObject(world: World, map: GameMap, eye: Viewer, o: MapObject, sh
   const cache = shared ?? sightCacheFor(world, map, eye, sightCtxFor(world, map));
   let best = { d: Infinity, los: false };
   if (isArchitectureObject(o)) {
-    const geometry = architectureGeometry(map, true), others = geometry.filter(r => r.objectId !== o.id && r.blocksSight);
-    for (const r of geometry.filter(r => r.objectId === o.id)) {
+    // cache 的几何是 includeOpen=false 的；开着的门在 cache 里没有自己的构件。
+    // 看“门本身”必须用 includeOpen=true 的几何，墙体仍交给 cache 的索引。
+    const geometry = architectureGeometry(map, true);
+    const own = geometry.filter(r => r.objectId === o.id);
+    const others = geometry.filter(r => r.objectId !== o.id && r.blocksSight);
+    for (const r of own) {
       const target = { x: Math.max(r.x, Math.min(r.x + r.w, p.x)), y: Math.max(r.y, Math.min(r.y + r.h, p.y)) };
-      const d = gridDist(target.x - p.x, target.y - p.y), los = visiblePoint(world, map, eye, target, others, cache);
+      const d = gridDist(target.x - p.x, target.y - p.y);
+      // 有索引时用索引，但排除目标自己的构件，避免它挡住自己；没有索引才退回过滤后的几何。
+      const los = cache.geometry && cache.walls
+        ? visiblePoint(world, map, eye, target, undefined, cache, { excludeObjectId: o.id, onlyBlocksSight: true })
+        : visiblePoint(world, map, eye, target, others, cache);
       if ((los && !best.los) || los === best.los && d < best.d) best = { d, los };
     }
     return best;

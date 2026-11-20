@@ -95,7 +95,8 @@ export function clipArchitecture(
       for (let sx = Math.max(x0, Math.floor(r.x * scale)); sx < Math.min(x1, Math.ceil((r.x + r.w) * scale)); sx++) {
         if (fogAt(m, L, (sx + 0.5) / 3, (sy + 0.5) / 3) !== value) continue;
         const x = Math.max(r.x, sx / 3), y = Math.max(r.y, sy / 3), right = Math.min(r.x + r.w, (sx + 1) / 3), bottom = Math.min(r.y + r.h, (sy + 1) / 3);
-        if (right > x && bottom > y) out.push({ x, y, w: right - x, h: bottom - y, material: r.material });
+        // 浮点裁剪会在边界留出 1e-15 量级的零面积片；它们没有视觉意义，只会让增量/全量数组长度差一截。
+        if (right - x > 1e-9 && bottom - y > 1e-9) out.push({ x, y, w: right - x, h: bottom - y, material: r.material });
       }
   }
   return out;

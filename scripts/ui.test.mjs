@@ -442,6 +442,21 @@ function autoFogWorld(autoFog, mode = 'shared') {
   return map;
 }
 
+test('store：autoFog=false 的棋子移动不再 clone 视图层', () => {
+  for (const mode of ['shared', 'individual', 'grouped']) {
+    autoFogWorld(false, mode);
+    const before = api.getWorld().maps[0];
+    const seq = api.getWorld().observationSeq;
+    const views = before.views, fog = before.fog, seen = before.seen;
+    api.update((d) => { d.maps[0].tokens[0].x += 1; });
+    const after = api.getWorld().maps[0];
+    assert.equal(after.views, views, `${mode} 关自动雾移动不该 clone 视图`);
+    assert.equal(after.fog, fog, `${mode} 关自动雾移动不该重写地图雾`);
+    assert.equal(after.seen, seen, `${mode} 关自动雾移动不该重写地图记忆`);
+    assert.equal(api.getWorld().observationSeq, seq, `${mode} 关自动雾移动不该跑 syncMemory`);
+  }
+});
+
 test('store：autoFog 关→开不靠棋子移动也立刻补算', () => {
   const map = autoFogWorld(false);
   assert.ok(api.getWorld().maps[0].fog.every((f) => f === 0));

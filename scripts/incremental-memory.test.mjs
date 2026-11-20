@@ -20,12 +20,13 @@ export { withVision } from './src/scene/perception';
 export { syncMemory } from './src/scene/memory';
 export { diffWorld } from './src/scene/dirty';
 export { planVision } from './src/scene/visionPlan';
-export { emptyWorld, newMap } from './src/core/defaults';`,
+export { emptyWorld, newMap } from './src/core/defaults';
+export { clipArchitecture } from './src/scene/architecture';`,
     resolveDir: root,
   },
   outfile: bundle, bundle: true, platform: 'node', format: 'cjs', logLevel: 'silent',
 });
-const { produce, withVision, syncMemory, diffWorld, planVision, emptyWorld, newMap } = await import(bundle);
+const { produce, withVision, syncMemory, diffWorld, planVision, emptyWorld, newMap, clipArchitecture } = await import(bundle);
 after(() => rm(temp, { recursive: true, force: true }));
 
 function mkWorld(mode = 'shared') {
@@ -228,6 +229,20 @@ test('记忆合并：独立/分组模式下 mergeLayers 不能丢材质记忆', 
     world = inc;
     remember('甲走一格后');
   }
+});
+
+test('clipArchitecture 丢弃浮点裁剪出的零面积碎片', () => {
+  const m = emptyWorld().maps[0];
+  const fog = new Array(m.width * m.height * 9).fill(1);
+  const fragments = clipArchitecture(m, { fog }, 1, [
+    { x: 0.5, y: 0.5, w: 1e-12, h: 1, material: 'wall' },
+  ]);
+  assert.equal(fragments.length, 0, '宽度小于 1e-9 的碎片不该进记忆');
+  const kept = clipArchitecture(m, { fog }, 1, [
+    { x: 0.5, y: 0.5, w: 0.25, h: 1, material: 'wall' },
+  ]);
+  assert.ok(kept.length > 0, '正常厚度的墙必须保留');
+  for (const f of kept) assert.ok(f.w > 1e-9 && f.h > 1e-9, '保留的片段必须有实际面积');
 });
 
 test('建筑记忆：增量移动保留旧墙、只补脏区新看见的墙', () => {

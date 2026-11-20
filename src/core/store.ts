@@ -126,7 +126,9 @@ function memoryDirty(a: World, b: World): boolean {
   for (const m of b.maps) {
     const o = a.maps.find((x) => x.id === m.id);
     if (!o) return true;
-    if (o.cells !== m.cells || o.fineCells !== m.fineCells || o.d100 !== m.d100 || o.objects !== m.objects || tokensVisionChanged(o.tokens, m.tokens)
+    // autoFog 关着的图，棋子移动不会改雾，也就不需要同步记忆；开着才要。
+    const tokensDirty = m.autoFog && tokensVisionChanged(o.tokens, m.tokens);
+    if (o.cells !== m.cells || o.fineCells !== m.fineCells || o.d100 !== m.d100 || o.objects !== m.objects || tokensDirty
       || o.architecture !== m.architecture || o.fog !== m.fog
       || o.views !== m.views || o.autoFog !== m.autoFog
       || o.materialCells !== m.materialCells || o.fineMaterials !== m.fineMaterials || o.groups !== m.groups) return true;
