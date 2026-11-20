@@ -2312,7 +2312,7 @@ export function trialAttackTargets(): AttackTarget[] {
 }
 
 /** 借机攻击：那一步触发后，主持人点「打」才会结算。 */
-export function trialOpportunityAttack(): string | null {
+export function trialOpportunityAttack(opts: { roll?: number; roller?: Roller } = {}): string | null {
   const t = tr();
   const o = t?.opportunity;
   if (!t || !o) return '没有待结算的借机攻击';
@@ -2328,11 +2328,15 @@ export function trialOpportunityAttack(): string | null {
       const e = dm.tokens.find((k) => k.id === enemyId);
       if (!e || e.corpse || e.down || e.opportunityUsed || statusBlocksAction(e.status)) continue;
       e.opportunityUsed = true;
+      const mv = dm.tokens.find((k) => k.id === mover.id)!;
+      // 009-9-003 是被动，不花 ME；借机攻击也按同一套“打已眩晕的人 ×5 颗”口径。
+      const attackerPc = e.pcId ? d.party?.find((x) => x.id === e.pcId) : null;
+      const hasStunPassive = !!attackerPc?.skills?.includes(STUN_PASSIVE_ID);
+      const diceMultiplier = hasStunPassive ? stunnedDamageDiceMultiplier(mv.status?.label) : 1;
       // 借机攻击走攻击口径（作者已定）：000 特大成功 / 1–5 落空 / 95–99 大成功 / 其余命中。
       // 不是「纯幸运骰 51+」——那条是 resolveLuck 的口径，借机攻击不用它。
-      const roll = 1 + Math.floor(Math.random() * 100);
-      const r = rollAttack(roll, 8);
-      const mv = dm.tokens.find((k) => k.id === mover.id)!;
+      const roll = opts.roll ?? 1 + Math.floor(Math.random() * 100);
+      const r = rollAttack(roll, 8, opts.roller, diceMultiplier);
       let noted = '';
       if (r.hit && mv.pcId) {
         const p = d.party?.find((x) => x.id === mv.pcId);
@@ -2341,10 +2345,23 @@ export function trialOpportunityAttack(): string | null {
           const next = Math.max(0, hp - r.damage);
           p.hp = next; p.hpMax ??= max;
           noted = ` HP ${hp}→${next}/${max}`;
+          // 借机攻击默认钝器：HP 归零按战斗口径昏厥，不是濒死，也不能再挂眩晕。
+          if (next <= 0 && !mv.corpse && mv.status?.label !== DYING_LABEL) {
+            mv.down = true;
+            delete mv.status;
+            noted += '，昏厥';
+          }
         }
       }
+      let stunNote = '';
+      if (hasStunPassive && r.hit && !mv.corpse && !mv.down && mv.status?.label !== DYING_LABEL
+        && passiveStunTriggers({ hit: true, damageRolls: r.rolls, physicalWeaknessKnown: !!mv.weakness?.physical })) {
+        const hadStun = mv.status?.label === '眩晕';
+        mv.status = riderStatus('眩晕')!;
+        stunNote = hadStun ? '；眩晕打击：眩晕刷新' : '；眩晕打击：附带一回合眩晕';
+      }
       const tag = r.dice > 1 ? `（${ATTACK_BAND_LABEL[r.band]}，${r.dice} 颗伤害骰）` : '';
-      hits.push(`${e.name} 借机攻击 ${mv.name}：D100=${r.roll === 100 ? '00' : r.roll}${tag}${r.hit ? `，伤害 ${r.damage}` : '，落空'}${noted}`);
+      hits.push(`${e.name} 借机攻击 ${mv.name}：D100=${r.roll === 100 ? '00' : r.roll}${tag}${r.hit ? `，伤害 ${r.damage}` : '，落空'}${noted}${stunNote}`);
     }
   });
   setTr({ opportunity: null, msg: hits.join('；') });

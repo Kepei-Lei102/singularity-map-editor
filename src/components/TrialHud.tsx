@@ -338,7 +338,7 @@ export function TrialHud() {
         <div className="trial-row trial-opportunity">
           <span className="badge warn">借机攻击！</span>
           <span className="muted">{m?.tokens.filter((k) => t.opportunity!.enemies.includes(k.id)).map((k) => k.name).join('、')} 可以顺势打一下</span>
-          <button className="small" onClick={trialOpportunityAttack}>打</button>
+          <button className="small" onClick={() => trialOpportunityAttack()}>打</button>
           <button className="small" onClick={trialSkipOpportunity}>不打</button>
         </div>
       )}

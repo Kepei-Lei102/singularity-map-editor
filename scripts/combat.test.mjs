@@ -255,6 +255,102 @@ test('借机攻击每个人回合外只能一次', () => {
   assert.equal(api.getUI().trial.opportunity, null);
 });
 
+function opportunityFight({ skills = [], weakness, hp = 50, hpMax = 50 } = {}) {
+  const w = api.emptyWorld();
+  const m = api.newMap('借机技能', '现实', 1, 12, 12, 'floor', false);
+  m.objects = [];
+  m.fog = m.fog.map(() => 1);
+  const attrs = { 力量: 30, 敏捷: 30, 意志: 30, 观察: 30, 智慧: 30, 魅力: 30 };
+  w.party = [
+    { id: 'a', name: '走的人', color: '#fff', tags: [], attributes: attrs, hp, hpMax },
+    { id: 'b', name: '敌人', color: '#f00', tags: [], attributes: attrs, skills, me: 5 },
+  ];
+  m.tokens = [
+    { id: 'ta', pcId: 'a', name: '走的人', color: '#fff', x: 2, y: 2, ...(weakness ? { weakness } : {}) },
+    { id: 'tb', pcId: 'b', name: '敌人', color: '#f00', x: 2, y: 4 },
+  ];
+  w.maps = [m];
+  api.replaceWorld(w);
+  api.startTrial();
+  api.setUI({ trial: { mapId: m.id, players: [{ tokenId: 'ta', pcId: 'a', name: '走的人' }], current: 0, combat: true, moved: {}, turn: 1, msg: '', markSymbol: '!', markText: '', markMode: false } });
+  api.trialMove(0, -1);
+  api.trialMove(0, -1);
+  return m;
+}
+
+test('借机攻击接入 009：已知物理弱点命中就眩晕，不扣 ME', () => {
+  opportunityFight({ skills: ['009-9-003'], weakness: { physical: true } });
+  assert.equal(api.trialOpportunityAttack({ roll: 50, roller: () => 3 }), null);
+  const a = api.getWorld().maps[0].tokens.find((k) => k.id === 'ta');
+  assert.equal(a.status.label, '眩晕');
+  assert.equal(a.status.skipTurns, 1);
+  assert.equal(api.getWorld().party.find((p) => p.id === 'a').hp, 47);
+  assert.equal(api.getWorld().party.find((p) => p.id === 'b').me, 5, '009 是被动，不扣 ME');
+  assert.match(api.getUI().trial.msg, /眩晕打击/);
+});
+
+test('借机攻击接入 009：伤害骰出 8 也眩晕', () => {
+  opportunityFight({ skills: ['009-9-003'] });
+  assert.equal(api.trialOpportunityAttack({ roll: 50, roller: () => 8 }), null);
+  const a = api.getWorld().maps[0].tokens.find((k) => k.id === 'ta');
+  assert.equal(a.status.label, '眩晕');
+});
+
+test('借机攻击没有 009：伤害骰出 8 也不眩晕', () => {
+  opportunityFight({ weakness: { physical: true } });
+  assert.equal(api.trialOpportunityAttack({ roll: 50, roller: () => 8 }), null);
+  const a = api.getWorld().maps[0].tokens.find((k) => k.id === 'ta');
+  assert.equal(a.status, undefined);
+});
+
+test('借机攻击 009：目标已眩晕时伤害骰 ×5', () => {
+  opportunityFight({ skills: ['009-9-003'] });
+  api.update((d) => {
+    d.maps[0].tokens.find((k) => k.id === 'ta').status = { label: '眩晕', skipTurns: 1, blocksAction: true };
+  });
+  assert.equal(api.trialOpportunityAttack({ roll: 50, roller: () => 8 }), null);
+  const w = api.getWorld();
+  assert.equal(w.party.find((p) => p.id === 'a').hp, 10, '普通命中 1 颗 ×5 颗，每颗 8');
+  assert.equal(w.maps[0].tokens.find((k) => k.id === 'ta').status.label, '眩晕');
+  assert.match(api.getUI().trial.msg, /5 颗伤害骰/);
+  assert.match(api.getUI().trial.msg, /眩晕刷新/, '被动命中 8 时应刷新眩晕而不是新挂');
+});
+
+test('借机攻击 009：大成功打已眩晕目标，伤害骰 10 颗', () => {
+  opportunityFight({ skills: ['009-9-003'], hp: 100, hpMax: 100 });
+  api.update((d) => {
+    d.maps[0].tokens.find((k) => k.id === 'ta').status = { label: '眩晕', skipTurns: 1, blocksAction: true };
+  });
+  assert.equal(api.trialOpportunityAttack({ roll: 96, roller: () => 8 }), null);
+  const w = api.getWorld();
+  assert.equal(w.party.find((p) => p.id === 'a').hp, 20, '大成功 2 颗 ×5 = 10 颗，每颗 8');
+  assert.match(api.getUI().trial.msg, /10 颗伤害骰/);
+});
+
+test('借机攻击 009：已眩晕目标被打到 0 仍按昏厥，不叠眩晕', () => {
+  opportunityFight({ skills: ['009-9-003'], hp: 4, hpMax: 4 });
+  api.update((d) => {
+    d.maps[0].tokens.find((k) => k.id === 'ta').status = { label: '眩晕', skipTurns: 1, blocksAction: true };
+  });
+  assert.equal(api.trialOpportunityAttack({ roll: 50, roller: () => 8 }), null);
+  const w = api.getWorld();
+  const a = w.maps[0].tokens.find((k) => k.id === 'ta');
+  assert.equal(w.party.find((p) => p.id === 'a').hp, 0);
+  assert.equal(a.down, true);
+  assert.equal(a.status, undefined);
+});
+
+test('借机攻击把 PC 打到 0：标昏厥，不再挂眩晕', () => {
+  opportunityFight({ skills: ['009-9-003'], weakness: { physical: true }, hp: 4, hpMax: 4 });
+  assert.equal(api.trialOpportunityAttack({ roll: 50, roller: () => 8 }), null);
+  const w = api.getWorld();
+  const a = w.maps[0].tokens.find((k) => k.id === 'ta');
+  assert.equal(w.party.find((p) => p.id === 'a').hp, 0);
+  assert.equal(a.down, true);
+  assert.equal(a.status, undefined);
+  assert.match(api.getUI().trial.msg, /昏厥/);
+});
+
 test('救治：解锁急救技能才能做，D100 投 1 失败', () => {
   const w = api.emptyWorld();
   const m = api.newMap('救治', '现实', 1, 10, 10, 'floor', false);
