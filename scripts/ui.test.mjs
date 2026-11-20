@@ -427,6 +427,68 @@ test('store：手动雾 redo 与 autoFog 开关', () => {
   assert.equal(api.getWorld().maps[0].fog[30 * 50 + 40], 2);
 });
 
+function autoFogWorld(autoFog) {
+  const world = api.emptyWorld();
+  world.party = [{ id: 'a', name: '甲', sex: '男', heightCm: 173, color: '' }];
+  const map = api.newMap('自动雾', '现实', 0, 50, 40, 'floor', false);
+  map.autoFog = autoFog;
+  map.tokens = [{ id: 'ta', pcId: 'a', name: '甲', color: '', x: 5, y: 5 }];
+  world.maps = [map];
+  api.replaceWorld(world);
+  return map;
+}
+
+test('store：autoFog 关→开不靠棋子移动也立刻补算', () => {
+  const map = autoFogWorld(false);
+  assert.ok(api.getWorld().maps[0].fog.every((f) => f === 0));
+  api.update((d) => { d.maps[0].autoFog = true; });
+  assert.ok(api.getWorld().maps[0].fog.some((f) => f === 1), '打开自动迷雾后应立刻出现可见格');
+});
+
+test('store：autoFog=false 时改棋子名字不复制视图层', () => {
+  autoFogWorld(false);
+  const views = api.getWorld().maps[0].views;
+  api.update((d) => { d.maps[0].tokens[0].name = '改名'; });
+  assert.equal(api.getWorld().maps[0].views, views, '普通元数据不该 clone/merge 视图');
+});
+
+test('store：有手动雾标记时改棋子名字不复制视图层', () => {
+  const map = manualFogWorld();
+  api.paintFog(map.id, [[40, 30]], 'fogReveal');
+  const views = api.getWorld().maps[0].views;
+  api.update((d) => { d.maps[0].tokens[0].name = '改名'; });
+  assert.equal(api.getWorld().maps[0].views, views, '手动雾 pending 的普通元数据也不该 clone/merge');
+  assert.equal(api.getWorld().maps[0].fog[30 * 50 + 40], 1, '手动雾仍然保留');
+});
+
+test('store：手动雾不会被改名/队员改名这类普通元数据覆盖', () => {
+  const map = manualFogWorld();
+  api.paintFog(map.id, [[40, 30]], 'fogReveal');
+  assert.equal(api.getWorld().maps[0].fog[30 * 50 + 40], 1);
+  api.update((d) => { d.maps[0].tokens[0].name = '改名'; });
+  assert.equal(api.getWorld().maps[0].fog[30 * 50 + 40], 1, '棋子改名不算视野脏');
+  api.update((d) => { d.party[0].name = '新名字'; });
+  assert.equal(api.getWorld().maps[0].fog[30 * 50 + 40], 1, '队员改名不算视野脏');
+  api.update((d) => { d.maps[0].tokens[0].x += 1; });
+  assert.equal(api.getWorld().maps[0].fog[30 * 50 + 40], 2, '真正移动后才自动覆盖');
+});
+
+test('store：材质/高度/贴图组改动不算视野脏，不覆盖手动雾', () => {
+  const map = manualFogWorld();
+  api.paintFog(map.id, [[40, 30]], 'fogReveal');
+  const idx = 30 * 50 + 40;
+  assert.equal(api.getWorld().maps[0].fog[idx], 1);
+  api.paintMaterialCells(map.id, [[40, 30]], 'wood');
+  assert.equal(api.getWorld().maps[0].fog[idx], 1, '材质改动不该覆盖手动雾');
+  api.addCellGroup(map.id, '贴图组');
+  assert.equal(api.getWorld().maps[0].fog[idx], 1, '贴图组改动不该覆盖手动雾');
+  api.update((d) => { const n = d.maps[0].width * d.maps[0].height; d.maps[0].heights = new Array(n).fill(0); });
+  assert.ok(api.getWorld().maps[0].heights, '高度确实变了');
+  assert.equal(api.getWorld().maps[0].fog[idx], 1, '高度改动不该覆盖手动雾');
+  api.update((d) => { d.maps[0].tokens[0].x += 1; });
+  assert.equal(api.getWorld().maps[0].fog[idx], 2, '真正移动后才自动覆盖');
+});
+
 test('store：individual 手动雾第二笔单独一步，不靠第一笔标记', () => {
   const world = api.emptyWorld();
   world.visionMode = 'individual';

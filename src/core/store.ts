@@ -9,7 +9,7 @@ import { migrateWorld, syncMemory } from '../scene/memory';
 import type { CombatNotice } from './types';
 import { setMediaIndex } from '../runtime/media';
 import { withVision } from '../scene/perception';
-import { markManualFog, diffWorld } from '../scene/dirty';
+import { markManualFog, partyVisionChanged, diffWorld, tokensVisionChanged } from '../scene/dirty';
 import { planVision } from '../scene/visionPlan';
 import { loadSlot, saveSlot } from './persist';
 import { onSessionRenewed } from './session';
@@ -119,17 +119,6 @@ function pushHistory(at: World = world) {
  * syncMemory 每个地图要扫 `宽×高×9` 个子格，还会按队员复制整层视野，
  * 以前连改个 NPC 名字、打个字都付这个代价。
  */
-/** 队伍的变动里只有这几项会影响「谁看得见什么」：成员身份、视野组、身高/性别（决定眼睛高度）。
- *  HP、ME、名字、技能改了不用重算记忆——以前整包比较 party，结果每次扣血都白跑一遍 syncMemory。 */
-function partyVisionChanged(a: World, b: World): boolean {
-  if (a.visionGroups !== b.visionGroups) return true;
-  if (a.party.length !== b.party.length) return true;
-  for (let i = 0; i < a.party.length; i++) {
-    const x = a.party[i], y = b.party[i];
-    if (!y || x.id !== y.id || x.visionGroupId !== y.visionGroupId || x.sex !== y.sex || x.heightCm !== y.heightCm) return true;
-  }
-  return false;
-}
 
 function memoryDirty(a: World, b: World): boolean {
   if (a.visionMode !== b.visionMode || partyVisionChanged(a, b) || a.terrains !== b.terrains) return true;
@@ -137,7 +126,7 @@ function memoryDirty(a: World, b: World): boolean {
   for (const m of b.maps) {
     const o = a.maps.find((x) => x.id === m.id);
     if (!o) return true;
-    if (o.cells !== m.cells || o.fineCells !== m.fineCells || o.d100 !== m.d100 || o.objects !== m.objects || o.tokens !== m.tokens
+    if (o.cells !== m.cells || o.fineCells !== m.fineCells || o.d100 !== m.d100 || o.objects !== m.objects || tokensVisionChanged(o.tokens, m.tokens)
       || o.architecture !== m.architecture || o.architectureFragments !== m.architectureFragments
       || o.heights !== m.heights || o.fog !== m.fog
       || o.views !== m.views || o.autoFog !== m.autoFog

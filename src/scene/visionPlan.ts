@@ -15,6 +15,8 @@ export type MapScope = Set<number> | null;
 export interface VisionPlan {
   full: boolean;
   maps: Map<string, MapScope>;
+  /** 这些地图需要整份记忆同步（材质/贴图组/高度这类 memory-only 改动也算）。 */
+  memoryFullMaps?: Set<string>;
 }
 
 /** 以 (cx, cy) 为心、半径 R 的圆盘（含边界），按主格取整。 */
@@ -32,7 +34,9 @@ function disc(map: { width: number; height: number }, cx: number, cy: number, r 
  * 只对「纯棋子移动」收窄；其余情况一律整图（宁可多算，不漏算）。
  */
 export function planVision(next: World, dirty: Dirty[]): VisionPlan {
-  if (dirty.some((d) => d.full) || dirty.some((d) => d.structure)) return { full: true, maps: new Map() };
+  const memoryFullMaps = new Set(dirty.filter((d) => d.full || d.structure).map((d) => d.mapId));
+  const visionFull = dirty.some((d) => d.full) || dirty.some((d) => d.visionStructure ?? d.structure);
+  if (visionFull) return { full: true, maps: new Map(), memoryFullMaps: new Set(next.maps.map((m) => m.id)) };
   const maps = new Map<string, MapScope>();
   for (const d of dirty) {
     const map = next.maps.find((m) => m.id === d.mapId);
@@ -45,5 +49,5 @@ export function planVision(next: World, dirty: Dirty[]): VisionPlan {
     }
     maps.set(d.mapId, cells);
   }
-  return { full: false, maps };
+  return { full: false, maps, memoryFullMaps };
 }

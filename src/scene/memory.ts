@@ -1,7 +1,7 @@
 import { identityKnowledge } from './identity';
 import { materialAtCell } from './material';
 import { objectEnabled } from '../core/objectData.js';
-import { clipArchitecture, isArchitectureObject, migrateArchitecture } from './architecture';
+import { clipArchitecture, isArchitectureObject, migrateArchitecture, sortArchitecture } from './architecture';
 import { repairWorld } from '../core/schema.js';
 import { current, isDraft, type Draft } from 'immer';
 import { buildFineCells, groupBounds, objectFootprintCells } from '../core/grid';
@@ -110,44 +110,54 @@ function touchesGroup(box: { x0: number; y0: number; x1: number; y1: number }, w
 }
 
 /** 把一份迷雾里"看得见"的部分同步进它的记忆。给了 scope 就只处理这些主格。 */
-function syncLayer(m: Draft<GameMap>, L: Draft<VisionLayer>, rev: number, scope?: CellScope) {
+function syncLayer(m: Draft<GameMap>, L: Draft<VisionLayer>, rev: number, scope?: CellScope, source?: GameMap) {
   // Read geometry/fog from one plain snapshot; scanning subcells through Immer proxies
   // repeats thousands of trapped subdivision lookups on every movement.
-  const source = isDraft(m) ? current(m) : m;
-  const layer = isDraft(L) ? current(L) : L;
-  L.seen.cellRevs ??= Array(m.width * m.height).fill(0); L.seen.observed ??= {}; L.seen.objectRevs ??= {}; L.seen.architectureRevs ??= {};
-  const width3 = m.width * 3;
+  const src = source ?? (isDraft(m) ? current(m) : m);
+  const layer = L;
+  L.seen.cellRevs ??= Array(src.width * src.height).fill(0); L.seen.observed ??= {}; L.seen.objectRevs ??= {}; L.seen.architectureRevs ??= {};
+  const width3 = src.width * 3;
   if (scope) {
     for (const i of scope) {
-      const cx = i % m.width, cy = Math.floor(i / m.width);
+      const cx = i % src.width, cy = Math.floor(i / src.width);
       for (let sy = 0; sy < 3; sy++) for (let sx = 0; sx < 3; sx++) {
         const key = (cy * 3 + sy) * width3 + (cx * 3 + sx);
-        if (spatialFog(source, layer, key) === 1) { L.seen.observed[key] = rev; L.seen.architectureRevs[key] = rev; }
+        if (spatialFog(src, layer, key) === 1) { L.seen.observed[key] = rev; L.seen.architectureRevs[key] = rev; }
       }
     }
   } else {
-    for (let key = 0; key < source.width * source.height * 9; key++) if (spatialFog(source, layer, key) === 1) { L.seen.observed[key] = rev; L.seen.architectureRevs[key] = rev; }
+    for (let key = 0; key < src.width * src.height * 9; key++) if (spatialFog(src, layer, key) === 1) { L.seen.observed[key] = rev; L.seen.architectureRevs[key] = rev; }
   }
-  const n = m.width * m.height;
+  const n = src.width * src.height;
   const cellRevs = (L.seen.cellRevs ??= Array(n).fill(0));
   const materialCells = (L.seen.materialCells ??= {});
   const writeCell = (i: number) => {
     if (L.fog[i] !== 1) return;
-    L.seen.cells[i] = m.cells[i]; cellRevs[i] = rev;
-    const mid = materialAtCell(m, i);
+    L.seen.cells[i] = src.cells[i]; cellRevs[i] = rev;
+    const mid = materialAtCell(src, i);
     if (mid) materialCells[i] = mid; else delete materialCells[i];
   };
   if (scope) for (const i of scope) writeCell(i);
   else for (let i = 0; i < n; i++) writeCell(i);
-  // 建筑记忆按整层重算：它只跟建筑段数有关，跟格数无关。
-  const historical = clipArchitecture(source, layer, 2, layer.seen.architecture ?? []);
-  L.seen.architecture = [...historical, ...clipArchitecture(source, layer)];
-  const bbox = scope ? scopeBBox(source, scope) : null;
-  const box = { ...source, fog: layer.fog };
-  const live = source.objects.filter((o) => objectEnabled(source, o) && o.kind === 'object' && !isArchitectureObject(o) && !o.hidden
+  const bbox = scope ? scopeBBox(src, scope) : null;
+  if (scope && bbox) {
+    // 移动路径下建筑没变（变了 plan 会 full）。脏区外旧记忆原样保留，
+    // 只把脏区里新看见的当前几何补进去，不再整层扫所有墙和子格。
+    const old = layer.seen.architecture ?? [];
+    const key = (r: { x: number; y: number; w: number; h: number; material: string }) => `${r.x},${r.y},${r.w},${r.h},${r.material}`;
+    const have = new Set(old.map(key));
+    const added = clipArchitecture(src, layer, 1, undefined, bbox).filter((r) => !have.has(key(r)));
+    L.seen.architecture = sortArchitecture(added.length ? [...old, ...added] : old);
+  } else {
+    // 建筑记忆按整层重算：它只跟建筑段数有关，跟格数无关。
+    const historical = clipArchitecture(src, layer, 2, layer.seen.architecture ?? []);
+    L.seen.architecture = sortArchitecture([...historical, ...clipArchitecture(src, layer)]);
+  }
+  const box = { ...src, fog: layer.fog };
+  const live = src.objects.filter((o) => objectEnabled(src, o) && o.kind === 'object' && !isArchitectureObject(o) && !o.hidden
     && (!bbox || touchesRect(bbox, o)) && anyVisible(box, o));
   const liveIds = new Set(live.map((o) => o.id));
-  const textures = objectTexturesOf(source);
+  const textures = objectTexturesOf(src);
   // 记忆里的东西，原地方现在看得见了、但它已经不在那（被搬走/删掉/藏起来）→ 忘掉。
   // 脏区外的记忆不受影响，直接留着。
   const kept = L.seen.objects.filter((r) => liveIds.has(r.id) || !anyVisible(box, r) || (bbox !== null && !touchesRect(bbox, r)));
@@ -164,8 +174,8 @@ function syncLayer(m: Draft<GameMap>, L: Draft<VisionLayer>, rev: number, scope?
   // 物件贴图（objectId）是物件外观，等物件外观那一步再接记忆；这里只记地面/贴花。
   const textureKeyOf = (g: CellGroup) => g.texture ? `${g.texture.mediaId}~${g.texture.fit ?? 'fill'}~${Math.round((g.texture.opacity ?? 1) * 1000) / 1000}` : 'none';
   const memorySourceOf = (g: CellGroup) => g.sourceId ?? g.id;
-  const liveGroups = (source.groups ?? []).filter((g) => !g.objectId);
-  const visibleCellsOf = (g: CellGroup) => new Set(g.cells.filter((key) => spatialFog(source, layer, key) === 1));
+  const liveGroups = (src.groups ?? []).filter((g) => !g.objectId);
+  const visibleCellsOf = (g: CellGroup) => new Set(g.cells.filter((key) => spatialFog(src, layer, key) === 1));
   const nextGroups = new Map<string, CellGroup>();
   const nextRevs = new Map<string, number>();
   const oldRevs = L.seen.groupRevs ?? {};
@@ -180,7 +190,7 @@ function syncLayer(m: Draft<GameMap>, L: Draft<VisionLayer>, rev: number, scope?
       nextRevs.set(id, Math.max(nextRevs.get(id) ?? 0, oldRevs[id] ?? 0, oldRevs[old.id] ?? 0));
       continue;
     }
-    const cells = old.cells.filter((key) => spatialFog(source, layer, key) === 2).sort((a, b) => a - b);
+    const cells = old.cells.filter((key) => spatialFog(src, layer, key) === 2).sort((a, b) => a - b);
     if (!cells.length) continue;
     const before = nextGroups.get(id);
     const next: CellGroup = before
@@ -213,25 +223,31 @@ export function syncMemory(d: Draft<World>, plan?: VisionPlan) {
   for (const m of d.maps) {
     migrateArchitecture(m);
     syncObjectGroups(m);
-    const scope: CellScope = plan && !plan.full ? plan.maps.get(m.id) ?? undefined : undefined;
+    const memoryFull = plan ? !!plan.memoryFullMaps?.has(m.id) : true;
+    const scope: CellScope = plan && !memoryFull ? plan.maps.get(m.id) ?? undefined : undefined;
     if (scope && scope.size === 0) continue; // 这张图没变
+    const mapSource = isDraft(m) ? current(m) : m;
     if (d.visionMode === 'shared') {
-      syncLayer(m, m, rev, scope);
-      pruneMemory(m, m, scope);
+      syncLayer(m, m, rev, scope, mapSource);
+      pruneMemory(m, m, scope, mapSource);
       // 共享模式下每个人看到的就是地图那份，共用数组而不是复制 9 份。
       for (const p of d.party) m.views[p.id] = { fog: m.fog, seen: m.seen };
     } else {
       const done = new Set<string>();
       for (const p of d.party) {
         const key = visionKey(d, p.id); if (done.has(key)) continue; done.add(key);
-        const L = m.views[p.id]; syncLayer(m, L, rev, scope); pruneMemory(m, L, scope);
-        for (const peer of d.party.filter(x => visionKey(d, x.id) === key)) m.views[peer.id] = cloneLayer(L);
+        const L = m.views[p.id]; syncLayer(m, L, rev, scope, mapSource); pruneMemory(m, L, scope, mapSource);
+        // p 自己就是第一次写回，不用再 clone 一份；同组其他人才需要独立副本。
+        let first = true;
+        for (const peer of d.party.filter(x => visionKey(d, x.id) === key)) {
+          m.views[peer.id] = first ? L : cloneLayer(L);
+          first = false;
+        }
       }
       Object.assign(m, mergeLayers(m, d.party.map(p => m.views[p.id])));
     }
     // 辨识改变知识归属，不刷新灰区中物件的位置或状态。
-    const source = isDraft(m) ? current(m) : m;
-    const identities = new Map(source.objects.map(o => [o.id, identityKnowledge(o)]));
+    const identities = new Map(mapSource.objects.map(o => [o.id, identityKnowledge(o)]));
     // 共享模式下所有人的 seen 是同一个对象，去重后只扫一遍。
     const layers = new Set<VisionLayer>([m, ...Object.values(m.views)]);
     for (const L of layers) L.seen.objects = L.seen.objects.map(r => {

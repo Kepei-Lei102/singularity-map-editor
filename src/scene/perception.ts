@@ -4,7 +4,7 @@ import { produce } from 'immer';
 import type { GameMap, MapObject, Token, VisionLayer, World } from '../core/types';
 import { partyVisionOf, sightCacheFor, visiblePoint, viewerOf, type SightCache, type SightCtx, type Viewer } from './sight';
 import { sightCtxFor } from './sightIndex';
-import { diffWorld, isManualFog, markManualFog } from './dirty';
+import { diffWorld, isManualFog, markManualFog, mapVisionChanged, partyVisionChanged, tokensVisionChanged } from './dirty';
 import { planVision, type MapScope, type VisionPlan } from './visionPlan';
 import { cloneLayer, emptyVision, mergeLayers, visionKey } from './vision';
 import { cellLine, gridDist } from '../core/util';
@@ -95,7 +95,7 @@ export function withVision(next: World, prev: World, opts: { full?: boolean; pla
   };
   const markAfter = new Set<string>();
   const out = produce(next, d => {
-    const membershipChanged = next.party !== prev.party || next.visionGroups !== prev.visionGroups || next.visionMode !== prev.visionMode;
+    const membershipChanged = partyVisionChanged(next, prev);
     for (const m of d.maps) {
       const src = next.maps.find(x => x.id === m.id)!;
       const before = prev.maps.find(x => x.id === m.id);
@@ -103,7 +103,13 @@ export function withVision(next: World, prev: World, opts: { full?: boolean; pla
       const sightCtx = sightCtxFor(next, src);
       const manual = !!before && isManualFog(before);
       const manualChanged = !!before && (before.fog !== src.fog || before.views !== src.views);
-      const otherDirty = membershipChanged || !before || !before.autoFog || before.cells !== src.cells || before.fineCells !== src.fineCells || before.d100 !== src.d100 || before.objects !== src.objects || before.tokens !== src.tokens || before.architecture !== src.architecture || before.materialCells !== src.materialCells || before.fineMaterials !== src.fineMaterials || next.terrains !== prev.terrains;
+      const autoFogOn = !!before && !before.autoFog && !!src.autoFog;
+      const autoFogOff = !!before && !before.autoFog && !src.autoFog;
+      // autoFog 关掉时自动视野不跑，普通 metadata / 移动也不该让视图层白复制一遍；
+      // 但队伍/模式变化仍要进分支（共享→独立要补真副本），开关打开要整图补算。
+      const otherDirty = membershipChanged || !before || autoFogOn
+        || (!!src.autoFog && (mapVisionChanged(before, src) || tokensVisionChanged(before.tokens, src.tokens)
+          || next.terrains !== prev.terrains));
       const ids = new Set(d.party.map(p => p.id));
       for (const id of Object.keys(m.views)) if (!ids.has(id)) delete m.views[id];
       for (const p of d.party) m.views[p.id] ??= emptyVision(m.width * m.height);
@@ -113,6 +119,11 @@ export function withVision(next: World, prev: World, opts: { full?: boolean; pla
       const manualPending = src.autoFog && ((manual && !manualApply) || (manualChanged && !(otherDirty || opts.full)));
       if (manualPending) opts.onManualPending?.(src.id);
       if (manualChanged && src.autoFog && !(otherDirty || opts.full)) markAfter.add(src.id);
+      // 没有视野脏动、也不是手动雾/pending、scope 还是空的：这张图什么都不用做。
+      // 改棋子名字、扣 HP、改材质/房间都不该付 clone/merge 的代价。
+      const noVisionWork = !otherDirty && !manualApply && !manualChanged && !opts.full
+        && (autoFogOff || !scope || scope.size === 0);
+      if (noVisionWork) continue;
       const apply = (L: VisionLayer, members: Set<string>) => {
         if (scope && scope.size === 0) return; // 这张图没变
         const mine = src.tokens.filter(t => t.pcId && members.has(t.pcId));
@@ -133,9 +144,12 @@ export function withVision(next: World, prev: World, opts: { full?: boolean; pla
         const groups = new Map<string, string[]>();
         for (const p of d.party) { const key = visionKey(next, p.id); groups.set(key, [...groups.get(key) ?? [], p.id]); }
         for (const members of groups.values()) {
-          const L = members.length === 1 ? cloneLayer(m.views[members[0]]) : mergeLayers(src, members.map(id => m.views[id]));
+          // 单人组直接在自己的 draft 上算，不用先 clone 一份再 clone 回来；
+          // 多人组 merge 出新层后，第一个成员共用它，其余成员才复制。
+          const L = members.length === 1 ? m.views[members[0]] : mergeLayers(src, members.map(id => m.views[id]));
           if (m.autoFog && (otherDirty || opts.full)) apply(L, new Set(members));
-          for (const id of members) m.views[id] = cloneLayer(L);
+          m.views[members[0]] = L;
+          for (let k = 1; k < members.length; k++) m.views[members[k]] = cloneLayer(L);
         }
         Object.assign(m, mergeLayers(src, d.party.map(p => m.views[p.id])));
       }

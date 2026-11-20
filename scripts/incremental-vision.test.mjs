@@ -167,6 +167,24 @@ test('手动雾先保留，下一次视野脏动按自动迷雾重算覆盖', ()
   sameFog(inc.maps[0].fog, full.maps[0].fog, '手动雾后的下一次移动');
 });
 
+test('autoFog 关→开：不移动棋子也要整图补算', () => {
+  for (const mode of ['shared', 'individual', 'grouped']) {
+    const w = mkWorld(mode);
+    w.maps[0].autoFog = false;
+    const prev = withVision(w, emptyWorldFallback(mode), { full: true });
+    assert.ok(prev.maps[0].fog.every((f) => f === 0), `${mode}：关着自动迷雾时不该预先算雾`);
+    const next = produce(prev, (d) => { d.maps[0].autoFog = true; });
+    const dirty = diffWorld(prev, next);
+    assert.equal(dirty[0].visionStructure, true, `${mode}：autoFog 关→开必须算视野结构变化`);
+    const plan = planVision(next, dirty);
+    assert.equal(plan.full, true, `${mode}：autoFog 关→开必须整图补算`);
+    const inc = withVision(next, prev, { plan });
+    const full = withVision(next, prev, { full: true });
+    sameFog(inc.maps[0].fog, full.maps[0].fog, `${mode}：autoFog 关→开`);
+    assert.ok(inc.maps[0].fog.some((f) => f === 1), `${mode}：打开自动迷雾后应该立刻出现可见格`);
+  }
+});
+
 test('关掉自动迷雾后，手动雾保留，不被重算覆盖', () => {
   const base = produce(withVision(mkWorld('shared'), emptyWorldFallback('shared'), { full: true }), (d) => { d.maps[0].autoFog = false; });
   const idx = base.maps[0].fog.findIndex((f) => f === 1);

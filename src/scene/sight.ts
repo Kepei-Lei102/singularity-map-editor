@@ -417,11 +417,20 @@ export function partyVisionCells(world: World, map: GameMap, viewers: Viewer[], 
  * 一次判定要用的两份表：每格衰减（跟眼睛高度有关）和子格挡死表（只跟地图有关）。
  * 建表是 O(格数)，所以别放在内层循环里——一个观察者建一次，反复用。
  */
-export interface SightCache { cost: Float32Array; block: Uint8Array | null }
+export interface SightCache {
+  cost: Float32Array;
+  block: Uint8Array | null;
+  /** 和 cost 同一批表里的几何与墙索引；点判定复用它，不再每次重扫全图建筑。 */
+  geometry?: ReturnType<typeof architectureGeometry>;
+  walls?: WallIndex;
+}
 
 export function sightCacheFor(world: World, map: GameMap, eye: Viewer, ctx?: SightCtx): SightCache {
   // 传了 ctx 就复用已经建好的表（交互判定里会被反复取，别再按人重建全图）。
-  if (ctx) { const t = ctx.tablesFor(eyeHeight(eye)); return { cost: t.cost, block: t.block }; }
+  if (ctx) {
+    const t = ctx.tablesFor(eyeHeight(eye));
+    return { cost: t.cost, block: t.block, geometry: t.geometry, walls: t.walls };
+  }
   return { cost: cellSightCost(world, map, eyeHeight(eye)), block: sightSubcellBlockers(world, map) };
 }
 
@@ -446,9 +455,12 @@ export function visiblePoint(
   const sum = cellSightTotal(cost, map.width, x0, y0, x1, y1);
   if (sum > VISION_BUDGET) return false;
   if (eye.facing && !inCone(eye.facing, p.x, p.y, target.x, target.y, coneFor(map, x0, y0))) return false;
-  const g = geometry ?? architectureGeometry(map);
-  // 墙按系数 2 叠加：一道墙就超过 1.56 的预算，等于挡住；门开着几何里没这块。
-  if (sum + wallSightSum(g, p, target) > VISION_BUDGET) return false;
+  const g = geometry ?? cache?.geometry ?? architectureGeometry(map);
+  // 调用方传了过滤后的 geometry（比如看某个建筑物件时要排除自己）时，
+  // 不能用 cache 里那份全量墙索引，否则会把目标自己的别的墙也算进去。
+  const useIndexed = !!cache?.walls && (!geometry || geometry === cache.geometry);
+  const wallCost = useIndexed ? wallSightSumIndexed(cache.walls!, p, target) : wallSightSum(g, p, target);
+  if (sum + wallCost > VISION_BUDGET) return false;
   const block = cache ? cache.block : sightSubcellBlockers(world, map);
   if (subcellBlockedWith(block, map.width * SUB, map.height * SUB, p, target)) return false;
   return true;

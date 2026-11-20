@@ -76,18 +76,35 @@ export function setTokenPosition(m: GameMap, t: Token, p: Point) {
   if (isSubdivided(m, p.x, p.y)) t.subcell = { x: Math.floor(p.x * 3 + 1e-8), y: Math.floor(p.y * 3 + 1e-8) };
   else delete t.subcell;
 }
-export function clipArchitecture(m: GameMap, L: { fog: number[] }, value = 1, geometry: ArchitectureFragment[] = architectureGeometry(m, true).filter(r => !r.hidden)) {
+export function clipArchitecture(
+  m: GameMap,
+  L: { fog: number[] },
+  value = 1,
+  geometry: ArchitectureFragment[] = architectureGeometry(m, true).filter(r => !r.hidden),
+  box?: { x0: number; y0: number; x1: number; y1: number },
+): ArchitectureFragment[] {
   const out: ArchitectureFragment[] = [];
+  const scale = 3;
+  const x0 = box ? Math.max(0, box.x0 * scale) : 0;
+  const x1 = box ? Math.min(m.width * scale, (box.x1 + 1) * scale) : m.width * scale;
+  const y0 = box ? Math.max(0, box.y0 * scale) : 0;
+  const y1 = box ? Math.min(m.height * scale, (box.y1 + 1) * scale) : m.height * scale;
   for (const r of geometry) {
-    const scale = 3;
-    for (let sy = Math.max(0, Math.floor(r.y * scale)); sy < Math.min(m.height * scale, Math.ceil((r.y + r.h) * scale)); sy++)
-      for (let sx = Math.max(0, Math.floor(r.x * scale)); sx < Math.min(m.width * scale, Math.ceil((r.x + r.w) * scale)); sx++) {
+    if (box && !(r.x < box.x1 + 1 && r.x + r.w > box.x0 && r.y < box.y1 + 1 && r.y + r.h > box.y0)) continue;
+    for (let sy = Math.max(y0, Math.floor(r.y * scale)); sy < Math.min(y1, Math.ceil((r.y + r.h) * scale)); sy++)
+      for (let sx = Math.max(x0, Math.floor(r.x * scale)); sx < Math.min(x1, Math.ceil((r.x + r.w) * scale)); sx++) {
         if (fogAt(m, L, (sx + 0.5) / 3, (sy + 0.5) / 3) !== value) continue;
         const x = Math.max(r.x, sx / 3), y = Math.max(r.y, sy / 3), right = Math.min(r.x + r.w, (sx + 1) / 3), bottom = Math.min(r.y + r.h, (sy + 1) / 3);
         if (right > x && bottom > y) out.push({ x, y, w: right - x, h: bottom - y, material: r.material });
       }
   }
   return out;
+}
+
+/** 建筑记忆片段的稳定顺序，避免增量/全量两条路径只是数组顺序不同。 */
+export function sortArchitecture(fragments: ArchitectureFragment[]): ArchitectureFragment[] {
+  return fragments.slice().sort((a, b) => a.x - b.x || a.y - b.y || a.w - b.w || a.h - b.h
+    || (a.material < b.material ? -1 : a.material > b.material ? 1 : 0));
 }
 
 /** Reject newly solid geometry overlapping people or solid furniture; all state workflows use this. */

@@ -10,10 +10,10 @@ const root = fileURLToPath(new URL('..', import.meta.url));
 const temp = await mkdtemp(join(tmpdir(), 'ts-sight-test-'));
 const bundle = join(temp, 'editor.cjs');
 await build({
-  stdin: { contents: `export * from './src/scene/sight';`, resolveDir: root },
+  stdin: { contents: `export * from './src/scene/sight'; export { sightCtxFor } from './src/scene/sightIndex';`, resolveDir: root },
   outfile: bundle, bundle: true, platform: 'node', format: 'cjs', logLevel: 'silent',
 });
-const { eyeHeight, coneFor, cellSightCost, canSee, inCone, visionOf, visiblePoint, sightCacheFor, VISION_BUDGET, BASE_CELL_COST, objectSightCost } = await import(bundle);
+const { eyeHeight, coneFor, cellSightCost, canSee, inCone, visionOf, visiblePoint, sightCacheFor, sightCtxFor, VISION_BUDGET, BASE_CELL_COST, objectSightCost } = await import(bundle);
 after(() => rm(temp, { recursive: true, force: true }));
 
 const world = { terrains: [
@@ -123,6 +123,18 @@ test('小格视野：挡死小块按 1/3 细化，衰减仍按整格', () => {
   map.fineCells[key] = 'floor';
   map.fineCells[5 * 60 + 15] = 'wall';
   assert.equal(visiblePoint(world, map, eye, { x: 7.5, y: 1.5 }), true);
+});
+
+test('共用 ctx 的 SightCache 带几何和墙索引，点判定结果不变', () => {
+  const map = mkMap(12, 9);
+  map.architecture = { walls: [{ id: 'w1', a: { x: 4.5, y: 2 }, b: { x: 4.5, y: 7 }, thickness: 0.25, material: 'wall' }], doors: [] };
+  const eye = { x: 1, y: 1, sex: '男', facing: '东' };
+  const cache = sightCacheFor(world, map, eye, sightCtxFor(world, map));
+  assert.ok(cache.geometry && cache.walls, '带 ctx 的 cache 应该复用几何和墙索引');
+  for (let y = 0; y < map.height; y++) for (let x = 0; x < map.width; x++) {
+    const t = { x: x + 0.5, y: y + 0.5 };
+    assert.equal(visiblePoint(world, map, eye, t, undefined, cache), visiblePoint(world, map, eye, t), `(${x}, ${y})`);
+  }
 });
 
 test('SightCache 与逐次建表逐点一致（带物件、小格、朝向）', () => {

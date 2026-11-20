@@ -1,6 +1,6 @@
 import type { GameMap, Id, VisionLayer, World } from '../core/types';
 import { current, isDraft } from 'immer';
-import { clipArchitecture } from './architecture';
+import { clipArchitecture, sortArchitecture } from './architecture';
 
 export const emptyVision = (n: number): VisionLayer => ({ fog: Array(n).fill(0), seen: { cells: Array(n).fill(''), objects: [], groups: [], groupRevs: {}, materialCells: {} } });
 export const cloneLayer = (L: VisionLayer): VisionLayer => JSON.parse(JSON.stringify({ fog: L.fog, seen: L.seen }));
@@ -46,33 +46,68 @@ export function mergeLayers(m: GameMap, layers: VisionLayer[]): VisionLayer {
   out.seen.cellRevs = []; out.seen.observed = {}; out.seen.objectRevs = {}; out.seen.architectureRevs = {}; out.seen.groups = []; out.seen.groupRevs = {};
   const choose = <T,>(items: { rev: number; value: T; material?: Id }[]) => items.sort((a, b) => b.rev - a.rev || JSON.stringify(b.value).localeCompare(JSON.stringify(a.value)))[0];
   for (let i = 0; i < out.fog.length; i++) {
-    out.fog[i] = layers.some(L => L.fog[i] === 1) ? 1 : layers.some(L => L.fog[i]) ? 2 : 0;
-    const best = choose(layers.filter(L => L.fog[i]).map(L => ({ rev: L.seen.cellRevs?.[i] ?? 0, value: L.seen.cells[i], material: L.seen.materialCells?.[i] })));
-    out.seen.cells[i] = best?.value ?? ''; out.seen.cellRevs[i] = best?.rev ?? 0;
-    if (best?.material) out.seen.materialCells![i] = best.material; else delete out.seen.materialCells![i];
-  }
-  const fragments = layers.map(L => {
-    const bins = new Map<number, NonNullable<typeof L.seen.architecture>>();
-    for (const r of L.seen.architecture ?? []) for (const key of spatialKeys(m, r)) {
-      const list = bins.get(key) ?? []; list.push(r); bins.set(key, list);
+    let fog = 0, bestRev = -1, bestValue: string | undefined, bestMaterial: Id | undefined;
+    for (const L of layers) {
+      const f = L.fog[i];
+      if (!f) continue;
+      if (f === 1) fog = 1; else if (fog === 0) fog = 2;
+      const rev = L.seen.cellRevs?.[i] ?? 0;
+      const value = L.seen.cells[i] ?? '';
+      if (bestValue === undefined || rev > bestRev || (rev === bestRev && JSON.stringify(value).localeCompare(JSON.stringify(bestValue)) > 0)) {
+        bestRev = rev; bestValue = value; bestMaterial = L.seen.materialCells?.[i];
+      }
     }
-    return bins;
-  });
-  const architecture = [];
-  for (let key = 0; key < m.width * m.height * 9; key++) {
-    const known = layers.flatMap((L, index) => spatialFog(m, L, key) ? [index] : []);
-    if (!known.length) continue;
-    const x = key % (m.width * 3), y = Math.floor(key / (m.width * 3));
-    const pieces = (index: number) => (fragments[index].get(key) ?? []).flatMap(r => {
-      const ax = Math.max(r.x, x / 3), ay = Math.max(r.y, y / 3), bx = Math.min(r.x + r.w, (x + 1) / 3), by = Math.min(r.y + r.h, (y + 1) / 3);
-      return bx - ax > 1e-9 && by - ay > 1e-9 ? [{ x: ax, y: ay, w: bx - ax, h: by - ay, material: r.material }] : [];
-    });
-    const geometry = choose(known.map(index => ({ rev: layers[index].seen.architectureRevs?.[key] ?? layers[index].seen.observed?.[key] ?? 0, value: pieces(index) })));
-    out.seen.observed[key] = Math.max(...known.map(index => layers[index].seen.observed?.[key] ?? 0));
-    out.seen.architectureRevs[key] = geometry.rev;
-    architecture.push(...geometry.value);
+    out.fog[i] = fog;
+    out.seen.cells[i] = bestValue ?? ''; out.seen.cellRevs[i] = bestRev < 0 ? 0 : bestRev;
+    if (bestMaterial) out.seen.materialCells![i] = bestMaterial; else delete out.seen.materialCells![i];
   }
-  out.seen.architecture = architecture;
+  const hasArchitecture = layers.some((L) => (L.seen.architecture?.length ?? 0) > 0);
+  if (!hasArchitecture) {
+    // 没有建筑片时不要扫「所有图层都没看过」的键；只扫任一 layer fog 非 0 的主格，
+    // 但键仍按升序插入，保证 observed/architectureRevs 的键顺序与全量一致。
+    const w3 = m.width * 3;
+    for (let key = 0; key < m.width * m.height * 9; key++) {
+      const x = key % w3, y = Math.floor(key / w3);
+      const main = Math.floor(y / 3) * m.width + Math.floor(x / 3);
+      if (!out.fog[main]) continue;
+      let known = false, archRev = -1, obsRev = 0;
+      for (const L of layers) {
+        if (!spatialFog(m, L, key)) continue;
+        known = true;
+        const rev = L.seen.architectureRevs?.[key] ?? L.seen.observed?.[key] ?? 0;
+        if (rev > archRev) archRev = rev;
+        const obs = L.seen.observed?.[key] ?? 0;
+        if (obs > obsRev) obsRev = obs;
+      }
+      if (!known) continue;
+      out.seen.observed[key] = obsRev;
+      out.seen.architectureRevs[key] = archRev < 0 ? 0 : archRev;
+    }
+    out.seen.architecture = [];
+  } else {
+    const fragments = layers.map(L => {
+      const bins = new Map<number, NonNullable<typeof L.seen.architecture>>();
+      for (const r of L.seen.architecture ?? []) for (const key of spatialKeys(m, r)) {
+        const list = bins.get(key) ?? []; list.push(r); bins.set(key, list);
+      }
+      return bins;
+    });
+    const architecture = [];
+    for (let key = 0; key < m.width * m.height * 9; key++) {
+      const known = layers.flatMap((L, index) => spatialFog(m, L, key) ? [index] : []);
+      if (!known.length) continue;
+      const x = key % (m.width * 3), y = Math.floor(key / (m.width * 3));
+      const pieces = (index: number) => (fragments[index].get(key) ?? []).flatMap(r => {
+        const ax = Math.max(r.x, x / 3), ay = Math.max(r.y, y / 3), bx = Math.min(r.x + r.w, (x + 1) / 3), by = Math.min(r.y + r.h, (y + 1) / 3);
+        return bx - ax > 1e-9 && by - ay > 1e-9 ? [{ x: ax, y: ay, w: bx - ax, h: by - ay, material: r.material }] : [];
+      });
+      const geometry = choose(known.map(index => ({ rev: layers[index].seen.architectureRevs?.[key] ?? layers[index].seen.observed?.[key] ?? 0, value: pieces(index) })));
+      out.seen.observed[key] = Math.max(...known.map(index => layers[index].seen.observed?.[key] ?? 0));
+      out.seen.architectureRevs[key] = geometry.rev;
+      architecture.push(...geometry.value);
+    }
+    out.seen.architecture = sortArchitecture(architecture);
+  }
   const ids = new Set(layers.flatMap(L => L.seen.objects.map(o => o.id)));
   for (const id of ids) {
     const best = choose(layers.flatMap(L => L.seen.objects.filter(o => o.id === id).map(value => ({ rev: L.seen.objectRevs?.[id] ?? 0, value }))));
@@ -117,40 +152,41 @@ const rectHits = (box: { x0: number; y0: number; x1: number; y1: number }, r: { 
  * 清掉已经不该存在的记忆。给了 scope 就只处理脏区：脏区外的雾没变，
  * 那里的记忆条目也不可能变成“全都没去过”。
  */
-export function pruneMemory(m: GameMap, L: VisionLayer, scope?: Set<number>) {
-  const source = isDraft(m) ? current(m) : m;
-  const layer = isDraft(L) ? current(L) : L;
-  const box = scope ? scopeRect(source, scope) : null;
-  if (!box) L.seen.objects = layer.seen.objects.filter(o => spatialKeys(source, o).some(key => spatialFog(source, layer, key)));
+export function pruneMemory(m: GameMap, L: VisionLayer, scope?: Set<number>, source?: GameMap) {
+  const src = source ?? (isDraft(m) ? current(m) : m);
+  const layer = L;
+  const box = scope ? scopeRect(src, scope) : null;
+  if (!box) L.seen.objects = layer.seen.objects.filter(o => spatialKeys(src, o).some(key => spatialFog(src, layer, key)));
   else {
-    const kept = layer.seen.objects.filter((o) => !rectHits(box, o) || spatialKeys(source, o).some((key) => spatialFog(source, layer, key)));
+    const kept = layer.seen.objects.filter((o) => !rectHits(box, o) || spatialKeys(src, o).some((key) => spatialFog(src, layer, key)));
     if (kept.length !== layer.seen.objects.length) L.seen.objects = kept;
   }
   if (!box) L.seen.groups = (layer.seen.groups ?? []).flatMap((g) => {
-    const cells = g.cells.filter((key) => spatialFog(source, layer, key) > 0);
+    const cells = g.cells.filter((key) => spatialFog(src, layer, key) > 0);
     return cells.length ? [{ ...g, cells }] : [];
   });
   else {
-    const w3 = source.width * 3;
+    const w3 = src.width * 3;
     const inBox = (key: number) => {
       const x = Math.floor((key % w3) / 3), y = Math.floor(Math.floor(key / w3) / 3);
       return x >= box.x0 && x <= box.x1 && y >= box.y0 && y <= box.y1;
     };
     L.seen.groups = (layer.seen.groups ?? []).flatMap((g) => {
       if (!g.cells.some(inBox)) return [g]; // 脏区外：原样留着
-      const cells = g.cells.filter((key) => spatialFog(source, layer, key) > 0);
+      const cells = g.cells.filter((key) => spatialFog(src, layer, key) > 0);
       return cells.length ? [{ ...g, cells }] : [];
     });
   }
-  L.seen.architecture = [...clipArchitecture(source, layer, 1, layer.seen.architecture ?? []), ...clipArchitecture(source, layer, 2, layer.seen.architecture ?? [])];
-  if (!box) { for (const key of Object.keys(layer.seen.observed ?? {})) if (!spatialFog(source, layer, +key)) delete L.seen.observed![+key]; }
+  if (!box) L.seen.architecture = sortArchitecture([...clipArchitecture(src, layer, 1, layer.seen.architecture ?? []), ...clipArchitecture(src, layer, 2, layer.seen.architecture ?? [])]);
+  // scope 下建筑没变，syncLayer 已经保留旧记忆并补了新看见的片段；这里不再整层重算。
+  if (!box) { for (const key of Object.keys(layer.seen.observed ?? {})) if (!spatialFog(src, layer, +key)) delete L.seen.observed![+key]; }
   else {
-    const w3 = source.width * 3;
+    const w3 = src.width * 3;
     for (const i of scope!) {
-      const cx = i % source.width, cy = Math.floor(i / source.width);
+      const cx = i % src.width, cy = Math.floor(i / src.width);
       for (let sy = 0; sy < 3; sy++) for (let sx = 0; sx < 3; sx++) {
         const key = (cy * 3 + sy) * w3 + (cx * 3 + sx);
-        if (layer.seen.observed?.[key] && !spatialFog(source, layer, key)) delete L.seen.observed![key];
+        if (layer.seen.observed?.[key] && !spatialFog(src, layer, key)) delete L.seen.observed![key];
       }
     }
   }

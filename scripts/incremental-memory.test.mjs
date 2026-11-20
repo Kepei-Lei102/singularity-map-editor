@@ -229,3 +229,51 @@ test('记忆合并：独立/分组模式下 mergeLayers 不能丢材质记忆', 
     remember('甲走一格后');
   }
 });
+
+test('建筑记忆：增量移动保留旧墙、只补脏区新看见的墙', () => {
+  for (const mode of ['individual', 'grouped']) {
+    const w = emptyWorld();
+    w.visionMode = mode;
+    w.party = [
+      { id: 'a', name: '甲', sex: '男', heightCm: 173, color: '', visionGroupId: mode === 'grouped' ? 'g1' : undefined },
+      { id: 'b', name: '乙', sex: '女', heightCm: 164, color: '', visionGroupId: mode === 'grouped' ? 'g1' : undefined },
+    ];
+    if (mode === 'grouped') w.visionGroups = [{ id: 'g1', name: '甲组' }];
+    const map = newMap('建筑', '现实', 0, 40, 30, 'floor', false);
+    map.architecture = { walls: [{ id: 'w1', a: { x: 20.5, y: 4 }, b: { x: 20.5, y: 14 }, thickness: 0.25, material: 'wall' }], doors: [] };
+    map.tokens = [
+      { id: 'ta', pcId: 'a', name: '甲', color: '', x: 10, y: 10 },
+      { id: 'tb', pcId: 'b', name: '乙', color: '', x: 30, y: 10 },
+    ];
+    w.maps = [map];
+    let prev = withVision(w, emptyWorld(), { full: true });
+    prev = produce(prev, (d) => syncMemory(d));
+    const next = produce(prev, (d) => { d.maps[0].tokens[0].x = 11; });
+    const dirty = diffWorld(prev, next);
+    const plan = planVision(next, dirty);
+    assert.equal(plan.full, false);
+    const inc = produce(withVision(next, prev, { plan }), (d) => syncMemory(d, plan));
+    const full = produce(withVision(next, prev, { full: true }), (d) => syncMemory(d));
+    compareSeen(inc, full, 0, `建筑记忆/${mode}`);
+  }
+});
+
+test('材质-only 改动：视野不收窄、也不整图重算，只让该图记忆全量', () => {
+  const w = emptyWorld();
+  w.party = [{ id: 'a', name: '甲', sex: '男', heightCm: 173, color: '' }];
+  const m = w.maps[0];
+  m.tokens = [{ id: 't', pcId: 'a', name: '甲', color: '', x: 5, y: 5 }];
+  m.materialCells = { [5 * m.width + 5]: 'wood' };
+  let prev = withVision(w, emptyWorld(), { full: true });
+  prev = produce(prev, (d) => syncMemory(d));
+  const fogBefore = prev.maps[0].fog.slice();
+  const next = produce(prev, (d) => { d.maps[0].materialCells[6 * d.maps[0].width + 6] = 'stone'; });
+  const dirty = diffWorld(prev, next);
+  assert.equal(dirty[0].structure, true, '材质改动仍然要同步记忆');
+  assert.equal(dirty[0].visionStructure, false, '材质不改视野');
+  const plan = planVision(next, dirty);
+  assert.equal(plan.full, false, '不该整图重算视野');
+  assert.ok(plan.memoryFullMaps?.has(prev.maps[0].id), '这一张图仍要全量同步记忆');
+  const out = withVision(next, prev, { plan });
+  assert.deepEqual(out.maps[0].fog, fogBefore, '材质改动不该改 fog');
+});
