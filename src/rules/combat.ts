@@ -147,6 +147,20 @@ export function hpOf(pc: Pick<{ attributes?: Record<string, number>; hp?: number
   return { hp: pc.hp ?? max, max };
 }
 
+/** NPC 没填 HP 上限时的默认值（作者 2026-11-21：所有 NPC 强制有上限，没填按 10）。 */
+export const NPC_DEFAULT_HP = 10;
+
+/** NPC 棋子的血条：hpMax 没填/非正数就按 10；hp 没填就满血，并硬夹在 [0, hpMax]。 */
+export function npcHpPool(t: Pick<Token, 'hp' | 'hpMax'>): { hp: number; max: number } {
+  const rawMax = t.hpMax;
+  const max = typeof rawMax === 'number' && Number.isFinite(rawMax) && rawMax > 0
+    ? Math.max(1, Math.round(rawMax))
+    : NPC_DEFAULT_HP;
+  const rawHp = t.hp;
+  const hp = typeof rawHp === 'number' && Number.isFinite(rawHp) ? rawHp : max;
+  return { hp: Math.max(0, Math.min(Math.round(hp), max)), max };
+}
+
 /** 把伤害扣下去之后的新 HP：不低于 0，伤害取整、不为负。 */
 export function applyDamage(current: number, damage: number): number {
   return Math.max(0, current - Math.max(0, Math.round(damage)));
@@ -224,15 +238,16 @@ export function canTarget(world: World, map: GameMap, attacker: Token, target: T
   if (attacker.id === target.id) return { ok: false, reason: '不能打自己' };
   if (!world) return { ok: false, reason: '没有世界' };
   const hp = hpOfToken(world, target);
-  if (hp <= 0) return { ok: false, reason: '目标已经濒死' };
+  // NPC 0 HP 仍可被攻击（作者 2026-11-21）：这类攻击不扣血，只用来触发技能/收尾叙事。
+  if (hp <= 0 && !!target.pcId) return { ok: false, reason: '目标已经倒下' };
   if (!inAttackRange(attacker, target, range)) return { ok: false, reason: `超出攻击距离（${tokenDistance(attacker, target)} 格 > ${range}）` };
   if (!visible) return { ok: false, reason: '看不见目标，不能攻击' };
   return { ok: true };
 }
 
-/** 棋子的 HP：绑在玩家角色身上的看角色，其余默认满血（NPC 默认不设上限，见规则书）。 */
+/** 棋子的 HP：玩家角色看角色卡；NPC 看自己的血条（没填 hpMax 默认 10）。 */
 export function hpOfToken(world: World, t: Token): number {
-  if (!t.pcId) return Number.POSITIVE_INFINITY; // 敌人 HP 一般不设上限
+  if (!t.pcId) return npcHpPool(t).hp;
   const pc = world.party.find((p) => p.id === t.pcId);
   return pc ? hpOf(pc).hp : Number.POSITIVE_INFINITY;
 }
@@ -266,8 +281,9 @@ export function attackTargets(
     .map((t) => {
       const visible = visibility(t);
       const pc = t.pcId ? world.party.find((p) => p.id === t.pcId) : undefined;
-      const hp = t.pcId ? (pc ? hpOf(pc).hp : null) : null;
-      const dying = t.status?.label === '濒死';
+      const hp = t.pcId ? (pc ? hpOf(pc).hp : null) : npcHpPool(t).hp;
+      // NPC 0 HP（含濒死）仍可被攻击；PC 的濒死/倒地才是硬拦。
+      const dying = !!t.pcId && t.status?.label === '濒死';
       const check = dying ? { ok: false, reason: '目标已经濒死' } : canTarget(world, map, attacker, t, visible, opts.range);
       return {
         tokenId: t.id, name: t.name, isPc: !!t.pcId,

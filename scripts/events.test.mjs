@@ -147,14 +147,13 @@ test('落空不写假账：伤害 0 就不该有「HP 从 6 改为 6」', () => 
   assert.equal(api.findMap(w, m.id).tokens.find((t) => t.id === 'tb').hp, undefined);
 });
 
-test('打已经昏厥的目标：不写「状态从 昏厥 改为 昏厥」', () => {
+test('PC 0 HP 不能再被攻击：直接入口也要和 canTarget 一致', () => {
   fight({ targetToken: { down: true }, targetHp: 0 });
-  assert.equal(api.trialAttack('tb', { roll: 50, roller: () => 3 }), null);
-  const w = api.getWorld();
-  const ev = w.events.at(-1);
-  assert.equal(ev.check.success, true);
-  assert.deepEqual(ev.deltas, []);
-  assert.match(ev.note ?? '', /数值没有变化/);
+  const target = api.trialAttackTargets().find((x) => x.tokenId === 'tb');
+  assert.equal(target.canHit, false);
+  const err = api.trialAttack('tb', { roll: 50, roller: () => 3 });
+  assert.match(err ?? '', /没有 HP|不能打/);
+  assert.equal((api.getWorld().events ?? []).length, 0, '拒绝的攻击不该落事件');
 });
 
 test('带非濒死状态被打到 0：status.from 是原来的状态名，不是 null', () => {
@@ -168,18 +167,20 @@ test('带非濒死状态被打到 0：status.from 是原来的状态名，不是
   assert.equal(st.id, 'tb');
 });
 
-test('没有血条的目标：伤害没落地这件事要进账本', () => {
+test('NPC 没填 hpMax：默认 10，伤害照扣', () => {
   const { m } = fight();
-  // 角色卡没填 HP 时 hpOf 会按公式算出来，所以「没有血条」只有 NPC 棋子才成立：
-  // 把目标改成没有 pcId、也没有 hp/hpMax 的棋子。
+  // 所有 NPC 强制有血条：删掉 pcId 和 hp/hpMax，读档/开打时按默认 10。
   api.update((d) => {
     const t = api.findMap(d, m.id).tokens.find((x) => x.id === 'tb');
     delete t.pcId; delete t.hp; delete t.hpMax;
   });
   assert.equal(api.trialAttack('tb', { roll: 50, roller: () => 3 }), null);
-  const ev = api.getWorld().events.at(-1);
-  assert.deepEqual(ev.deltas, []);
-  assert.match(ev.note ?? '', /没有血条/);
+  const w = api.getWorld();
+  const ev = w.events.at(-1);
+  assert.ok(ev.deltas.some((d) => d.kind === 'hp' && d.from === 10 && d.to === 7));
+  assert.equal(api.findMap(w, m.id).tokens.find((x) => x.id === 'tb').hp, 7);
+  assert.equal(api.findMap(w, m.id).tokens.find((x) => x.id === 'tb').hpMax, 10);
+  assert.equal(ev.note, undefined, '有血条就不该写“伤害没落地”');
 });
 
 test('已昏厥且身上还挂着别的状态：状态被抹掉要入账', () => {
@@ -192,8 +193,12 @@ test('已昏厥且身上还挂着别的状态：状态被抹掉要入账', () =>
   assert.equal(st.to, null);
 });
 
-test('落空不许动状态：已昏厥且挂着中毒的目标挨空刀后状态还在', () => {
+test('落空不许动状态：0 HP NPC 挨空刀后状态还在', () => {
   const { m } = fight({ targetHp: 0, targetToken: { down: true, status: { label: '中毒', roundsLeft: 3 } } });
+  api.update((d) => {
+    const t = api.findMap(d, m.id).tokens.find((x) => x.id === 'tb');
+    delete t.pcId; delete t.hpMax; t.hp = 0;
+  });
   assert.equal(api.trialAttack('tb', { roll: 3, roller: () => 3 }), null);
   const ev = api.getWorld().events.at(-1);
   assert.deepEqual(ev.deltas, [], '落空就不该有状态变化');
@@ -211,7 +216,7 @@ test('declareText：有属性但没 DC 时不渲染 undefined', () => {
   assert.match(text, /敏捷/);
 });
 
-test('落空打没有血条的目标：不该说「伤害没落地」', () => {
+test('落空打默认血条的 NPC：不写伤害，也不说「没血条」', () => {
   const { m } = fight();
   api.update((d) => {
     const t = api.findMap(d, m.id).tokens.find((x) => x.id === 'tb');
@@ -220,7 +225,7 @@ test('落空打没有血条的目标：不该说「伤害没落地」', () => {
   assert.equal(api.trialAttack('tb', { roll: 3, roller: () => 3 }), null);
   const ev = api.getWorld().events.at(-1);
   assert.deepEqual(ev.deltas, []);
-  assert.equal(ev.note, undefined, '落空时本来就没伤害，别把原因归成没血条');
+  assert.equal(ev.note, undefined, '落空时本来就没伤害，别说没血条');
   assert.equal(ev.check.outcome, '落空');
 });
 
@@ -246,16 +251,11 @@ test('卡片口径：没真扣到血就不算「伤害落地」，别显示 −N
   api.trialAttack('tb', { roll: 3, roller: () => 3 });
   assert.equal(api.damageLanded(api.getUI().trial.event), false);
 
-  // 打已经昏厥、hp 已 0 的人：0 → 0
-  fight({ targetHp: 0, targetToken: { down: true } });
-  api.trialAttack('tb', { roll: 50, roller: () => 3 });
-  assert.equal(api.damageLanded(api.getUI().trial.event), false);
-
-  // 打没血条的 NPC：hpBefore/hpAfter 都是 null
-  const { m } = fight();
+  // 打 0 HP 的 NPC：仍可攻击，但 0→0 不算伤害落地
+  const { m } = fight({ targetHp: 0, targetToken: { down: true } });
   api.update((d) => {
     const t = api.findMap(d, m.id).tokens.find((x) => x.id === 'tb');
-    delete t.pcId; delete t.hp; delete t.hpMax;
+    delete t.pcId; delete t.hpMax; t.hp = 0;
   });
   assert.equal(api.trialAttack('tb', { roll: 50, roller: () => 3 }), null);
   assert.equal(api.damageLanded(api.getUI().trial.event), false);
@@ -277,8 +277,12 @@ test('damageLost 报实际扣血；命中却没掉血、只改状态时 note 要
   const ev = api.getUI().trial.event;
   assert.equal(api.damageLost(ev), 1, '卡片要写 −1，不是 −3');
 
-  // hp0 + 未倒地 + 挂晕厥：只改状态，卡片得说出「没有掉血」
-  fight({ targetHp: 0, targetToken: { status: { label: '晕厥', roundsLeft: 2 } } });
+  // 0 HP NPC + 未倒地 + 挂晕厥：只改状态，卡片得说出「没有掉血」
+  const zero = fight({ targetHp: 0, targetToken: { status: { label: '晕厥', roundsLeft: 2 } } });
+  api.update((d) => {
+    const t = api.findMap(d, zero.m.id).tokens.find((x) => x.id === 'tb');
+    delete t.pcId; delete t.hpMax; t.hp = 0;
+  });
   api.trialAttack('tb', { roll: 50, roller: () => 3 });
   const ev2 = api.getUI().trial.event;
   assert.equal(api.damageLanded(ev2), false);

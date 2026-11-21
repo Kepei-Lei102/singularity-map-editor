@@ -41,6 +41,14 @@ test('攻击：1–5 落空，6–94 命中', () => {
   }
 });
 
+test('NPC 血条：没填默认 10，hp 硬夹在 [0, hpMax]', () => {
+  assert.deepEqual(api.npcHpPool({}), { hp: 10, max: 10 });
+  assert.deepEqual(api.npcHpPool({ hpMax: 0 }), { hp: 10, max: 10 });
+  assert.deepEqual(api.npcHpPool({ hp: 15, hpMax: 10 }), { hp: 10, max: 10 });
+  assert.deepEqual(api.npcHpPool({ hp: -3, hpMax: 10 }), { hp: 0, max: 10 });
+  assert.deepEqual(api.npcHpPool({ hp: 15, hpMax: 20 }), { hp: 15, max: 20 });
+});
+
 test('攻击：95–99 大成功，1D8 变 2D8', () => {
   for (const roll of [95, 96, 97, 98, 99]) {
     const r = api.rollAttack(roll, 8, () => 6);
@@ -430,7 +438,7 @@ test('借机攻击者是没有角色卡的 NPC：事件 actor 记 npc/token id',
   assert.ok(ev.deltas.some((d) => d.kind === 'hp' && d.from === 50 && d.to === 46));
 });
 
-test('借机攻击打没有血条的 NPC：不写 HP delta，note 说明伤害没落地', () => {
+test('借机攻击打没填 hpMax 的 NPC：默认 10，伤害照扣', () => {
   opportunityFight({ moverNpc: true });
   api.update((d) => {
     const ta = d.maps[0].tokens.find((k) => k.id === 'ta');
@@ -440,11 +448,11 @@ test('借机攻击打没有血条的 NPC：不写 HP delta，note 说明伤害�
   assert.equal(api.trialOpportunityAttack({ roll: 50, roller: () => 4 }), null);
   const w = api.getWorld();
   const ta = w.maps[0].tokens.find((k) => k.id === 'ta');
-  assert.equal(ta.hp, undefined);
+  assert.equal(ta.hp, 6);
+  assert.equal(ta.hpMax, 10);
   const ev = w.events.at(-1);
-  assert.equal(ev.deltas.length, 0);
-  assert.match(ev.note, /没有血条/);
-  assert.match(api.getUI().trial.msg, /没有血条/);
+  assert.ok(ev.deltas.some((d) => d.kind === 'hp' && d.from === 10 && d.to === 6));
+  assert.equal(ev.note, undefined, '有血条就不该写“伤害没落地”');
 });
 
 test('借机攻击打 0 血濒死目标：不写 HP delta，note 说明没有掉血', () => {
@@ -549,6 +557,26 @@ test('救治：解锁急救技能才能做，D100 投 1 失败', () => {
   assert.doesNotThrow(() => api.checkWorld(api.getWorld()), '救治事件要能过 schema');
 });
 
+test('NPC 救治不超过 HP 上限', () => {
+  const w = api.emptyWorld();
+  const m = api.newMap('救治 NPC', '现实', 1, 10, 10, 'floor', false);
+  m.objects = []; m.fog = m.fog.map(() => 1);
+  const attrs = { 力量: 30, 敏捷: 30, 意志: 30, 观察: 30, 智慧: 30, 魅力: 30 };
+  w.party = [{ id: 'a', name: '医生', color: '#fff', tags: [], attributes: attrs, skills: ['011-9-102'] }];
+  m.tokens = [
+    { id: 'ta', pcId: 'a', name: '医生', color: '#fff', x: 2, y: 2 },
+    { id: 'npc', pcId: null, name: '伤员', color: '#f00', x: 2, y: 3, hp: 20, hpMax: 10, down: true },
+  ];
+  w.maps = [m]; api.replaceWorld(w); api.startTrial();
+  api.setUI({ trial: { mapId: m.id, players: [{ tokenId: 'ta', pcId: 'a', name: '医生' }], current: 0, combat: true, moved: {}, turn: 1, msg: '', markSymbol: '!', markText: '', markMode: false } });
+  assert.equal(api.trialRescue('npc', { roll: 60 }), null);
+  const npc = api.getWorld().maps[0].tokens.find((k) => k.id === 'npc');
+  assert.equal(npc.hp, 10, '超过上限的 20 先被夹到 10');
+  assert.equal(npc.hpMax, 10);
+  assert.equal(npc.down, undefined);
+  assert.equal(npc.status, undefined);
+});
+
 test('没解锁急救技能的人不能救治', () => {
   assert.equal(api.canRescue([]), false);
   assert.equal(api.canRescue(['001-9-001']), false);
@@ -635,7 +663,7 @@ test('NPC 棋子填了 hpMax 就会扣血', () => {
   assert.equal(api.findMap(api.getWorld(), m.id).tokens.find(k => k.id === 'robot').hp, 75);
 });
 
-test('NPC 没填血条就不扣，只提示记在裁定里', () => {
+test('NPC 没填 hpMax：默认 10，攻击按 10 扣', () => {
   const w = api.emptyWorld();
   const m = api.newMap('打', '现实', 1, 12, 12, 'floor', false);
   m.objects = []; m.fog = m.fog.map(() => 1);
@@ -646,8 +674,55 @@ test('NPC 没填血条就不扣，只提示记在裁定里', () => {
   api.setUI({ trial: { mapId: m.id, players: [{ tokenId: 'ta', pcId: 'a', name: '打手' }], current: 0, combat: true, moved: {}, turn: 1, msg: '', markSymbol: '!', markText: '', markMode: false } });
   assert.equal(api.trialAttack('npc', { roll: 30, roller: () => 5 }), null);
   const ev = api.getUI().trial.event;
-  assert.equal(ev.hpBefore, null);
-  assert.match(ev.note ?? '', /没有血条/);
+  assert.equal(ev.hpBefore, 10);
+  assert.equal(ev.hpAfter, 5);
+  assert.equal(ev.hpMax, 10);
+  assert.equal(api.findMap(api.getWorld(), m.id).tokens.find(k => k.id === 'npc').hp, 5);
+});
+
+test('0 HP 的 NPC 仍可被攻击，但伤害不落地、不显示 −N', () => {
+  const w = api.emptyWorld();
+  const m = api.newMap('打 0 血 NPC', '现实', 1, 12, 12, 'floor', false);
+  m.objects = []; m.fog = m.fog.map(() => 1);
+  const attrs = { 力量: 30, 敏捷: 30, 意志: 30, 观察: 30, 智慧: 30, 魅力: 30 };
+  w.party = [{ id: 'a', name: '打手', color: '#fff', tags: [], attributes: attrs }];
+  m.tokens = [
+    { id: 'ta', pcId: 'a', name: '打手', color: '#fff', x: 2, y: 2 },
+    { id: 'npc', pcId: null, name: '倒地的路人', color: '#888', x: 2, y: 3, hp: 0, hpMax: 10, down: true },
+  ];
+  w.maps = [m]; api.replaceWorld(w); api.startTrial();
+  api.setUI({ trial: { mapId: m.id, players: [{ tokenId: 'ta', pcId: 'a', name: '打手' }], current: 0, combat: true, moved: {}, turn: 1, msg: '', markSymbol: '!', markText: '', markMode: false } });
+  const target = api.trialAttackTargets().find((x) => x.tokenId === 'npc');
+  assert.equal(target.hp, 0);
+  assert.equal(target.canHit, true, 'NPC 0 HP 仍可被攻击');
+  assert.equal(api.trialAttack('npc', { roll: 50, roller: () => 3 }), null);
+  const ev = api.getUI().trial.event;
+  assert.equal(ev.hpBefore, 0);
+  assert.equal(ev.hpAfter, 0);
+  assert.equal(api.damageLanded(ev), false);
+  assert.match(ev.note, /数值没有变化/);
+});
+
+test('濒死的 NPC 仍可被攻击，但倒计时不重置', () => {
+  const w = api.emptyWorld();
+  const m = api.newMap('打濒死 NPC', '现实', 1, 12, 12, 'floor', false);
+  m.objects = []; m.fog = m.fog.map(() => 1);
+  const attrs = { 力量: 30, 敏捷: 30, 意志: 30, 观察: 30, 智慧: 30, 魅力: 30 };
+  w.party = [{ id: 'a', name: '打手', color: '#fff', tags: [], attributes: attrs }];
+  m.tokens = [
+    { id: 'ta', pcId: 'a', name: '打手', color: '#fff', x: 2, y: 2 },
+    { id: 'npc', pcId: null, name: '濒死路人', color: '#888', x: 2, y: 3, hp: 0, hpMax: 10, status: { label: '濒死', roundsLeft: 2 } },
+  ];
+  w.maps = [m]; api.replaceWorld(w); api.startTrial();
+  api.setUI({ trial: { mapId: m.id, players: [{ tokenId: 'ta', pcId: 'a', name: '打手' }], current: 0, combat: true, moved: {}, turn: 1, msg: '', markSymbol: '!', markText: '', markMode: false } });
+  const target = api.trialAttackTargets().find((x) => x.tokenId === 'npc');
+  assert.equal(target.canHit, true, '濒死 NPC 仍可被攻击');
+  assert.equal(api.trialAttack('npc', { roll: 50, roller: () => 3 }), null);
+  const w2 = api.getWorld();
+  const npc = w2.maps[0].tokens.find((k) => k.id === 'npc');
+  assert.equal(npc.hp, 0);
+  assert.equal(npc.status.roundsLeft, 2, '倒计时不能被这一下重置');
+  assert.match(w2.events.at(-1).note, /倒计时没有重置/);
 });
 
 test('濒死三回合走完就撕卡：卡标已死亡，尸体留在原地', () => {
@@ -1024,6 +1099,25 @@ test('perRound 固定伤害也能走整轮结算', () => {
   api.trialEndTurn(() => 1);
   assert.equal(api.getWorld().party.find((p) => p.id === 'a').hp, 8);
   assert.equal(api.getWorld().maps[0].tokens.find((k) => k.id === 'ta').status, undefined);
+});
+
+test('NPC 中毒按默认 10 扣；上限硬夹', () => {
+  const w = api.emptyWorld();
+  const m = api.newMap('NPC 中毒', '现实', 1, 12, 12, 'floor', false);
+  m.objects = []; m.fog = m.fog.map(() => 1);
+  const attrs = { 力量: 30, 敏捷: 30, 意志: 30, 观察: 30, 智慧: 30, 魅力: 30 };
+  w.party = [{ id: 'a', name: '甲', color: '#fff', tags: [], attributes: attrs, hp: 10, hpMax: 10 }];
+  m.tokens = [
+    { id: 'ta', pcId: 'a', name: '甲', color: '#fff', x: 2, y: 2 },
+    { id: 'npc', pcId: null, name: 'NPC', color: '#888', x: 3, y: 2, status: { label: '中毒', roundsLeft: 1, perRound: 2, damageTarget: 'hp', blocksAction: false } },
+  ];
+  w.maps = [m]; api.replaceWorld(w); api.startTrial();
+  api.setUI({ trial: { mapId: m.id, players: [{ tokenId: 'ta', pcId: 'a', name: '甲' }], current: 0, combat: true, moved: {}, turn: 1, msg: '', markSymbol: '!', markText: '', markMode: false } });
+  api.trialEndTurn(() => 1);
+  const w2 = api.getWorld();
+  const npc = w2.maps[0].tokens.find((k) => k.id === 'npc');
+  assert.equal(npc.hp, 8);
+  assert.equal(npc.hpMax, 10);
 });
 
 test('眩晕挡住救治/感知/跑法，不只挡攻击和移动', () => {

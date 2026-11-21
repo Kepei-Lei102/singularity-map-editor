@@ -246,12 +246,19 @@ test('锐器致死 + 暴击：暴击伤害照落，note 只说附加状态没落
   assert.doesNotMatch(w.events.at(-1).note, /附加效果没落/);
 });
 
-test('没有血条的 NPC：伤害没落地，但技能状态照样挂', () => {
-  setup({ skills: ['007-9-203'], target: { hp: 0, hpMax: 0 } });
+test('NPC 没填 hpMax：默认 10，技能状态照挂、伤害照扣', () => {
+  setup({ skills: ['007-9-203'] });
+  api.update((d) => {
+    const t = d.maps[0].tokens.find((x) => x.id === 'tb');
+    delete t.hp; delete t.hpMax;
+  });
   assert.equal(api.trialAttack('tb', { roll: 50, roller: seq([2, 1]), skillId: '007-9-203' }), null);
-  const tok = api.getWorld().maps[0].tokens.find((x) => x.id === 'tb');
+  const w = api.getWorld();
+  const tok = w.maps[0].tokens.find((x) => x.id === 'tb');
   assert.equal(tok.status.label, '眩晕');
-  assert.match(api.getWorld().events.at(-1).note, /没有血条/);
+  assert.equal(tok.hp, 8);
+  assert.equal(tok.hpMax, 10);
+  assert.doesNotMatch(w.events.at(-1).note, /没有血条/);
 });
 
 test('恐惧挡行动：中了恐惧的人下一回合攻击被拒', () => {

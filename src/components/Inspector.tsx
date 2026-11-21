@@ -18,6 +18,7 @@ import { cellName, parseCell, rangeName, uid } from '../core/util';
 import { MAX_SIDE } from '../core/schema.js';
 import { storeBlobStatus, useBlobUrl } from '../runtime/media';
 import { blankCellCount } from '../core/grid';
+import { NPC_DEFAULT_HP, npcHpPool } from '../rules/combat';
 import { Area, Check, Num, Row, Section, Txt } from './fields';
 import { ObjectInteractionPanel } from './ObjectInteraction';
 
@@ -758,12 +759,23 @@ function TokenInspector({ world, mapId, t }: { world: World; mapId: string; t: T
         </select>
       </Row>
       <div className="kv">位置 {cellName(t.x, t.y)}{t.subcell ? ` · 子格(${t.subcell.x}, ${t.subcell.y})` : ''}</div>
-      {!t.pcId && <div className="inline">
-        <span className="muted">ME</span>
-        <Num value={t.me ?? 0} min={0} onChange={(v) => up((x) => { x.me = Math.max(0, v); })} />
-        <span className="muted">/</span>
-        <Num value={t.meMax ?? 0} min={0} onChange={(v) => up((x) => { x.meMax = Math.max(0, v); })} />
-      </div>}
+      {!t.pcId && <>
+        <div className="inline">
+          <span className="muted">HP</span>
+          <Num value={npcHpPool(t).hp} min={0} max={npcHpPool(t).max}
+            onChange={(v) => up((x) => { const max = npcHpPool(x).max; x.hp = Math.max(0, Math.min(Math.round(v), max)); x.hpMax ??= max; })} />
+          <span className="muted">/</span>
+          <Num value={npcHpPool(t).max} min={0}
+            onChange={(v) => up((x) => { const max = Math.round(v) > 0 ? Math.round(v) : NPC_DEFAULT_HP; x.hpMax = max; x.hp = Math.min(x.hp ?? max, max); })} />
+        </div>
+        <div className="inline">
+          <span className="muted">ME</span>
+          <Num value={t.me ?? 0} min={0} onChange={(v) => up((x) => { x.me = Math.max(0, v); })} />
+          <span className="muted">/</span>
+          <Num value={t.meMax ?? 0} min={0} onChange={(v) => up((x) => { x.meMax = Math.max(0, v); })} />
+        </div>
+        <div className="hint">NPC 默认 HP 上限 10；不填上限就是 10，填了才按填的值硬夹。</div>
+      </>}
       <div className="inline">
         <Check label="物理弱点已知" value={!!t.weakness?.physical}
           onChange={(v) => up((x) => { x.weakness = { ...(x.weakness ?? {}), physical: v || undefined }; })} />

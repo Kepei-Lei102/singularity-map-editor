@@ -25,7 +25,7 @@ import { appendEvent, newEvent } from '../rules/events';
 import { CELL_METERS, heightAt } from '../scene/height';
 import { cellFloor, hasPitBottom } from '../scene/terrain';
 import { canAffordStep, canTurn, chargeUsedThisTurn, moveBudgetOn, movePool, RUN_MODES, runMeShort, spendCharge, stepPrice, tickCharge, STAND_UP_COST, ROLL_OVER_COST, type ChargeState, type RunMode } from '../rules/move';
-import { ATTACK_BAND_LABEL, ATTACK_DICE, ATTACK_RANGE, BANISHED_LABEL, DYING_LABEL, DYING_ROUNDS, ENGAGE_RANGE, RESCUED_HP, ROBOT_LABEL, applyDamage, attackRoundSummary, attackTargets, canRescue, canUseSharp, downedBy, downedLabel, hpOf, opportunityTriggers, randomDie, robotArrived, robotIncoming, rollAttack, rollRescue, settleDeath, statusBlocksAction, stepLimitNear, type AttackTarget, type Downed, type Roller } from '../rules/combat';
+import { ATTACK_BAND_LABEL, ATTACK_DICE, ATTACK_RANGE, BANISHED_LABEL, DYING_LABEL, DYING_ROUNDS, ENGAGE_RANGE, RESCUED_HP, ROBOT_LABEL, applyDamage, attackRoundSummary, attackTargets, canRescue, canUseSharp, downedBy, downedLabel, hpOf, hpOfToken, npcHpPool, opportunityTriggers, randomDie, robotArrived, robotIncoming, rollAttack, rollRescue, settleDeath, statusBlocksAction, stepLimitNear, type AttackTarget, type Downed, type Roller } from '../rules/combat';
 import { attackSkillById, passiveStunTriggers, pickRiderEffects, riderStatus, STUN_PASSIVE_ID, stunnedDamageDiceMultiplier, type AttackRider } from '../rules/attackSkills';
 
 // 试玩：放白板玩家进去，用 WASD 走，体验视野。退出时一切恢复原样（沙盒）。
@@ -797,8 +797,8 @@ export function settleJump(req: JumpRequest, values: number[], opts: JumpSettleO
     const dt = dm.tokens.find((x) => x.id === req.tokenId);
     if (!dt) return;
     const p = dt.pcId ? d.party.find((x) => x.id === dt.pcId) : null;
-    const tokenHP = (dt.hpMax ?? 0) > 0 ? { hp: dt.hp ?? dt.hpMax!, max: dt.hpMax! } : null;
-    const pool = p ? hpOf(p) : tokenHP;
+    // 所有 NPC 都有血条：没填 hpMax 时默认 10（作者 2026-11-21）。
+    const pool = p ? hpOf(p) : npcHpPool(dt);
     let hpBefore: number | null = null;
     let hpAfter: number | null = null;
     let oldLabel: string | null = null;
@@ -808,7 +808,7 @@ export function settleJump(req: JumpRequest, values: number[], opts: JumpSettleO
     if (pool && damageRoll > 0) {
       hpBefore = pool.hp;
       hpAfter = Math.max(0, pool.hp - damageRoll);
-      if (p) { p.hp = hpAfter; p.hpMax ??= pool.max; } else { dt.hp = hpAfter; }
+      if (p) { p.hp = hpAfter; p.hpMax ??= pool.max; } else { dt.hp = hpAfter; dt.hpMax ??= pool.max; }
       if (hpAfter !== hpBefore) {
         deltas.push({ kind: 'hp', id: dt.pcId ?? dt.id, name: dt.name, from: hpBefore, to: hpAfter });
       }
@@ -854,8 +854,7 @@ export function settleJump(req: JumpRequest, values: number[], opts: JumpSettleO
     if (!landed) {
       note = fallInfo ? describePitFall(fallInfo, damageRoll) : describeInjury(req.fall, damageRoll);
       if (fallInfo?.nextFloor) note += '；掉到下一层，棋子要见证者手动挪';
-      if (!pool) note += '；没有血条，摔伤没落地';
-      else if (hpAfter === 0) {
+      if (hpAfter === 0) {
         const actualLabel = dt.status?.label ?? (dt.down ? downedLabel('down') : null);
         if (oldLabel === actualLabel) {
           if (oldLabel === DYING_LABEL) note += '；本来就已经是濒死，倒计时没有重置';
@@ -999,10 +998,12 @@ export function trialEndTurn(roller: Roller = randomDie) {
                 d.log.push({ id: uid(), at: Date.now(), session: d.session, kind: 'note', text: `${k.name} 流血倒下，进入濒死。` });
                 continue;
               }
-            } else if ((k.hpMax ?? 0) > 0) {
-              const before = k.hp ?? k.hpMax!;
+            } else {
+              const pool = npcHpPool(k);
+              const before = pool.hp;
               const after = applyDamage(before, amount);
               k.hp = after;
+              k.hpMax ??= pool.max;
               d.log.push({ id: uid(), at: Date.now(), session: d.session, kind: 'note', text: `${k.name} ${st.label} ${amount} 点，HP ${before}→${after}` });
               if (after <= 0) {
                 k.status = { label: DYING_LABEL, roundsLeft: DYING_ROUNDS };
@@ -1140,7 +1141,10 @@ function attackContext(targetTokenId: string, sharp: boolean, skillId?: string, 
   if (statusBlocksAction(attacker.status)) return `${attacker.name}${attacker.status!.label}中，暂时不能行动`;
   if (actedOf(t, pl.tokenId)) return '这回合的行动点已经用掉了，按空格结束回合';
   if (target.corpse) return `${target.name} 已经死了，不用再打`;
-  if (target.status?.label === '濒死') return `${target.name} 已经濒死了`;
+  // NPC 0 HP（含濒死/昏厥）仍可被攻击；PC 的 0 HP / 濒死硬拦。
+  // 目标列表已经用 canTarget 拦了一道，这里补上直接调用 trialAttack 的入口，不能两边口径不一致。
+  if (target.pcId && target.status?.label === '濒死') return `${target.name} 已经濒死了`;
+  if (target.pcId && hpOfToken(w, target) <= 0) return `${target.name} 已经没有 HP，不能再打`;
   const dist = Math.abs(attacker.x - target.x) + Math.abs(attacker.y - target.y);
   if (dist > ATTACK_RANGE) return `超出攻击距离（${dist} 格 > ${ATTACK_RANGE}）`;
   const pc = w.party.find((p) => p.id === pl.pcId);
@@ -1889,17 +1893,9 @@ export function settleAttack(
       if (riderEffects.includes('恐惧')) notes.push('恐惧：1 回合不能行动');
       if (passiveStun) notes.push('眩晕打击：附带一回合眩晕');
     };
-    // NPC：棋子上填了 hp/hpMax 就按它扣；没填就当作没有血条，伤害只进裁定。
-    const tokenHP = (dt.hpMax ?? 0) > 0 ? { hp: dt.hp ?? dt.hpMax!, max: dt.hpMax! } : null;
+    // NPC：血条 = 棋子 hp/hpMax，没填 hpMax 就用默认 10；不再有「没有血条」的 NPC。
     const p = dt.pcId ? d.party.find((x) => x.id === dt.pcId) : null;
-    const pool = p ? hpOf(p) : tokenHP;
-    if (!pool) {
-      // 落空本来就没有伤害可记；只有真打中才需要说明「伤害没落地」。
-      applyRiders();
-      if (r.hit) { note = `${dt.name} 没有血条（角色卡和棋子都没填 HP）；伤害没落地`; record(d); }
-      else record(d);
-      return;
-    }
+    const pool = p ? hpOf(p) : npcHpPool(dt);
     // 旧状态要先留成 from：被打到 0 的人本来可能是晕厥/中毒，不能写成「状态从 无 改为 昏厥」。
     const already = dt.status?.label === '濒死' ? 'dying' : dt.down ? 'down' : null;
     const oldLabel = dt.status?.label ?? (dt.down ? downedLabel('down') : null);
@@ -1919,15 +1915,20 @@ export function settleAttack(
     // 只有真变了才记：落空（伤害 0）不写「HP 从 6 改为 6」。
     if (next !== pool.hp) deltas.push({ kind: 'hp', id: dt.pcId ?? dt.id, name: dt.name, from: pool.hp, to: next });
     if (p) { p.hp = next; p.hpMax ??= pool.max; }
-    else { dt.hp = next; }
+    else { dt.hp = next; dt.hpMax ??= pool.max; }
     // 落空（伤害 0）不许进倒地分支：目标本来就是 hp0 的话，这一刀不该把状态抹掉。
     if (r.hit && next <= 0) {
       downed = already ?? kind;
       if (downed === 'dying') {
-        // 战斗模式下倒计时按回合走；自由行动没有回合，改由急救机器人挂一个到场时间。
-        dt.status = t.combat
-          ? { label: downedLabel('dying'), roundsLeft: DYING_ROUNDS }
-          : robotIncoming();
+        // 已经濒死的 NPC 还能被攻击（作者 2026-11-21），但不能借这一下重置倒计时。
+        if (already === 'dying') {
+          notes.push('本来就已经是濒死，倒计时没有重置');
+        } else {
+          // 战斗模式下倒计时按回合走；自由行动没有回合，改由急救机器人挂一个到场时间。
+          dt.status = t.combat
+            ? { label: downedLabel('dying'), roundsLeft: DYING_ROUNDS }
+            : robotIncoming();
+        }
       } else { delete dt.status; dt.down = true; }
       // 按「状态文字真的变了」判断，而不是按 already：棋子本来带晕厥/中毒、down 也是 true 时，
       // 这一步会把 status 删掉，必须记下来（以前判 downed===already 会漏成「没变化」）。
@@ -2371,15 +2372,13 @@ export function trialOpportunityAttack(opts: { roll?: number; roller?: Roller } 
       const oldLabel = mv.status?.label ?? (mv.down ? downedLabel('down') : null);
       let noted = '';
       let stunNote = '';
-      let noPoolNote = '';
       let noChangeNote = '';
       let roundNote = '';
       let landed = 0;
-      // 目标 PC 看角色卡；NPC 棋子看自己的 hp/hpMax。以前只处理 PC，NPC 走位被借机打中会白挨。
+      // 目标 PC 看角色卡；NPC 看自己的血条（没填 hpMax 默认 10）。所有 NPC 都有血条。
       const targetPc = mv.pcId ? d.party?.find((x) => x.id === mv.pcId) : undefined;
-      const tokenPool = !targetPc && (mv.hpMax ?? 0) > 0 ? { hp: mv.hp ?? mv.hpMax!, max: mv.hpMax! } : null;
-      const pool = targetPc ? hpOf(targetPc) : tokenPool;
-      if (pool && r.hit) {
+      const pool = targetPc ? hpOf(targetPc) : npcHpPool(mv);
+      if (r.hit) {
         const before = pool.hp;
         let next = before;
         const applied: number[] = [];
@@ -2395,7 +2394,7 @@ export function trialOpportunityAttack(opts: { roll?: number; roller?: Roller } 
         if (r.rounds.length > 1 && applied.length > 0) roundNote = attackRoundSummary(r.rounds.length, applied);
         if (next !== before) deltas.push({ kind: 'hp', id: mv.pcId ?? mv.id, name: mv.name, from: before, to: next });
         if (targetPc) { targetPc.hp = next; targetPc.hpMax ??= pool.max; }
-        else mv.hp = next;
+        else { mv.hp = next; mv.hpMax ??= pool.max; }
         noted = next !== before ? ` HP ${before}→${next}/${pool.max}` : ' 这一下没有掉血';
         if (next === before) noChangeNote = '这一下没有掉血';
         // HP 归零按战斗口径处理：濒死保留濒死，已昏厥只清掉旧状态；
@@ -2415,9 +2414,6 @@ export function trialOpportunityAttack(opts: { roll?: number; roller?: Roller } 
             if (already !== 'down') noted += '，昏厥';
           }
         }
-      } else if (r.hit) {
-        noted = ' 目标没有血条，伤害没落地';
-        noPoolNote = '目标没有血条，伤害没落地';
       }
       if (hasStunPassive && r.hit && !mv.corpse && !mv.down && mv.status?.label !== DYING_LABEL
         && passiveStunTriggers({ hit: true, damageRolls: r.rolls, physicalWeaknessKnown: !!mv.weakness?.physical })) {
@@ -2433,7 +2429,7 @@ export function trialOpportunityAttack(opts: { roll?: number; roller?: Roller } 
       hits.push(`${e.name} 借机攻击 ${mv.name}：D100=${r.roll === 100 ? '00' : r.roll}${tag}${damageText}${noted}${stunNote}`);
       // 借机攻击也要进事件账本：一次敌人一条，别把多个人的攻击揉成一条没 actor 的记录。
       // deltas 已经渲染 HP/状态变化，note 只放“为什么没变化”的补充，避免日志里重复一遍 HP。
-      const eventNote = [roundNote, noPoolNote, noChangeNote, stunNote.replace(/^；/, '')].filter(Boolean).join('；');
+      const eventNote = [roundNote, noChangeNote, stunNote.replace(/^；/, '')].filter(Boolean).join('；');
       appendEvent(d, newEvent(d, Date.now(),
         { kind: e.pcId ? 'pc' : 'npc', id: e.pcId ?? e.id, name: e.name },
         { name: '借机攻击', source: '临场' },
@@ -2531,9 +2527,12 @@ export function trialRescue(targetTokenId: string, opts: { roll?: number } = {})
         p.hp = hpAfter;
       }
     } else {
-      hpBefore = dt.hp ?? 0;
-      hpAfter = Math.max(hpBefore, RESCUED_HP);
+      // NPC 血条硬上限：救治只拉到 1 HP，且不超过当前上限（上限可由技能提高）。
+      const pool = npcHpPool(dt);
+      hpBefore = pool.hp;
+      hpAfter = Math.min(pool.max, Math.max(hpBefore, RESCUED_HP));
       dt.hp = hpAfter;
+      dt.hpMax ??= pool.max;
     }
     delete dt.status;
     delete dt.down;
@@ -2571,7 +2570,9 @@ export function tickRobots(now = Date.now()): void {
         const p = d.party.find((x) => x.id === k.pcId);
         if (p) p.hp = Math.max(p.hp ?? 0, RESCUED_HP);
       } else {
-        k.hp = Math.max(k.hp ?? 0, RESCUED_HP);
+        const pool = npcHpPool(k);
+        k.hp = Math.min(pool.max, Math.max(pool.hp, RESCUED_HP));
+        k.hpMax ??= pool.max;
       }
       d.log.push({ id: uid(), at: now, session: d.session, kind: 'note', text: `急救机器人到场，${k.name} 被拉起来了（1 HP）。` });
     }
