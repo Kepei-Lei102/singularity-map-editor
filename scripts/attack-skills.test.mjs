@@ -88,6 +88,8 @@ test('眩晕打击：伤害骰出 8 或已知物理弱点才触发；打眩晕�
   // 5 倍是额外颗数，不改攻击档位；普通命中仍不是 crit。
   const five = api.rollAttack(6, 8, () => 1, 5);
   assert.equal(five.dice, 5);
+  assert.equal(five.rounds.length, 1, '普通命中只有一轮，×5 是这颗骰的颗数');
+  assert.equal(five.rounds[0].dice, 5);
   assert.equal(five.crit, false);
   const missFive = api.rollAttack(2, 8, () => 8, 5);
   assert.equal(missFive.dice, 0);
@@ -144,6 +146,16 @@ test('灵巧攻击：心理弱点叠降智 + 恐惧，恐惧挡行动', () => {
   assert.ok(ev.deltas.some((d) => d.kind === 'status' && d.to === '恐惧'));
 });
 
+test('大成功打已眩晕：每轮 5 颗，两轮共 10 颗，HP 按轮扣', () => {
+  setup({ skills: ['009-9-003'], target: { hp: 100, hpMax: 100, status: { label: '眩晕', skipTurns: 1, blocksAction: true } } });
+  assert.equal(api.trialAttack('tb', { roll: 95, roller: () => 8 }), null);
+  const w = api.getWorld();
+  const tok = w.maps[0].tokens.find((x) => x.id === 'tb');
+  assert.equal(tok.hp, 20, '2 轮 × 5 颗 × 8 = 80');
+  assert.equal(api.getUI().trial.event.dice, 10);
+  assert.match(w.events.at(-1).note, /两轮：40 \+ 40/);
+});
+
 test('眩晕打击被动：伤害骰出 8 给目标一回合眩晕', () => {
   setup({ skills: ['009-9-003'] });
   assert.equal(api.trialAttack('tb', { roll: 50, roller: () => 8 }), null);
@@ -157,6 +169,18 @@ test('眩晕打击被动：已知物理弱点且命中，伤害骰不是 8 也�
   setup({ skills: ['009-9-003'], target: { weakness: { physical: true } } });
   assert.equal(api.trialAttack('tb', { roll: 50, roller: () => 3 }), null);
   assert.equal(api.getWorld().maps[0].tokens.find((x) => x.id === 'tb').status.label, '眩晕');
+});
+
+test('007 暴击的额外 1D8 落在第一轮：大成功第一轮就能打倒', () => {
+  setup({ skills: ['007-9-004'], target: { hp: 4, hpMax: 40, weakness: { physical: true } } });
+  assert.equal(api.trialAttack('tb', { roll: 95, roller: seq([2, 2, 1, 1, 6]), skillId: '007-9-004' }), null);
+  const w = api.getWorld();
+  const tok = w.maps[0].tokens.find((x) => x.id === 'tb');
+  assert.equal(tok.hp, 0);
+  assert.equal(tok.down, true);
+  assert.match(w.events.at(-1).note, /两轮：4（目标倒下，1 轮未结算）/);
+  assert.match(w.events.at(-1).note, /暴击：伤害骰 \+1/);
+  assert.equal(api.getUI().trial.event.dice, 3, '2 颗档位骰 + 1 颗暴击额外骰');
 });
 
 test('状态槽只有一个：新状态覆盖旧状态，事件记 from/to', () => {

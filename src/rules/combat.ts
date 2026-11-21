@@ -62,32 +62,54 @@ export function attackBand(roll: number): AttackBand {
   return 'hit';
 }
 
+/** 一轮伤害结算：大成功两轮、特大成功四轮，每轮按档位掷一颗（×5 时每轮五颗）。 */
+export interface AttackRound {
+  dice: number;
+  rolls: number[];
+  damage: number;
+}
+
+/** 暴击每轮明细的人话：两轮/四轮 + 每轮伤害；目标中途倒下要标明还剩几轮没结算。 */
+export function attackRoundSummary(roundCount: number, damages: number[]): string {
+  const noun = roundCount === 2 ? '两轮' : roundCount === 4 ? '四轮' : `${roundCount} 轮`;
+  const tail = damages.length < roundCount ? `（目标倒下，${roundCount - damages.length} 轮未结算）` : '';
+  return `${noun}：${damages.join(' + ')}${tail}`;
+}
+
 /** 骰子落定后的结果。伤害按颗数掷，不是把一颗骰乘几倍。 */
 export interface AttackRoll {
   /** D100 点数，100 表示 00。 */
   roll: number;
   band: AttackBand;
   hit: boolean;
-  /** 伤害骰颗数：普通 1、大成功 2、特大成功 4。 */
+  /** 伤害骰总颗数：普通 1、大成功 2、特大成功 4（×5 后按轮乘）。 */
   dice: number;
-  /** 每颗伤害骰的点数。 */
+  /** 每颗伤害骰的点数（按轮次顺序摊平）。 */
   rolls: number[];
   /** 伤害骰点数和。 */
   damageRoll: number;
   damage: number;
+  /** 伤害分几轮落：普通 1、大成功 2、特大成功 4；每轮各自扣血。 */
+  rounds: AttackRound[];
   /** 兼容旧字段：多于一颗伤害骰就算「大成功及以上」。 */
   crit: boolean;
 }
 
 export function rollAttack(roll: number, damageDie = DEFAULT_DAMAGE_DIE, roller?: Roller, diceMultiplier = 1): AttackRoll {
   const band = attackBand(roll);
-  // 眩晕打击打已经眩晕的人：伤害骰颗数 ×5；落空仍是 0 颗。
-  const dice = ATTACK_DICE[band] * Math.max(1, Math.floor(diceMultiplier));
   const r = roller ?? randomDie;
-  const rolls = Array.from({ length: dice }, () => r(damageDie));
-  const damageRoll = rolls.reduce((a, b) => a + b, 0);
+  // 暴击轮次：大成功 2 轮、特大成功 4 轮；普通命中 1 轮。
+  // 眩晕打击打已经眩晕的人：每轮伤害骰颗数 ×5；落空仍是 0 轮。
+  const roundCount = ATTACK_DICE[band];
+  const dicePerRound = roundCount > 0 ? Math.max(1, Math.floor(diceMultiplier)) : 0;
+  const rounds = Array.from({ length: roundCount }, () => {
+    const rolls = Array.from({ length: dicePerRound }, () => r(damageDie));
+    return { dice: dicePerRound, rolls, damage: rolls.reduce((a, b) => a + b, 0) };
+  });
+  const rolls = rounds.flatMap((x) => x.rolls);
+  const damageRoll = rounds.reduce((a, b) => a + b.damage, 0);
   // crit 只表示攻击档位本身是大成功/特大成功，不表示额外加骰（007 暴击、眩晕打击 ×5）。
-  return { roll, band, hit: dice > 0, dice, rolls, damageRoll, damage: damageRoll, crit: ATTACK_DICE[band] > 1 };
+  return { roll, band, hit: roundCount > 0, dice: rolls.length, rolls, damageRoll, damage: damageRoll, rounds, crit: ATTACK_DICE[band] > 1 };
 }
 
 /** 浏览器里的骰子：crypto 取随机。测试里传自己的 Roller。 */

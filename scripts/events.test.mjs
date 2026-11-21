@@ -73,6 +73,66 @@ function fight(opts = {}) {
   return { w, m };
 }
 
+test('大成功分两轮伤害：一条事件带每轮明细，HP 按轮扣', () => {
+  const { m } = fight();
+  api.update((d) => {
+    const p = d.party.find((x) => x.id === 'b');
+    p.hp = 20; p.hpMax = 20;
+  });
+  assert.equal(api.trialAttack('tb', { roll: 95, roller: () => 3 }), null);
+  const w = api.getWorld();
+  const ev = w.events.at(-1);
+  assert.equal(api.getUI().trial.event.damage, 6);
+  assert.equal(ev.check.band, 'great');
+  assert.match(ev.note, /两轮：3 \+ 3/);
+  assert.equal(w.party.find((p) => p.id === 'b').hp, 14);
+  assert.equal(w.events.filter((e) => e.target?.id === 'b').length, 1, '一条攻击不要拆成两条事件');
+  assert.equal(api.findMap(w, m.id).tokens.find((t) => t.id === 'tb').down, undefined);
+});
+
+test('特大成功分四轮伤害：每轮 1D8，总伤不变', () => {
+  fight();
+  api.update((d) => {
+    const p = d.party.find((x) => x.id === 'b');
+    p.hp = 20; p.hpMax = 20;
+  });
+  assert.equal(api.trialAttack('tb', { roll: 100, roller: () => 2 }), null);
+  const ev = api.getWorld().events.at(-1);
+  assert.equal(api.getUI().trial.event.damage, 8);
+  assert.match(ev.note, /四轮：2 \+ 2 \+ 2 \+ 2/);
+  assert.equal(api.getWorld().party.find((p) => p.id === 'b').hp, 12);
+});
+
+test('特大成功打残血：摘要写每轮实扣，不写掷出', () => {
+  const { m } = fight();
+  api.update((d) => {
+    const p = d.party.find((x) => x.id === 'b');
+    p.hp = 5; p.hpMax = 20;
+  });
+  assert.equal(api.trialAttack('tb', { roll: 100, roller: () => 2 }), null);
+  const w = api.getWorld();
+  const ev = w.events.at(-1);
+  assert.equal(w.party.find((p) => p.id === 'b').hp, 0);
+  assert.equal(api.getUI().trial.event.damage, 8, '事件卡仍记掷出的总骰面');
+  assert.match(ev.note, /四轮：2 \+ 2 \+ 1（目标倒下，1 轮未结算）/, '每轮写实扣');
+  assert.equal(api.findMap(w, m.id).tokens.find((t) => t.id === 'tb').down, true);
+});
+
+test('暴击打残血：第一轮倒下就停，后面轮次不结算', () => {
+  const { m } = fight();
+  api.update((d) => {
+    const p = d.party.find((x) => x.id === 'b');
+    p.hp = 2; p.hpMax = 20;
+  });
+  assert.equal(api.trialAttack('tb', { roll: 95, roller: () => 2 }), null);
+  const w = api.getWorld();
+  const ev = w.events.at(-1);
+  assert.equal(w.party.find((p) => p.id === 'b').hp, 0);
+  assert.equal(api.getUI().trial.event.damage, 4, '两颗骰都掷了，事件仍记掷出的总数');
+  assert.match(ev.note, /两轮：2（目标倒下，1 轮未结算）/);
+  assert.equal(api.findMap(w, m.id).tokens.find((t) => t.id === 'tb').down, true);
+});
+
 test('落空不写假账：伤害 0 就不该有「HP 从 6 改为 6」', () => {
   const { m } = fight();
   assert.equal(api.trialAttack('tb', { roll: 3, roller: () => 3 }), null);

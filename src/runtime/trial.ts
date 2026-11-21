@@ -25,7 +25,7 @@ import { appendEvent, newEvent } from '../rules/events';
 import { CELL_METERS, heightAt } from '../scene/height';
 import { cellFloor, hasPitBottom } from '../scene/terrain';
 import { canAffordStep, canTurn, chargeUsedThisTurn, moveBudgetOn, movePool, RUN_MODES, runMeShort, spendCharge, stepPrice, tickCharge, STAND_UP_COST, ROLL_OVER_COST, type ChargeState, type RunMode } from '../rules/move';
-import { ATTACK_BAND_LABEL, ATTACK_DICE, ATTACK_RANGE, BANISHED_LABEL, DYING_LABEL, DYING_ROUNDS, ENGAGE_RANGE, RESCUED_HP, ROBOT_LABEL, applyDamage, attackTargets, canRescue, canUseSharp, downedBy, downedLabel, hpOf, opportunityTriggers, randomDie, robotArrived, robotIncoming, rollAttack, rollRescue, settleDeath, statusBlocksAction, stepLimitNear, type AttackTarget, type Downed, type Roller } from '../rules/combat';
+import { ATTACK_BAND_LABEL, ATTACK_DICE, ATTACK_RANGE, BANISHED_LABEL, DYING_LABEL, DYING_ROUNDS, ENGAGE_RANGE, RESCUED_HP, ROBOT_LABEL, applyDamage, attackRoundSummary, attackTargets, canRescue, canUseSharp, downedBy, downedLabel, hpOf, opportunityTriggers, randomDie, robotArrived, robotIncoming, rollAttack, rollRescue, settleDeath, statusBlocksAction, stepLimitNear, type AttackTarget, type Downed, type Roller } from '../rules/combat';
 import { attackSkillById, passiveStunTriggers, pickRiderEffects, riderStatus, STUN_PASSIVE_ID, stunnedDamageDiceMultiplier, type AttackRider } from '../rules/attackSkills';
 
 // 试玩：放白板玩家进去，用 WASD 走，体验视野。退出时一切恢复原样（沙盒）。
@@ -1782,20 +1782,22 @@ export function settleAttack(
   const hasStunPassive = !!ctx.pc?.skills?.includes(STUN_PASSIVE_ID);
   const diceMultiplier = hasStunPassive ? stunnedDamageDiceMultiplier(target.status?.label) : 1;
   const r = rollAttack(roll, 8, opts.roller, diceMultiplier);
-  let damage = r.damage;
-  let damageDice = r.dice;
+  // 暴击按轮结算：每轮各自掷骰、各自扣血。007 的暴击额外 1D8 放在第一轮。
+  const rounds = r.rounds.map((x) => ({ dice: x.dice, rolls: [...x.rolls], damage: x.damage }));
   const baseDamageDice = ATTACK_DICE[r.band];
-  const damageRolls = [...r.rolls];
   // 007 / 灵巧：命中才抽效果；知道对应弱点就抽两种，且不重复。
   const riderEffects: AttackRider[] = r.hit && attackSkill
     ? pickRiderEffects(attackSkill.id, !!target.weakness?.[attackSkill.weakness], roller)
     : [];
-  if (r.hit && riderEffects.includes('暴击')) {
+  if (r.hit && riderEffects.includes('暴击') && rounds[0]) {
     const extra = roller(8);
-    damageRolls.push(extra);
-    damage += extra;
-    damageDice += 1;
+    rounds[0].rolls.push(extra);
+    rounds[0].dice += 1;
+    rounds[0].damage += extra;
   }
+  const damageRolls = rounds.flatMap((x) => x.rolls);
+  const damage = rounds.reduce((a, b) => a + b.damage, 0);
+  const damageDice = rounds.reduce((a, b) => a + b.dice, 0);
   const passiveStun = hasStunPassive && passiveStunTriggers({
     hit: r.hit,
     damageRolls,
@@ -1901,7 +1903,18 @@ export function settleAttack(
     // 旧状态要先留成 from：被打到 0 的人本来可能是晕厥/中毒，不能写成「状态从 无 改为 昏厥」。
     const already = dt.status?.label === '濒死' ? 'dying' : dt.down ? 'down' : null;
     const oldLabel = dt.status?.label ?? (dt.down ? downedLabel('down') : null);
-    const next = Math.max(0, pool.hp - damage);
+    // 暴击一轮一轮扣：目标在某一轮倒下后，后面的轮次不再结算。
+    let next = pool.hp;
+    const appliedDamages: number[] = [];
+    for (const round of rounds) {
+      if (next <= 0) break;
+      const beforeRound = next;
+      next = Math.max(0, next - round.damage);
+      // 摘要写每轮实扣，不写掷出：打在残血上时 4+4 可能只扣 2。
+      appliedDamages.push(beforeRound - next);
+      if (next <= 0) break;
+    }
+    if (rounds.length > 1 && appliedDamages.length > 0) notes.push(attackRoundSummary(rounds.length, appliedDamages));
     hpBefore = pool.hp; hpAfter = next; hpMax = pool.max;
     // 只有真变了才记：落空（伤害 0）不写「HP 从 6 改为 6」。
     if (next !== pool.hp) deltas.push({ kind: 'hp', id: dt.pcId ?? dt.id, name: dt.name, from: pool.hp, to: next });
@@ -2360,13 +2373,26 @@ export function trialOpportunityAttack(opts: { roll?: number; roller?: Roller } 
       let stunNote = '';
       let noPoolNote = '';
       let noChangeNote = '';
+      let roundNote = '';
+      let landed = 0;
       // 目标 PC 看角色卡；NPC 棋子看自己的 hp/hpMax。以前只处理 PC，NPC 走位被借机打中会白挨。
       const targetPc = mv.pcId ? d.party?.find((x) => x.id === mv.pcId) : undefined;
       const tokenPool = !targetPc && (mv.hpMax ?? 0) > 0 ? { hp: mv.hp ?? mv.hpMax!, max: mv.hpMax! } : null;
       const pool = targetPc ? hpOf(targetPc) : tokenPool;
       if (pool && r.hit) {
         const before = pool.hp;
-        const next = Math.max(0, before - r.damage);
+        let next = before;
+        const applied: number[] = [];
+        // 暴击按轮扣：目标在某一轮倒下后，后面轮次不再结算。
+        for (const round of r.rounds) {
+          if (next <= 0) break;
+          const beforeRound = next;
+          next = Math.max(0, next - round.damage);
+          applied.push(beforeRound - next);
+          landed = before - next;
+          if (next <= 0) break;
+        }
+        if (r.rounds.length > 1 && applied.length > 0) roundNote = attackRoundSummary(r.rounds.length, applied);
         if (next !== before) deltas.push({ kind: 'hp', id: mv.pcId ?? mv.id, name: mv.name, from: before, to: next });
         if (targetPc) { targetPc.hp = next; targetPc.hpMax ??= pool.max; }
         else mv.hp = next;
@@ -2401,10 +2427,13 @@ export function trialOpportunityAttack(opts: { roll?: number; roller?: Roller } 
         stunNote = hadStun ? '；眩晕打击：眩晕刷新' : '；眩晕打击：附带一回合眩晕';
       }
       const tag = r.dice > 1 ? `（${ATTACK_BAND_LABEL[r.band]}，${r.dice} 颗伤害骰）` : '';
-      hits.push(`${e.name} 借机攻击 ${mv.name}：D100=${r.roll === 100 ? '00' : r.roll}${tag}${r.hit ? `，伤害 ${r.damage}` : '，落空'}${noted}${stunNote}`);
+      const damageText = r.hit
+        ? `，伤害 ${r.damage}${r.damage !== landed ? `（实扣 ${landed}）` : ''}`
+        : '，落空';
+      hits.push(`${e.name} 借机攻击 ${mv.name}：D100=${r.roll === 100 ? '00' : r.roll}${tag}${damageText}${noted}${stunNote}`);
       // 借机攻击也要进事件账本：一次敌人一条，别把多个人的攻击揉成一条没 actor 的记录。
       // deltas 已经渲染 HP/状态变化，note 只放“为什么没变化”的补充，避免日志里重复一遍 HP。
-      const eventNote = [noPoolNote, noChangeNote, stunNote.replace(/^；/, '')].filter(Boolean).join('；');
+      const eventNote = [roundNote, noPoolNote, noChangeNote, stunNote.replace(/^；/, '')].filter(Boolean).join('；');
       appendEvent(d, newEvent(d, Date.now(),
         { kind: e.pcId ? 'pc' : 'npc', id: e.pcId ?? e.id, name: e.name },
         { name: '借机攻击', source: '临场' },

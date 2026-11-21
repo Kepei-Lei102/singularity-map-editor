@@ -48,6 +48,9 @@ test('攻击：95–99 大成功，1D8 变 2D8', () => {
     assert.equal(r.band, 'great');
     assert.equal(r.dice, 2, '大成功伤害骰数量翻倍');
     assert.equal(r.rolls.length, 2);
+    assert.equal(r.rounds.length, 2, '大成功拆两轮');
+    assert.deepEqual(r.rounds.map((x) => x.dice), [1, 1]);
+    assert.deepEqual(r.rounds.map((x) => x.damage), [6, 6]);
     assert.equal(r.damage, 12);
     assert.equal(r.crit, true);
   }
@@ -58,6 +61,8 @@ test('攻击：00 是特大成功，1D8 变 4D8', () => {
   assert.equal(r.hit, true);
   assert.equal(r.band, 'super');
   assert.equal(r.dice, 4, '特大成功伤害骰 ×4');
+  assert.equal(r.rounds.length, 4, '特大成功拆四轮');
+  assert.deepEqual(r.rounds.map((x) => x.damage), [6, 6, 6, 6]);
   assert.equal(r.damage, 24);
   assert.match(api.describeAttack('A', 'B', r), /4 颗伤害骰/);
 });
@@ -334,6 +339,16 @@ test('借机攻击 009：大成功打已眩晕目标，伤害骰 10 颗', () => 
   const w = api.getWorld();
   assert.equal(w.party.find((p) => p.id === 'a').hp, 20, '大成功 2 颗 ×5 = 10 颗，每颗 8');
   assert.match(api.getUI().trial.msg, /10 颗伤害骰/);
+  assert.match(w.events.at(-1).note, /两轮：40 \+ 40/, '借机大成功也按轮落账');
+});
+
+test('借机攻击大成功打残血：UI 报掷出和实扣，事件摘要写实扣', () => {
+  opportunityFight({ hp: 2, hpMax: 20 });
+  assert.equal(api.trialOpportunityAttack({ roll: 95, roller: () => 4 }), null);
+  const w = api.getWorld();
+  assert.equal(w.party.find((p) => p.id === 'a').hp, 0);
+  assert.match(api.getUI().trial.msg, /伤害 8（实扣 2）/);
+  assert.match(w.events.at(-1).note, /两轮：2（目标倒下，1 轮未结算）/);
 });
 
 test('借机攻击 009：已眩晕目标被打到 0 仍按昏厥，不叠眩晕', () => {
