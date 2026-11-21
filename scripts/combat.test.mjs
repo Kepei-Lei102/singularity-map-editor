@@ -255,7 +255,7 @@ test('借机攻击每个人回合外只能一次', () => {
   assert.equal(api.getUI().trial.opportunity, null);
 });
 
-function opportunityFight({ skills = [], weakness, hp = 50, hpMax = 50, moverNpc = false } = {}) {
+function opportunityFight({ skills = [], weakness, hp = 50, hpMax = 50, moverNpc = false, twoEnemies = false, enemyNpc = false } = {}) {
   const w = api.emptyWorld();
   const m = api.newMap('借机技能', '现实', 1, 12, 12, 'floor', false);
   m.objects = [];
@@ -264,12 +264,16 @@ function opportunityFight({ skills = [], weakness, hp = 50, hpMax = 50, moverNpc
   w.party = [
     { id: 'a', name: '走的人', color: '#fff', tags: [], attributes: attrs, hp, hpMax },
     { id: 'b', name: '敌人', color: '#f00', tags: [], attributes: attrs, skills, me: 5 },
+    ...(twoEnemies ? [{ id: 'c', name: '敌人二号', color: '#0f0', tags: [], attributes: attrs, me: 5 }] : []),
   ];
   m.tokens = [
     moverNpc
       ? { id: 'ta', pcId: null, name: '走的人', color: '#fff', x: 2, y: 2, hp, hpMax, ...(weakness ? { weakness } : {}) }
       : { id: 'ta', pcId: 'a', name: '走的人', color: '#fff', x: 2, y: 2, ...(weakness ? { weakness } : {}) },
-    { id: 'tb', pcId: 'b', name: '敌人', color: '#f00', x: 2, y: 4 },
+    enemyNpc
+      ? { id: 'tb', pcId: null, name: '敌人', color: '#f00', x: 2, y: 4 }
+      : { id: 'tb', pcId: 'b', name: '敌人', color: '#f00', x: 2, y: 4 },
+    ...(twoEnemies ? [{ id: 'tc', pcId: 'c', name: '敌人二号', color: '#0f0', x: 4, y: 2 }] : []),
   ];
   w.maps = [m];
   api.replaceWorld(w);
@@ -386,6 +390,71 @@ test('借机攻击打已昏厥且挂状态的目标：清旧状态并记 from→
   assert.equal(ta.status, undefined);
   const ev = w.events.at(-1);
   assert.ok(ev.deltas.some((d) => d.kind === 'status' && d.from === '眩晕' && d.to === null));
+  assert.doesNotMatch(api.getUI().trial.msg, /，昏厥/, '已经昏厥的目标不再重复提示昏厥');
+});
+
+test('借机攻击多个敌人：每个敌人一条事件，顺序跟着 enemies', () => {
+  opportunityFight({ twoEnemies: true });
+  const opp = api.getUI().trial.opportunity;
+  assert.deepEqual(opp.enemies, ['tb', 'tc']);
+  assert.equal(api.trialOpportunityAttack({ roll: 50, roller: () => 4 }), null);
+  const w = api.getWorld();
+  const evs = w.events.slice(-2);
+  assert.deepEqual(evs.map((e) => e.actor.id), ['b', 'c']);
+  assert.equal(evs[1].target.id, 'a');
+  assert.equal(w.party.find((p) => p.id === 'a').hp, 42);
+  assert.match(api.getUI().trial.msg, /敌人二号/);
+});
+
+test('借机攻击者是没有角色卡的 NPC：事件 actor 记 npc/token id', () => {
+  opportunityFight({ enemyNpc: true });
+  assert.equal(api.trialOpportunityAttack({ roll: 50, roller: () => 4 }), null);
+  const ev = api.getWorld().events.at(-1);
+  assert.deepEqual(ev.actor, { kind: 'npc', id: 'tb', name: '敌人' });
+  assert.deepEqual(ev.target, { kind: 'pc', id: 'a', name: '走的人' });
+  assert.ok(ev.deltas.some((d) => d.kind === 'hp' && d.from === 50 && d.to === 46));
+});
+
+test('借机攻击打没有血条的 NPC：不写 HP delta，note 说明伤害没落地', () => {
+  opportunityFight({ moverNpc: true });
+  api.update((d) => {
+    const ta = d.maps[0].tokens.find((k) => k.id === 'ta');
+    delete ta.hp;
+    delete ta.hpMax;
+  });
+  assert.equal(api.trialOpportunityAttack({ roll: 50, roller: () => 4 }), null);
+  const w = api.getWorld();
+  const ta = w.maps[0].tokens.find((k) => k.id === 'ta');
+  assert.equal(ta.hp, undefined);
+  const ev = w.events.at(-1);
+  assert.equal(ev.deltas.length, 0);
+  assert.match(ev.note, /没有血条/);
+  assert.match(api.getUI().trial.msg, /没有血条/);
+});
+
+test('借机攻击打 0 血濒死目标：不写 HP delta，note 说明没有掉血', () => {
+  opportunityFight({ hp: 0, hpMax: 4 });
+  api.update((d) => {
+    d.maps[0].tokens.find((k) => k.id === 'ta').status = { label: '濒死', roundsLeft: 3 };
+  });
+  assert.equal(api.trialOpportunityAttack({ roll: 50, roller: () => 4 }), null);
+  const w = api.getWorld();
+  assert.equal(w.party.find((p) => p.id === 'a').hp, 0);
+  const ev = w.events.at(-1);
+  assert.equal(ev.deltas.length, 0);
+  assert.match(ev.note, /没有掉血/);
+  assert.match(api.getUI().trial.msg, /没有掉血/);
+});
+
+test('借机攻击目标已经是尸体：不结算、不写事件，收掉机会', () => {
+  opportunityFight();
+  api.update((d) => { d.maps[0].tokens.find((k) => k.id === 'ta').corpse = true; });
+  const before = api.getWorld().events.length;
+  assert.equal(api.trialOpportunityAttack({ roll: 50, roller: () => 4 }), null);
+  assert.equal(api.getUI().trial.opportunity, null);
+  assert.match(api.getUI().trial.msg, /尸体/);
+  assert.equal(api.getWorld().events.length, before);
+  assert.equal(api.getWorld().party.find((p) => p.id === 'a').hp, 50);
 });
 
 test('借机攻击命中：落一条事件账本，记 actor/target 和 HP delta', () => {

@@ -2334,6 +2334,10 @@ export function trialOpportunityAttack(opts: { roll?: number; roller?: Roller } 
   if (!m) return '地图不见了';
   const mover = m.tokens.find((k) => k.id === o.moverTokenId);
   if (!mover) return '被攻击的棋子不在了';
+  if (mover.corpse) {
+    setTr({ opportunity: null, msg: `${mover.name} 已经是尸体，借机攻击不结算。` });
+    return null;
+  }
   const hits: string[] = [];
   update((d) => {
     const dm = findMap(d, t.mapId)!;
@@ -2382,7 +2386,7 @@ export function trialOpportunityAttack(opts: { roll?: number; roller?: Roller } 
             } else if (oldLabel !== newLabel) {
               deltas.push({ kind: 'status', id: mv.id, name: mv.name, from: oldLabel, to: newLabel });
             }
-            noted += '，昏厥';
+            if (already !== 'down') noted += '，昏厥';
           }
         }
       } else if (r.hit) {
