@@ -11,7 +11,7 @@ const root = fileURLToPath(new URL('..', import.meta.url));
 const temp = await mkdtemp(join(tmpdir(), 'ts-combat-'));
 const bundle = join(temp, 'editor.cjs');
 await build({
-  stdin: { contents: `export * from './src/rules/combat'; export * from './src/rules/interaction'; export * from './src/core/defaults'; export * from './src/core/schema.js'; export * from './src/runtime/trial'; export * from './src/core/store'; export * from './src/runtime/actions'; export * from './src/scene/architecture'; export * from './src/scene/sight';`, resolveDir: root },
+  stdin: { contents: `export * from './src/rules/combat'; export * from './src/rules/interaction'; export * from './src/core/defaults'; export * from './src/core/schema.js'; export * from './src/runtime/trial'; export * from './src/core/store'; export * from './src/runtime/actions'; export * from './src/scene/architecture'; export * from './src/scene/sight'; export * from './src/scene/memory';`, resolveDir: root },
   outfile: bundle, bundle: true, platform: 'node', format: 'cjs', logLevel: 'silent',
 });
 const storage = () => { const data = new Map(); return { getItem: (k) => data.get(k) ?? null, setItem: (k, v) => data.set(k, v), removeItem: (k) => data.delete(k) }; };
@@ -47,6 +47,69 @@ test('NPC 血条：没填默认 10，hp 硬夹在 [0, hpMax]', () => {
   assert.deepEqual(api.npcHpPool({ hp: 15, hpMax: 10 }), { hp: 10, max: 10 });
   assert.deepEqual(api.npcHpPool({ hp: -3, hpMax: 10 }), { hp: 0, max: 10 });
   assert.deepEqual(api.npcHpPool({ hp: 15, hpMax: 20 }), { hp: 15, max: 20 });
+  assert.deepEqual(api.npcHpPool({ hpMax: 0, down: true }), { hp: 0, max: 10 }, '倒地没填 hp 不能满血');
+  assert.deepEqual(api.npcHpPool({ hpMax: 0, status: { label: '濒死', roundsLeft: 3 } }), { hp: 0, max: 10 });
+  assert.deepEqual(api.npcHpPool({ hpMax: 0, status: { label: '急救机器人正在赶来', endsAt: 1 } }), { hp: 0, max: 10 });
+  assert.deepEqual(api.npcHpPool({ hp: 5, hpMax: 10, down: true }), { hp: 5, max: 10 }, '明确填了 hp 就尊重它');
+});
+
+test('update 立刻把会话里的 NPC 血条归一', () => {
+  const w = api.emptyWorld();
+  const m = api.newMap('归一', '现实', 1, 10, 10, 'floor', false);
+  m.tokens = [{ id: 'npc', pcId: null, name: '路人', color: '#888', x: 2, y: 2 }];
+  w.maps = [m];
+  api.replaceWorld(w);
+  api.update((d) => {
+    const t = d.maps[0].tokens.find((x) => x.id === 'npc');
+    t.hp = 5; t.hpMax = 0;
+  });
+  const t = api.getWorld().maps[0].tokens.find((x) => x.id === 'npc');
+  assert.equal(t.hpMax, 10);
+  assert.equal(t.hp, 5);
+});
+
+test('NPC 上限输入：空/0回默认，正小数按四舍五入，至少 1', () => {
+  assert.equal(api.parseNpcHpMaxInput(''), 10);
+  assert.equal(api.parseNpcHpMaxInput('   '), 10);
+  assert.equal(api.parseNpcHpMaxInput('0'), 10);
+  assert.equal(api.parseNpcHpMaxInput('-3'), 10);
+  assert.equal(api.parseNpcHpMaxInput('abc'), 10);
+  assert.equal(api.parseNpcHpMaxInput('0.4'), 1);
+  assert.equal(api.parseNpcHpMaxInput('1.6'), 2);
+  assert.equal(api.parseNpcHpMaxInput('10.4'), 10);
+  assert.equal(api.parseNpcHpMaxInput('20'), 20);
+  assert.equal(api.clampHpToMax(undefined, 20), undefined);
+  assert.equal(api.clampHpToMax(10, 20), 10);
+  assert.equal(api.clampHpToMax(25, 20), 20);
+  assert.equal(api.clampHpToMax(10, 10), 10);
+});
+
+test('读档迁移：NPC 血条写回成确定值', () => {
+  const w = api.emptyWorld();
+  const m = api.newMap('旧档', '现实', 1, 10, 10, 'floor', false);
+  m.tokens = [
+    { id: 'n1', pcId: null, name: '零上限', color: '#888', x: 2, y: 2, hp: 5, hpMax: 0 },
+    { id: 'n2', pcId: null, name: '只有HP', color: '#888', x: 3, y: 2, hp: 80 },
+    { id: 'n3', pcId: null, name: '倒地没填', color: '#888', x: 4, y: 2, down: true },
+    { id: 'n4', pcId: null, name: '濒死没填', color: '#888', x: 5, y: 2, status: { label: '濒死', roundsLeft: 3 } },
+    { id: 'n5', pcId: null, name: '小数上限', color: '#888', x: 6, y: 2, hp: 1, hpMax: 0.4 },
+    { id: 'n6', pcId: null, name: '正常上限', color: '#888', x: 7, y: 2, hp: 15, hpMax: 20 },
+  ];
+  w.maps = [m];
+  const migrated = api.migrateWorld(w).maps[0].tokens;
+  const byId = new Map(migrated.map((t) => [t.id, t]));
+  assert.equal(byId.get('n1').hpMax, 10);
+  assert.equal(byId.get('n1').hp, 5);
+  assert.equal(byId.get('n2').hpMax, 10, '旧档只填 hp 的 NPC 按默认上限 10');
+  assert.equal(byId.get('n2').hp, 10, '80 被夹到 10，不猜旧档意图');
+  assert.equal(byId.get('n3').hp, 0, '倒地没填 hp 归 0，不能满血躺着');
+  assert.equal(byId.get('n3').hpMax, 10);
+  assert.equal(byId.get('n4').hp, 0, '濒死没填 hp 归 0');
+  assert.equal(byId.get('n4').hpMax, 10);
+  assert.equal(byId.get('n5').hpMax, 1);
+  assert.equal(byId.get('n5').hp, 1);
+  assert.equal(byId.get('n6').hpMax, 20);
+  assert.equal(byId.get('n6').hp, 15);
 });
 
 test('攻击：95–99 大成功，1D8 变 2D8', () => {
@@ -383,23 +446,23 @@ test('借机攻击把 PC 打到 0：标昏厥，不再挂眩晕', () => {
   assert.match(api.getUI().trial.msg, /昏厥/);
 });
 
-test('借机攻击不把濒死目标改成昏厥', () => {
-  opportunityFight({ hp: 4, hpMax: 4 });
+test('借机攻击不把濒死 NPC 改成昏厥', () => {
+  opportunityFight({ moverNpc: true, hp: 4, hpMax: 4 });
   api.update((d) => {
     d.maps[0].tokens.find((k) => k.id === 'ta').status = { label: '濒死', roundsLeft: 3 };
   });
   assert.equal(api.trialOpportunityAttack({ roll: 50, roller: () => 4 }), null);
   const w = api.getWorld();
   const ta = w.maps[0].tokens.find((k) => k.id === 'ta');
-  assert.equal(w.party.find((p) => p.id === 'a').hp, 0);
+  assert.equal(ta.hp, 0);
   assert.equal(ta.status.label, '濒死');
   assert.equal(ta.down, undefined);
   const ev = w.events.at(-1);
   assert.equal(ev.deltas.some((d) => d.kind === 'status'), false, '濒死不该记成昏厥');
 });
 
-test('借机攻击打已昏厥且挂状态的目标：清旧状态并记 from→null', () => {
-  opportunityFight({ hp: 4, hpMax: 4 });
+test('借机攻击打已昏厥且挂状态的 NPC：清旧状态并记 from→null', () => {
+  opportunityFight({ moverNpc: true, hp: 4, hpMax: 4 });
   api.update((d) => {
     const ta = d.maps[0].tokens.find((k) => k.id === 'ta');
     ta.down = true;
@@ -408,7 +471,7 @@ test('借机攻击打已昏厥且挂状态的目标：清旧状态并记 from→
   assert.equal(api.trialOpportunityAttack({ roll: 50, roller: () => 4 }), null);
   const w = api.getWorld();
   const ta = w.maps[0].tokens.find((k) => k.id === 'ta');
-  assert.equal(w.party.find((p) => p.id === 'a').hp, 0);
+  assert.equal(ta.hp, 0);
   assert.equal(ta.down, true);
   assert.equal(ta.status, undefined);
   const ev = w.events.at(-1);
@@ -455,18 +518,52 @@ test('借机攻击打没填 hpMax 的 NPC：默认 10，伤害照扣', () => {
   assert.equal(ev.note, undefined, '有血条就不该写“伤害没落地”');
 });
 
-test('借机攻击打 0 血濒死目标：不写 HP delta，note 说明没有掉血', () => {
+test('借机攻击打 0 HP 的 NPC：仍结算，伤害不落地', () => {
+  opportunityFight({ moverNpc: true, hp: 0, hpMax: 10 });
+  assert.equal(api.trialOpportunityAttack({ roll: 50, roller: () => 4 }), null);
+  const w = api.getWorld();
+  const ev = w.events.at(-1);
+  assert.equal(ev.target.name, '走的人');
+  assert.equal(ev.deltas.some((d) => d.kind === 'hp'), false, '0→0 不写 HP delta');
+  assert.match(api.getUI().trial.msg, /没有掉血/);
+});
+
+test('借机攻击不打 PC 0 HP / 濒死目标', () => {
+  // 没有状态、只是 0 HP
+  opportunityFight({ hp: 0, hpMax: 4 });
+  const before = (api.getWorld().events ?? []).length;
+  assert.equal(api.trialOpportunityAttack({ roll: 50, roller: () => 4 }), null);
+  assert.match(api.getUI().trial.msg, /没有 HP/);
+  assert.equal((api.getWorld().events ?? []).length, before, '拒绝的借机攻击不落事件');
+
+  // 已经濒死
   opportunityFight({ hp: 0, hpMax: 4 });
   api.update((d) => {
     d.maps[0].tokens.find((k) => k.id === 'ta').status = { label: '濒死', roundsLeft: 3 };
   });
+  const beforeDying = (api.getWorld().events ?? []).length;
   assert.equal(api.trialOpportunityAttack({ roll: 50, roller: () => 4 }), null);
-  const w = api.getWorld();
-  assert.equal(w.party.find((p) => p.id === 'a').hp, 0);
-  const ev = w.events.at(-1);
-  assert.equal(ev.deltas.length, 0);
-  assert.match(ev.note, /没有掉血/);
-  assert.match(api.getUI().trial.msg, /没有掉血/);
+  assert.match(api.getUI().trial.msg, /濒死/);
+  assert.equal((api.getWorld().events ?? []).length, beforeDying, 'PC 濒死也不结算借机攻击');
+
+  // 已经昏厥但 HP>0：普通攻击和借机都不能打
+  opportunityFight({ hp: 4, hpMax: 4 });
+  api.update((d) => { d.maps[0].tokens.find((k) => k.id === 'ta').down = true; });
+  const beforeDown = (api.getWorld().events ?? []).length;
+  assert.equal(api.trialOpportunityAttack({ roll: 50, roller: () => 4 }), null);
+  assert.match(api.getUI().trial.msg, /昏厥/);
+  assert.equal((api.getWorld().events ?? []).length, beforeDown, 'PC 昏厥也不结算借机攻击');
+
+  // down + 濒死同时存在：和普通攻击/canTarget 一样报濒死
+  opportunityFight({ hp: 4, hpMax: 4 });
+  api.update((d) => {
+    const t = d.maps[0].tokens.find((k) => k.id === 'ta');
+    t.down = true; t.status = { label: '濒死', roundsLeft: 3 };
+  });
+  const beforeBoth = (api.getWorld().events ?? []).length;
+  assert.equal(api.trialOpportunityAttack({ roll: 50, roller: () => 4 }), null);
+  assert.match(api.getUI().trial.msg, /濒死/);
+  assert.equal((api.getWorld().events ?? []).length, beforeBoth, 'PC down+濒死也不结算');
 });
 
 test('借机攻击目标已经是尸体：不结算、不写事件，收掉机会', () => {
@@ -814,6 +911,47 @@ test('非战斗状态：濒死挂「急救机器人正在赶来」，到点自�
   const tb = api.findMap(api.getWorld(), m.id).tokens.find((t) => t.id === 'tb');
   assert.equal(tb.status, undefined, '到点清掉状态');
   assert.equal(api.getWorld().party.find((p) => p.id === 'b').hp, api.RESCUED_HP, '机器人把人拉起来，1 HP');
+});
+
+test('急救机器人拉起 NPC：没填上限按 10，只给 1 HP', () => {
+  const now = 1_000_000;
+  const w = api.emptyWorld();
+  const m = api.newMap('机器人 NPC', '现实', 1, 10, 10, 'floor', false);
+  m.objects = []; m.fog = m.fog.map(() => 1);
+  const attrs = { 力量: 30, 敏捷: 30, 意志: 30, 观察: 30, 智慧: 30, 魅力: 30 };
+  w.party = [{ id: 'a', name: '队友', color: '#fff', tags: [], attributes: attrs }];
+  m.tokens = [
+    { id: 'ta', pcId: 'a', name: '队友', color: '#fff', x: 2, y: 2 },
+    { id: 'npc', pcId: null, name: '路人', color: '#888', x: 3, y: 2, hpMax: 0, down: true, status: api.robotIncoming(now) },
+  ];
+  w.maps = [m]; api.replaceWorld(w); api.startTrial();
+  api.setUI({ trial: { mapId: m.id, players: [{ tokenId: 'ta', pcId: 'a', name: '队友' }], current: 0, combat: false, moved: {}, turn: 1, msg: '', markSymbol: '!', markText: '', markMode: false } });
+  api.tickRobots(now + api.ROBOT_ETA_MS);
+  const npc = api.getWorld().maps[0].tokens.find((k) => k.id === 'npc');
+  assert.equal(npc.status, undefined);
+  assert.equal(npc.down, undefined, '机器人到场也要解除昏厥');
+  assert.equal(npc.hp, api.RESCUED_HP);
+  assert.equal(npc.hpMax, 10);
+});
+
+test('急救机器人不把已经高于 1 HP 的 NPC 拉回 1', () => {
+  const now = 1_000_000;
+  const w = api.emptyWorld();
+  const m = api.newMap('机器人高血', '现实', 1, 10, 10, 'floor', false);
+  m.objects = []; m.fog = m.fog.map(() => 1);
+  const attrs = { 力量: 30, 敏捷: 30, 意志: 30, 观察: 30, 智慧: 30, 魅力: 30 };
+  w.party = [{ id: 'a', name: '队友', color: '#fff', tags: [], attributes: attrs }];
+  m.tokens = [
+    { id: 'ta', pcId: 'a', name: '队友', color: '#fff', x: 2, y: 2 },
+    { id: 'npc', pcId: null, name: '路人', color: '#888', x: 3, y: 2, hp: 6, hpMax: 10, down: true, status: api.robotIncoming(now) },
+  ];
+  w.maps = [m]; api.replaceWorld(w); api.startTrial();
+  api.setUI({ trial: { mapId: m.id, players: [{ tokenId: 'ta', pcId: 'a', name: '队友' }], current: 0, combat: false, moved: {}, turn: 1, msg: '', markSymbol: '!', markText: '', markMode: false } });
+  api.tickRobots(now + api.ROBOT_ETA_MS);
+  const npc = api.getWorld().maps[0].tokens.find((k) => k.id === 'npc');
+  assert.equal(npc.hp, 6, '保留已经更高的 HP');
+  assert.equal(npc.down, undefined);
+  assert.match(api.getWorld().log.at(-1).text, /6 HP/);
 });
 
 test('尸体能搬，搬了位置记录跟着走', () => {

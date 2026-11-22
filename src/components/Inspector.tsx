@@ -18,7 +18,7 @@ import { cellName, parseCell, rangeName, uid } from '../core/util';
 import { MAX_SIDE } from '../core/schema.js';
 import { storeBlobStatus, useBlobUrl } from '../runtime/media';
 import { blankCellCount } from '../core/grid';
-import { NPC_DEFAULT_HP, npcHpPool } from '../rules/combat';
+import { clampHpToMax, npcHpPool, parseNpcHpMaxInput } from '../rules/combat';
 import { Area, Check, Num, Row, Section, Txt } from './fields';
 import { ObjectInteractionPanel } from './ObjectInteraction';
 
@@ -765,8 +765,11 @@ function TokenInspector({ world, mapId, t }: { world: World; mapId: string; t: T
           <Num value={npcHpPool(t).hp} min={0} max={npcHpPool(t).max}
             onChange={(v) => up((x) => { const max = npcHpPool(x).max; x.hp = Math.max(0, Math.min(Math.round(v), max)); x.hpMax ??= max; })} />
           <span className="muted">/</span>
-          <Num value={npcHpPool(t).max} min={0}
-            onChange={(v) => up((x) => { const max = Math.round(v) > 0 ? Math.round(v) : NPC_DEFAULT_HP; x.hpMax = max; x.hp = Math.min(x.hp ?? max, max); })} />
+          <NpcHpMaxInput value={npcHpPool(t).max}
+            onChange={(v) => up((x) => {
+              x.hpMax = v;
+              x.hp = clampHpToMax(x.hp, v);
+            })} />
         </div>
         <div className="inline">
           <span className="muted">ME</span>
@@ -838,6 +841,22 @@ function CellInput({ x, y, onChange }: { x: number; y: number; onChange: (p: { x
   return (
     <input value={text ?? cellName(x, y)} placeholder="例如 B8" onChange={(e) => setText(e.target.value)}
       onBlur={commit} onKeyDown={(e) => { if (e.key === 'Enter') commit(); if (e.key === 'Escape') setText(null); }} />
+  );
+}
+
+/** NPC 上限输入：清空后失焦回默认 10；小数按 helper 的四舍五入口径走（0.4→1）。 */
+function NpcHpMaxInput({ value, onChange }: { value: number; onChange: (v: number) => void }) {
+  const [text, setText] = useState<string | null>(null);
+  const commit = () => {
+    if (text === null) return;
+    onChange(parseNpcHpMaxInput(text));
+    setText(null);
+  };
+  return (
+    <input type="number" min={0} value={text ?? String(value)}
+      onChange={(e) => setText(e.target.value)}
+      onBlur={commit}
+      onKeyDown={(e) => { if (e.key === 'Enter') commit(); if (e.key === 'Escape') setText(null); }} />
   );
 }
 

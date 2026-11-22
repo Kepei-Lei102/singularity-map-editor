@@ -5,6 +5,7 @@ import type { SenseHint, SenseKind, SenseRoll } from '../rules/sense';
 import type { PendingCodeAttempt, PendingJudgment, World } from './types';
 import { demoWorld, emptyWorld } from './defaults';
 import { isPlayerEntry } from './deployment';
+import { normalizeNpcHp } from '../rules/combat';
 import { migrateWorld, syncMemory } from '../scene/memory';
 import type { CombatNotice } from './types';
 import { setMediaIndex } from '../runtime/media';
@@ -141,7 +142,9 @@ function memoryDirty(a: World, b: World): boolean {
  * 修改世界。coalesce：同一个 key 在 1 秒内的连续修改合并成一步撤销（用于打字）。
  */
 export function update(fn: (d: Draft<World>) => void, opts: { coalesce?: string; history?: boolean } = {}) {
-  let next = produce(world, fn);
+  // NPC 血条每次改世界都归一：会话里直接 update 出来的 hpMax 0/负数、倒地缺 hp 不留在存档里。
+  // 必须在同一个 produce 里做：produce 返回的对象是冻结的，出去再改会静默失败。
+  let next = produce(world, (d) => { fn(d); normalizeNpcHp(d as unknown as World); });
   if (next === world) return;
   // Component edits (material/physical/openStates/state lists) obey the same close policy.
   for (const m of next.maps) {

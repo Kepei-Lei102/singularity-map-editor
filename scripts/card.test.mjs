@@ -92,7 +92,7 @@ test('落空：大失败 · 落空，没有伤害块', () => {
   assert.doesNotMatch(html, /damage-num/);
 });
 
-test('没有血条的 NPC：没有伤害块，note 说出原因，没有倒地 tag', () => {
+test('旧事件兼容：没有血条的目标不出伤害块，note 说明原因', () => {
   const html = render({ ...hit, hpBefore: null, hpAfter: null, hpMax: null, downed: null, note: '乙 没有血条（角色卡和棋子都没填 HP）；伤害没落地' });
   assert.doesNotMatch(html, /damage-num/);
   assert.match(html, /没有血条/);

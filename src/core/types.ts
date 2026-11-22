@@ -811,7 +811,7 @@ export interface PhysicalEvent {
   knowledge?: { subject: Id; label: string; tier: string }[];
   /** 见证者当场写的裁定 */
   ruling?: string;
-  /** 不是状态变化的补充说明（比如「目标没有血条，伤害没落地」）。账本里也要能读到，不能只在 UI 卡片上。 */
+  /** 不是状态变化的补充说明（比如「这一下数值没有变化」）。账本里也要能读到，不能只在 UI 卡片上。 */
   note?: string;
 }
 

@@ -17,7 +17,7 @@ export function TrialEventCard() {
   }, [at]);
   if (!ev || !ui.trial) return null;
   const isHit = ev.kind === 'hit';
-  // 没真扣到血就别报伤害数字：打已经倒地的人、打没血条的 NPC，账本都记「没变化」。
+  // 没真扣到血就别报伤害数字：打已经 0 HP 的目标，账本都记「没变化」。
   const landed = isHit && damageLanded(ev);
   // −N 报实际扣掉的血，不是掷出来的伤害（打在残血上，掷 3 只扣 1）；不一样就把掷出的数写小字。
   const lost = damageLost(ev);

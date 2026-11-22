@@ -150,15 +150,46 @@ export function hpOf(pc: Pick<{ attributes?: Record<string, number>; hp?: number
 /** NPC 没填 HP 上限时的默认值（作者 2026-11-21：所有 NPC 强制有上限，没填按 10）。 */
 export const NPC_DEFAULT_HP = 10;
 
-/** NPC 棋子的血条：hpMax 没填/非正数就按 10；hp 没填就满血，并硬夹在 [0, hpMax]。 */
-export function npcHpPool(t: Pick<Token, 'hp' | 'hpMax'>): { hp: number; max: number } {
+type NpcHpSource = Pick<Token, 'hp' | 'hpMax'> & Partial<Pick<Token, 'down' | 'corpse' | 'status'>>;
+
+/** NPC 棋子的血条：hpMax 没填/非正数就按 10；hp 没填时，活着按满血，倒地/濒死/等急救按 0。
+ *  硬夹在 [0, hpMax]。 */
+export function npcHpPool(t: NpcHpSource): { hp: number; max: number } {
   const rawMax = t.hpMax;
   const max = typeof rawMax === 'number' && Number.isFinite(rawMax) && rawMax > 0
     ? Math.max(1, Math.round(rawMax))
     : NPC_DEFAULT_HP;
+  const downed = !!t.corpse || !!t.down || t.status?.label === DYING_LABEL
+    || t.status?.label === '昏厥' || t.status?.label === ROBOT_LABEL;
   const rawHp = t.hp;
-  const hp = typeof rawHp === 'number' && Number.isFinite(rawHp) ? rawHp : max;
+  const hp = typeof rawHp === 'number' && Number.isFinite(rawHp) ? rawHp : downed ? 0 : max;
   return { hp: Math.max(0, Math.min(Math.round(hp), max)), max };
+}
+
+/** 读档/导入/每次 update 时把 NPC 的血条写回成确定值：hpMax 归一到默认或正整数，hp 夹进 [0, hpMax]。
+ *  已倒地/濒死但没填 hp 的旧数据按 0 处理，避免“躺着却满血”的自相矛盾。 */
+export function normalizeNpcHp(world: World): void {
+  for (const m of world.maps) {
+    for (const t of m.tokens) {
+      if (t.pcId) continue;
+      const pool = npcHpPool(t);
+      t.hpMax = pool.max;
+      t.hp = pool.hp;
+    }
+  }
+}
+
+/** 上限输入框失焦后的最终值：空/非法/≤0 回默认 10，正小数四舍五入，至少 1。 */
+export function parseNpcHpMaxInput(raw: string): number {
+  const text = raw.trim();
+  const n = Number(text);
+  if (text === '' || !Number.isFinite(n) || n <= 0) return NPC_DEFAULT_HP;
+  return Math.max(1, Math.round(n));
+}
+
+/** 改上限时只夹明确超过新上限的 HP；hp 没填就保持 undefined（按新上限满血显示）。 */
+export function clampHpToMax(hp: number | undefined, max: number): number | undefined {
+  return hp !== undefined && hp > max ? max : hp;
 }
 
 /** 把伤害扣下去之后的新 HP：不低于 0，伤害取整、不为负。 */
@@ -238,7 +269,9 @@ export function canTarget(world: World, map: GameMap, attacker: Token, target: T
   if (attacker.id === target.id) return { ok: false, reason: '不能打自己' };
   if (!world) return { ok: false, reason: '没有世界' };
   const hp = hpOfToken(world, target);
-  // NPC 0 HP 仍可被攻击（作者 2026-11-21）：这类攻击不扣血，只用来触发技能/收尾叙事。
+  // PC 濒死 / 昏厥（down）/ 0 HP 都不能再打；NPC 0 HP 仍可被攻击（作者 2026-11-21）。
+  if (target.pcId && target.status?.label === DYING_LABEL) return { ok: false, reason: '目标已经濒死' };
+  if (target.pcId && (target.down || target.status?.label === '昏厥')) return { ok: false, reason: '目标已经昏厥' };
   if (hp <= 0 && !!target.pcId) return { ok: false, reason: '目标已经倒下' };
   if (!inAttackRange(attacker, target, range)) return { ok: false, reason: `超出攻击距离（${tokenDistance(attacker, target)} 格 > ${range}）` };
   if (!visible) return { ok: false, reason: '看不见目标，不能攻击' };
@@ -261,7 +294,7 @@ export interface AttackTarget {
   /** 是不是玩家队伍里的人（NPC 棋子 pcId 为空）。 */
   isPc: boolean;
   distance: number;
-  hp: number | null; // null = 不设上限（NPC）
+  hp: number | null; // null = 找不到角色卡，算不出 HP（正常 PC/NPC 都是数字）
   inRange: boolean;
   visible: boolean;
   canHit: boolean;
@@ -282,9 +315,12 @@ export function attackTargets(
       const visible = visibility(t);
       const pc = t.pcId ? world.party.find((p) => p.id === t.pcId) : undefined;
       const hp = t.pcId ? (pc ? hpOf(pc).hp : null) : npcHpPool(t).hp;
-      // NPC 0 HP（含濒死）仍可被攻击；PC 的濒死/倒地才是硬拦。
+      // NPC 0 HP（含濒死）仍可被攻击；PC 的濒死/昏厥/倒地才是硬拦。
       const dying = !!t.pcId && t.status?.label === '濒死';
-      const check = dying ? { ok: false, reason: '目标已经濒死' } : canTarget(world, map, attacker, t, visible, opts.range);
+      const downed = !!t.pcId && (!!t.down || t.status?.label === '昏厥');
+      const check = dying ? { ok: false, reason: '目标已经濒死' }
+        : downed ? { ok: false, reason: '目标已经昏厥' }
+        : canTarget(world, map, attacker, t, visible, opts.range);
       return {
         tokenId: t.id, name: t.name, isPc: !!t.pcId,
         distance: tokenDistance(attacker, t),
@@ -362,7 +398,7 @@ export function canRescue(unlocked: readonly string[]): boolean {
   return RESCUE_GRANTS.some((id) => unlocked.includes(id));
 }
 
-/** 救治之后的人回到 1 HP，濒死/昏厥解除（"至少活过来"）。 */
+/** 救治之后的人至少回到 1 HP（原本更高保留），濒死/昏厥解除。 */
 export const RESCUED_HP = 1;
 
 // ---------- 昏厥 / 濒死（钝器 vs 锐器） ----------

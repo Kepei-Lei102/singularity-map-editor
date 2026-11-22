@@ -7,6 +7,7 @@ import { current, isDraft, type Draft } from 'immer';
 import { buildFineCells, groupBounds, objectFootprintCells } from '../core/grid';
 import type { CellGroup, GameMap, Id, MapObject, SeenObject, TextureSpec, VisionLayer, World } from '../core/types';
 import { linesToFlow } from '../rules/flow';
+import { normalizeNpcHp } from '../rules/combat';
 import { DEFAULT_MATERIALS } from '../core/defaults';
 import { cloneLayer, emptyVision, mergeLayers, pruneMemory, spatialFog, visionKey } from './vision';
 import type { VisionPlan } from './visionPlan';
@@ -353,6 +354,7 @@ export function migrateWorld(w: World): World {
   for (const p of w.party) if (p.visionGroupId && !groupIds.has(p.visionGroupId)) p.visionGroupId = null;
   for (const m of w.maps) for (const id of Object.keys(m.views)) if (!w.party.some(p => p.id === id)) delete m.views[id];
   w.marks ??= [];
+  normalizeNpcHp(w);
   w.npcs ??= [];
   for (const n of w.npcs) { n.progress ??= { status: 'waiting', beatsDone: [] }; n.progress.beatsDone ??= []; }
   // Imported revisions are world-local; keep the next actual observation newer than

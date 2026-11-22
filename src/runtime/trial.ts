@@ -1141,9 +1141,10 @@ function attackContext(targetTokenId: string, sharp: boolean, skillId?: string, 
   if (statusBlocksAction(attacker.status)) return `${attacker.name}${attacker.status!.label}中，暂时不能行动`;
   if (actedOf(t, pl.tokenId)) return '这回合的行动点已经用掉了，按空格结束回合';
   if (target.corpse) return `${target.name} 已经死了，不用再打`;
-  // NPC 0 HP（含濒死/昏厥）仍可被攻击；PC 的 0 HP / 濒死硬拦。
+  // NPC 0 HP（含濒死/昏厥）仍可被攻击；PC 的 0 HP / 濒死 / 昏厥硬拦。
   // 目标列表已经用 canTarget 拦了一道，这里补上直接调用 trialAttack 的入口，不能两边口径不一致。
   if (target.pcId && target.status?.label === '濒死') return `${target.name} 已经濒死了`;
+  if (target.pcId && (target.down || target.status?.label === '昏厥')) return `${target.name} 已经昏厥了`;
   if (target.pcId && hpOfToken(w, target) <= 0) return `${target.name} 已经没有 HP，不能再打`;
   const dist = Math.abs(attacker.x - target.x) + Math.abs(attacker.y - target.y);
   if (dist > ATTACK_RANGE) return `超出攻击距离（${dist} 格 > ${ATTACK_RANGE}）`;
@@ -1966,7 +1967,7 @@ export function damageLost(ev: { hpBefore: number | null; hpAfter: number | null
 }
 
 /**
- * 这一击真的扣到血了吗：落空、打已经 0 血的人、打没血条的 NPC，都不算。
+ * 这一击真的扣到血了吗：落空、打已经 0 血的人、打 0 HP 的 NPC，都不算。
  * 卡片/玩家窗口用它决定要不要显示「−N 伤害」——账本不记的变化，卡片也不该报。
  */
 export function damageLanded(ev: { damage: number; hpBefore: number | null; hpAfter: number | null }): boolean {
@@ -2352,6 +2353,18 @@ export function trialOpportunityAttack(opts: { roll?: number; roller?: Roller } 
     setTr({ opportunity: null, msg: `${mover.name} 已经是尸体，借机攻击不结算。` });
     return null;
   }
+  // 借机攻击也是“攻击”：PC 0 HP / 昏厥 / 濒死不结算，和普通攻击同口径；NPC 0 HP 仍按作者口径可打。
+  if (mover.pcId) {
+    const moverPc = w.party.find((x) => x.id === mover.pcId);
+    const moverHp = moverPc ? hpOf(moverPc).hp : 0;
+    const pcDying = mover.status?.label === DYING_LABEL;
+    const pcDowned = mover.down || mover.status?.label === '昏厥';
+    if (pcDying || pcDowned || moverHp <= 0) {
+      const why = pcDying ? '濒死' : pcDowned ? '昏厥' : '没有 HP';
+      setTr({ opportunity: null, msg: `${mover.name} 已经${why}，借机攻击不结算。` });
+      return null;
+    }
+  }
   const hits: string[] = [];
   update((d) => {
     const dm = findMap(d, t.mapId)!;
@@ -2527,7 +2540,7 @@ export function trialRescue(targetTokenId: string, opts: { roll?: number } = {})
         p.hp = hpAfter;
       }
     } else {
-      // NPC 血条硬上限：救治只拉到 1 HP，且不超过当前上限（上限可由技能提高）。
+      // NPC 血条硬上限：救治拉到至少 1 HP，且不超过当前上限（原本更高保留；上限可由技能提高）。
       const pool = npcHpPool(dt);
       hpBefore = pool.hp;
       hpAfter = Math.min(pool.max, Math.max(hpBefore, RESCUED_HP));
@@ -2566,15 +2579,18 @@ export function tickRobots(now = Date.now()): void {
       if (!k.status?.label.startsWith(ROBOT_LABEL)) continue;
       if (!robotArrived(k.status.endsAt, now)) continue;
       delete k.status;
+      delete k.down;
       if (k.pcId) {
         const p = d.party.find((x) => x.id === k.pcId);
         if (p) p.hp = Math.max(p.hp ?? 0, RESCUED_HP);
       } else {
         const pool = npcHpPool(k);
-        k.hp = Math.min(pool.max, Math.max(pool.hp, RESCUED_HP));
+        // 机器人至少拉到 1 HP；没填 hp 的倒地 NPC 不能按“满血”算，已经高于 1 就保留。
+        k.hp = Math.min(pool.max, Math.max(k.hp ?? 0, RESCUED_HP));
         k.hpMax ??= pool.max;
       }
-      d.log.push({ id: uid(), at: now, session: d.session, kind: 'note', text: `急救机器人到场，${k.name} 被拉起来了（1 HP）。` });
+      d.log.push({ id: uid(), at: now, session: d.session, kind: 'note',
+        text: `急救机器人到场，${k.name} 被拉起来了（${k.pcId ? (d.party.find((x) => x.id === k.pcId)?.hp ?? RESCUED_HP) : (k.hp ?? RESCUED_HP)} HP）。` });
     }
   });
 }

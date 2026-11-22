@@ -148,12 +148,31 @@ test('落空不写假账：伤害 0 就不该有「HP 从 6 改为 6」', () => 
 });
 
 test('PC 0 HP 不能再被攻击：直接入口也要和 canTarget 一致', () => {
-  fight({ targetToken: { down: true }, targetHp: 0 });
+  fight({ targetHp: 0 });
   const target = api.trialAttackTargets().find((x) => x.tokenId === 'tb');
   assert.equal(target.canHit, false);
   const err = api.trialAttack('tb', { roll: 50, roller: () => 3 });
   assert.match(err ?? '', /没有 HP|不能打/);
   assert.equal((api.getWorld().events ?? []).length, 0, '拒绝的攻击不该落事件');
+});
+
+test('canTarget 直接入口也拦 PC 濒死（HP>0）', () => {
+  const { m } = fight({ targetHp: 5, targetToken: { status: { label: '濒死', roundsLeft: 3 } } });
+  const w = api.getWorld();
+  const attacker = api.findMap(w, m.id).tokens.find((t) => t.id === 'ta');
+  const target = api.findMap(w, m.id).tokens.find((t) => t.id === 'tb');
+  const check = api.canTarget(w, api.findMap(w, m.id), attacker, target, true);
+  assert.equal(check.ok, false);
+  assert.equal(check.reason, '目标已经濒死');
+});
+
+test('PC 昏厥但 HP>0 也不能打', () => {
+  fight({ targetToken: { down: true }, targetHp: 4 });
+  const target = api.trialAttackTargets().find((x) => x.tokenId === 'tb');
+  assert.equal(target.canHit, false);
+  const err = api.trialAttack('tb', { roll: 50, roller: () => 3 });
+  assert.match(err ?? '', /昏厥/);
+  assert.equal((api.getWorld().events ?? []).length, 0);
 });
 
 test('带非濒死状态被打到 0：status.from 是原来的状态名，不是 null', () => {
@@ -183,8 +202,12 @@ test('NPC 没填 hpMax：默认 10，伤害照扣', () => {
   assert.equal(ev.note, undefined, '有血条就不该写“伤害没落地”');
 });
 
-test('已昏厥且身上还挂着别的状态：状态被抹掉要入账', () => {
-  fight({ targetHp: 2, targetToken: { down: true, status: { label: '中毒', roundsLeft: 3 } } });
+test('已昏厥的 NPC 身上还挂着别的状态：状态被抹掉要入账', () => {
+  const { m } = fight({ targetHp: 2, targetToken: { down: true, status: { label: '中毒', roundsLeft: 3 } } });
+  api.update((d) => {
+    const t = api.findMap(d, m.id).tokens.find((x) => x.id === 'tb');
+    delete t.pcId; delete t.hpMax;
+  });
   assert.equal(api.trialAttack('tb', { roll: 50, roller: () => 3 }), null);
   const st = api.getWorld().events.at(-1).deltas.find((d) => d.kind === 'status');
   assert.ok(st, 'status 被 delete 了就必须有 delta');
