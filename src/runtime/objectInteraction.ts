@@ -2,9 +2,10 @@
 import { appendEvent, newEvent } from '../rules/events';
 import { tierOfRoll, type Advantage, type CheckResult, type Scale } from '../rules/interaction';
 import { objectOutcome } from '../rules/objectInteraction';
+import { physicalActionError } from '../rules/physicalAction';
 import { objectStateError } from '../scene/architecture';
 import { findMap } from './actions';
-import { getWorld, update } from '../core/store';
+import { getUI, getWorld, setUI, update } from '../core/store';
 
 export interface CommitInteractionInput {
   mapId: string;
@@ -28,6 +29,9 @@ export function commitObjectInteraction(input: CommitInteractionInput): string |
   if (!o) return '找不到物件';
   const actor = w.party.find((p) => p.id === input.actorId);
   if (!actor) return '找不到发起角色';
+  // 预览和落账走同一份条件；这里再算一次，挡住预览后人物移动/行动点被吃掉/物件被禁用。
+  const gate = physicalActionError({ world: w, map, object: o, actor, trial: getUI().trial });
+  if (gate) return gate;
   const tier = input.result.tier;
   if (!tier) return '这次判定没有档位';
   const to = objectOutcome(o, input.actionId, tier);
@@ -78,5 +82,10 @@ export function commitObjectInteraction(input: CommitInteractionInput): string |
       },
     ));
   });
+  const trial = getUI().trial;
+  if (trial?.combat) {
+    const tokenId = trial.players[trial.current]?.tokenId;
+    if (tokenId) setUI({ trial: { ...trial, acted: { ...(trial.acted ?? {}), [tokenId]: true } } });
+  }
   return null;
 }

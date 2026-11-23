@@ -67,6 +67,7 @@ afterEach(() => {
     container.remove();
   }
   mounted.length = 0;
+  api.setUI({ trial: null });
 });
 after(async () => {
   dom.window.close();
@@ -97,6 +98,29 @@ function fixture() {
   w.maps = [m];
   w.party = [{ id: 'a', name: '甲', color: '#fff', tags: [], attributes: ATTRS }];
   api.replaceWorld(w);
+  return { w, m };
+}
+
+function trialFixture(over = {}) {
+  const w = api.emptyWorld();
+  const m = api.newMap('ui-trial', '现实', 1, 10, 10, 'floor', false);
+  m.objects = [{
+    ...api.newObject('object', 2, 3, 1, 1), id: 'clay', name: '橡皮泥', states: ['完好', '裂'],
+    state: 0, stateRev: 0, interaction: {
+      overrides: [{ actionId: '4', outcomes: { crit: 1, success: 1, fail: 0, fumble: 0 } }],
+    },
+  }];
+  m.tokens = [{ id: 'ta', pcId: 'a', name: '甲', color: '#fff', x: 3, y: 3 }];
+  w.maps = [m];
+  w.party = [{ id: 'a', name: '甲', color: '#fff', tags: [], attributes: ATTRS },
+             { id: 'b', name: '乙', color: '#fff', tags: [], attributes: ATTRS }];
+  api.replaceWorld(w);
+  api.setUI({ trial: {
+    mapId: m.id,
+    players: [{ tokenId: 'ta', pcId: 'a', name: '甲' }, { tokenId: 'tb', pcId: 'b', name: '乙' }],
+    current: 0, combat: false, moved: {}, turn: 1, msg: '',
+    ...over,
+  } });
   return { w, m };
 }
 
@@ -293,6 +317,77 @@ test('面板：改状态名后旧预览失效', () => {
   });
   assert.ok(![...document.querySelectorAll('button')].some((x) => x.textContent?.trim() === '确认，落账'));
   assert.match(document.body.textContent, /输入或物件已经变了，请重新看结果/);
+});
+
+test('基座：试玩里选错行动角色，面板直接拦并禁用看结果', () => {
+  const { w } = trialFixture({ current: 1 });
+  mount(w, 'clay', w.maps[0].id);
+  assert.match(document.body.textContent, /现在轮到 乙，不能由 甲 发起/);
+  const preview = [...document.querySelectorAll('button')].find((x) => x.textContent?.trim() === '看结果');
+  assert.ok(preview, '找不到看结果按钮');
+  assert.equal(preview.disabled, true, '条件不满足时看结果还能点');
+});
+
+test('基座：人物离物件太远，面板显示原因并禁用看结果', () => {
+  const { w, m } = trialFixture();
+  api.update((d) => { d.maps[0].tokens[0].x = 6; });
+  mount(api.getWorld(), 'clay', m.id);
+  assert.match(document.body.textContent, /要贴身才能操作/);
+  const preview = [...document.querySelectorAll('button')].find((x) => x.textContent?.trim() === '看结果');
+  assert.equal(preview.disabled, true);
+});
+
+test('基座：战斗里确认落账后行动点被用掉', () => {
+  const { w, m } = trialFixture({ combat: true });
+  mount(w, 'clay', m.id);
+  setRoll('15');
+  click('看结果');
+  click('确认，落账');
+  assert.equal(api.getUI().trial.acted.ta, true);
+  assert.equal(api.getWorld().maps[0].objects[0].state, 1);
+});
+
+test('基座：非战斗落账不扣行动点', () => {
+  const { w, m } = trialFixture({ combat: false });
+  mount(w, 'clay', m.id);
+  setRoll('15');
+  click('看结果');
+  click('确认，落账');
+  assert.equal(api.getUI().trial.acted, undefined);
+  assert.equal(api.getWorld().maps[0].objects[0].state, 1);
+});
+
+test('基座：预览后人物走开，旧预览清掉且确认按钮消失', () => {
+  const { w, m } = trialFixture();
+  const root = mount(w, 'clay', m.id);
+  setRoll('15');
+  click('看结果');
+  assert.ok([...document.querySelectorAll('button')].some((x) => x.textContent?.trim() === '确认，落账'));
+  api.update((d) => { d.maps[0].tokens[0].x = 7; });
+  const next = api.getWorld();
+  const o = next.maps[0].objects[0];
+  api.act(() => root.render(api.React.createElement(api.ObjectInteractionPanel, {
+    world: next, mapId: next.maps[0].id, o, edit: false, defaultActorId: 'a',
+  })));
+  assert.match(document.body.textContent, /要贴身才能操作/);
+  assert.ok(![...document.querySelectorAll('button')].some((x) => x.textContent?.trim() === '确认，落账'));
+});
+
+test('基座：预览后行动点被吃掉，旧预览清掉且确认按钮消失', () => {
+  const { w, m } = trialFixture({ combat: true });
+  const root = mount(w, 'clay', m.id);
+  setRoll('15');
+  click('看结果');
+  assert.ok([...document.querySelectorAll('button')].some((x) => x.textContent?.trim() === '确认，落账'));
+  const trial = api.getUI().trial;
+  api.setUI({ trial: { ...trial, acted: { ta: true } } });
+  const next = api.getWorld();
+  const o = next.maps[0].objects[0];
+  api.act(() => root.render(api.React.createElement(api.ObjectInteractionPanel, {
+    world: next, mapId: next.maps[0].id, o, edit: false, defaultActorId: 'a',
+  })));
+  assert.match(document.body.textContent, /行动点已经用掉/);
+  assert.ok(![...document.querySelectorAll('button')].some((x) => x.textContent?.trim() === '确认，落账'));
 });
 
 } else {

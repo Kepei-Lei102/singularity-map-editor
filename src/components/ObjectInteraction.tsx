@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { ObjectInteraction, World } from '../core/types';
 import { TIER_LABEL, TIERS, type MapObject, type Tier } from '../core/types';
-import { toast, update } from '../core/store';
+import { getUI, toast, update } from '../core/store';
 import { ACTION_LIBRARY, PANEL_ACTIONS, actionById, actionCheckSpec, type RawAction } from '../rules/actionLibrary';
 import { resolve, type Advantage, type Attr, type CheckResult, type CheckSpec } from '../rules/interaction';
+import { physicalActionError } from '../rules/physicalAction';
 import { objectOutcomePlan } from '../rules/objectInteraction';
 import { interactionPreviewValid, makeInteractionPreviewSnapshot, type InteractionPreviewSnapshot } from '../rules/interactionPreview';
 import { commitObjectInteraction } from '../runtime/objectInteraction';
@@ -108,6 +109,8 @@ function RunPanel({ world, mapId, o, defaultActorId }: { world: World; mapId: st
   const action = actionById(actionId);
   const checked = action ? actionCheckSpec(action) : { error: '找不到动作' };
   const spec = 'spec' in checked ? checked.spec : null;
+  const map = world.maps.find((m) => m.id === mapId);
+  const gate = map && actor ? physicalActionError({ world, map, object: o, actor, trial: getUI().trial }) : null;
 
   useEffect(() => {
     if (!defaultActorId) appliedDefault.current = null;
@@ -121,6 +124,9 @@ function RunPanel({ world, mapId, o, defaultActorId }: { world: World; mapId: st
   useEffect(() => { setPreview(null); }, [o.state]);
   useEffect(() => { setPreview(null); setMsg(''); setRolls({}); }, [actorId, o.id]);
   useEffect(() => { if (!preview) committing.current = false; }, [preview]);
+  // 发起条件变了（换人、行动点被吃掉、人物走开、物件被禁用）就把旧预览清掉，
+  // 不能让主持人拿一份条件已经不成立的预览去落账。
+  useEffect(() => { if (preview && gate) { setPreview(null); setMsg(gate); } }, [preview, gate]);
 
   const rollKeyOf = (attrs: string[]) => attrs.map((attr) => (rolls[attr] ?? '').trim()).join('|');
   const snapshotOf = (): InteractionPreviewSnapshot => makeInteractionPreviewSnapshot({
@@ -146,6 +152,9 @@ function RunPanel({ world, mapId, o, defaultActorId }: { world: World; mapId: st
     setPreview(null);
     setMsg('');
     if (!spec || !actor) { setMsg('先选动作和角色'); return; }
+    if (!map) { setMsg('找不到地图'); return; }
+    const gateNow = physicalActionError({ world, map, object: o, actor, trial: getUI().trial });
+    if (gateNow) { setMsg(gateNow); return; }
     const attrs = actor.attributes as Record<Attr, number> | undefined;
     if (!attrs) { setMsg(`${actor.name} 还没填六维`); return; }
     const d20s: number[][] = spec.attributes.map((attr) => {
@@ -182,7 +191,8 @@ function RunPanel({ world, mapId, o, defaultActorId }: { world: World; mapId: st
     {checked.spec.attributes.map((attr) => <Row key={attr} label={attr}>
       <input value={rolls[attr] ?? ''} placeholder={advantage === 'normal' ? 'D20 点数' : 'D20 两颗，逗号隔开'} onChange={(e) => setRoll(attr, e.target.value)} />
     </Row>)}
-    <div className="btns"><button onClick={doPreview}>看结果</button></div>
+    {gate && <div className="hint">{gate}</div>}
+    <div className="btns"><button onClick={doPreview} disabled={!!gate}>看结果</button></div>
     {msg && <div className="hint">{msg}</div>}
     {preview && !freshPreview && <div className="hint">输入或物件已经变了，请重新看结果。</div>}
     {freshPreview && <>
@@ -190,12 +200,13 @@ function RunPanel({ world, mapId, o, defaultActorId }: { world: World; mapId: st
         <div className="card-title">{freshPreview.result.tier ? TIER_LABEL[freshPreview.result.tier] : '见证者裁决'} · {freshPreview.result.success ? '过' : '没过'}</div>
         {freshPreview.result.rolls.map((r) => <div key={r.attr} className="kv">{r.attr}：{r.rolls.length > 1 ? `${r.rolls.join('/')}→取${r.roll}` : r.roll}+{r.value} = {r.total} {r.pass ? '✓' : '✗'}</div>)}
         {freshPreview.plan
-          ? <div className="kv">{o.name}：{o.states[freshPreview.plan.from]} → {o.states[freshPreview.plan.to]}</div>
+          ? <><div className="kv">{o.name}：{o.states[freshPreview.plan.from]} → {o.states[freshPreview.plan.to]}</div>
+            {freshPreview.plan.from === freshPreview.plan.to && <div className="hint">这一档不改变状态；确认仍会落一条空 delta（战斗里占行动点）。</div>}</>
           : <div className="hint">这一档没有预置效果，不落账。</div>}
       </div>
       <div className="btns">
         <button className="small" onClick={() => { setPreview(null); setMsg(''); }}>取消预览</button>
-        {freshPreview.plan && <button onClick={() => {
+        {freshPreview.plan && !gate && <button onClick={() => {
           if (committing.current) return;
           if (!interactionPreviewValid(freshPreview.snapshot, snapshotOf())) {
             setMsg('输入或物件已经变了，请重新看结果');
