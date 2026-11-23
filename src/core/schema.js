@@ -77,6 +77,75 @@ export function checkNpc(n, where, partial = false, c = checker(partial ? '' : '
   }
 }
 
+/** 动作 × 物件的范围/前置条件：range 坏值清掉；条件坏掉就删整条映射，避免动作变无条件可用。 */
+function repairOverrideConditions(ov, states, label, actionId, fixed) {
+  const at = `${label}里动作 ${actionId}`;
+  if (ov.range !== undefined) {
+    if (!Number.isSafeInteger(ov.range) || ov.range < 0 || ov.range > MAX_SIDE) {
+      delete ov.range;
+      fixed.push(`${at} 的距离不是 0 到 ${MAX_SIDE} 的整数，已清空`);
+    }
+  }
+  if (ov.preconditions === undefined) return false;
+  if (!Array.isArray(ov.preconditions)) {
+    delete ov.preconditions;
+    fixed.push(`${at} 的前置条件不是列表，已清空`);
+    return true;
+  }
+  let droppedCondition = false;
+  const keep = [];
+  for (const p of ov.preconditions) {
+    if (!p || typeof p !== 'object' || Array.isArray(p)) {
+      fixed.push(`${at} 的前置条件里有坏条目，已删掉`);
+      droppedCondition = true;
+      continue;
+    }
+    if (p.kind === 'targetHasProp' || p.kind === 'actorHas') {
+      const key = p.kind === 'targetHasProp' ? 'prop' : 'tag';
+      if (typeof p[key] !== 'string' || !p[key].trim()) {
+        fixed.push(`${at} 的前置条件缺少${key === 'prop' ? '目标属性' : '发起者标签'}，已删掉`);
+        droppedCondition = true;
+        continue;
+      }
+      p[key] = p[key].trim();
+      keep.push(p);
+    } else if (p.kind === 'targetStateIn') {
+      if (!Array.isArray(p.states) || !p.states.length) {
+        fixed.push(`${at} 的前置条件状态列表是空的，已删掉`);
+        droppedCondition = true;
+        continue;
+      }
+      const valid = p.states.filter((v) => Number.isSafeInteger(v) && v >= 0 && v < states.length);
+      if (valid.length !== p.states.length) {
+        fixed.push(`${at} 的前置条件里有不存在的状态，已删掉`);
+        droppedCondition = true;
+        continue;
+      }
+      p.states = [...new Set(valid)].sort((a, b) => a - b);
+      keep.push(p);
+    } else if (p.kind === 'targetEnabled') {
+      keep.push(p);
+    } else if (p.kind === 'withinRange') {
+      if (!Number.isSafeInteger(p.cells) || p.cells < 0 || p.cells > MAX_SIDE) {
+        fixed.push(`${at} 的前置条件距离不是 0 到 ${MAX_SIDE} 的整数，已删掉`);
+        droppedCondition = true;
+        continue;
+      }
+      keep.push(p);
+    } else {
+      fixed.push(`${at} 的前置条件类型不认识，已删掉`);
+      droppedCondition = true;
+    }
+  }
+  if (droppedCondition) {
+    delete ov.preconditions;
+    return true;
+  }
+  if (keep.length) ov.preconditions = keep;
+  else delete ov.preconditions;
+  return false;
+}
+
 /** 旧档里的互动档案：结构坏了就整份删；能救的只删坏档位/重复动作，别把效果悄悄塞到第一个状态。 */
 function repairObjectInteraction(o, fixed) {
   const label = typeof o?.name === 'string' && o.name ? `「${o.name}」` : '物件';
@@ -129,6 +198,10 @@ function repairObjectInteraction(o, fixed) {
         delete ov.outcomes[key];
         fixed.push(`${label}里动作 ${actionId} 的档位 ${key} 指向不存在的状态，已清空`);
       }
+    }
+    if (repairOverrideConditions(ov, states, label, actionId, fixed)) {
+      fixed.push(`${label}里动作 ${actionId} 的前置条件坏了，已删掉整条动作映射`);
+      continue;
     }
     const prev = byAction.get(actionId);
     if (prev) {
@@ -545,6 +618,27 @@ export function checkWorld(w, migrated = false) {
           for (const key of Object.keys(outcomes)) if (!tiers.includes(key)) fail(`${va}.outcomes.${key}`, '不是有效档位');
           for (const t of tiers) {
             if (outcomes[t] !== undefined) int(outcomes[t], `${va}.outcomes.${t}`, 0, o.states.length - 1);
+          }
+          if (ov.range !== undefined) int(ov.range, `${va}.range`, 0, MAX_SIDE);
+          if (ov.preconditions !== undefined) {
+            arr(ov.preconditions, `${va}.preconditions`).forEach((p, j) => {
+              const pa = `${va}.preconditions[${j}]`;
+              obj(p, pa);
+              oneOf(p.kind, ['targetHasProp', 'targetStateIn', 'targetEnabled', 'withinRange', 'actorHas'], `${pa}.kind`);
+              if (p.kind === 'targetHasProp') {
+                str(p.prop, `${pa}.prop`);
+                if (!p.prop.trim()) fail(`${pa}.prop`, '不能为空');
+              } else if (p.kind === 'actorHas') {
+                str(p.tag, `${pa}.tag`);
+                if (!p.tag.trim()) fail(`${pa}.tag`, '不能为空');
+              } else if (p.kind === 'targetStateIn') {
+                arr(p.states, `${pa}.states`);
+                if (!p.states.length) fail(`${pa}.states`, '不能是空列表');
+                p.states.forEach((v, k) => int(v, `${pa}.states[${k}]`, 0, o.states.length - 1));
+              } else if (p.kind === 'withinRange') {
+                int(p.cells, `${pa}.cells`, 0, MAX_SIDE);
+              }
+            });
           }
         });
       }

@@ -124,7 +124,7 @@ function trialFixture(over = {}) {
   return { w, m };
 }
 
-function mount(world, objectId = 'clay', mapId = world.maps[0].id) {
+function mount(world, objectId = 'clay', mapId = world.maps[0].id, edit = false) {
   const o = world.maps[0].objects.find((x) => x.id === objectId);
   assert.ok(o, `找不到物件：${objectId}`);
   const container = document.createElement('div');
@@ -132,7 +132,7 @@ function mount(world, objectId = 'clay', mapId = world.maps[0].id) {
   const root = api.createRoot(container);
   mounted.push({ root, container });
   api.act(() => root.render(api.React.createElement(api.ObjectInteractionPanel, {
-    world, mapId, o, edit: false, defaultActorId: 'a',
+    world, mapId, o, edit, defaultActorId: 'a',
   })));
   return root;
 }
@@ -144,6 +144,12 @@ const click = (label) => {
 const setRoll = (value) => {
   const input = document.querySelector('input[placeholder="D20 点数"]');
   assert.ok(input, '找不到骰点输入框');
+  const setter = Object.getOwnPropertyDescriptor(dom.window.HTMLInputElement.prototype, 'value').set;
+  api.act(() => { setter.call(input, value); input.dispatchEvent(new dom.window.Event('input', { bubbles: true })); });
+};
+const setField = (placeholder, value) => {
+  const input = document.querySelector(`input[placeholder="${placeholder}"]`);
+  assert.ok(input, `找不到输入框：${placeholder}`);
   const setter = Object.getOwnPropertyDescriptor(dom.window.HTMLInputElement.prototype, 'value').set;
   api.act(() => { setter.call(input, value); input.dispatchEvent(new dom.window.Event('input', { bubbles: true })); });
 };
@@ -388,6 +394,45 @@ test('基座：预览后行动点被吃掉，旧预览清掉且确认按钮消�
   })));
   assert.match(document.body.textContent, /行动点已经用掉/);
   assert.ok(![...document.querySelectorAll('button')].some((x) => x.textContent?.trim() === '确认，落账'));
+});
+
+test('编辑器：距离、目标标签、发动者标签、目标状态写回映射', () => {
+  const { w } = fixture();
+  mount(w, 'clay', w.maps[0].id, true);
+  setField('留空＝1', '2');
+  let ov = api.getWorld().maps[0].objects[0].interaction.overrides[0];
+  assert.equal(ov.range, 2);
+
+  setField('物件标签，如 易燃物', '易燃物, 金属');
+  ov = api.getWorld().maps[0].objects[0].interaction.overrides[0];
+  assert.deepEqual(ov.preconditions, [
+    { kind: 'targetHasProp', prop: '易燃物' },
+    { kind: 'targetHasProp', prop: '金属' },
+  ]);
+
+  setField('角色途径标签，如 打火机', '打火机');
+  ov = api.getWorld().maps[0].objects[0].interaction.overrides[0];
+  assert.ok(ov.preconditions.some((p) => p.kind === 'actorHas' && p.tag === '打火机'));
+
+  const checks = [...document.querySelectorAll('input[type="checkbox"]')];
+  assert.equal(checks.length, 2, '两个物件状态应各有一个勾选框');
+  api.act(() => checks[1].click());
+  ov = api.getWorld().maps[0].objects[0].interaction.overrides[0];
+  const state = ov.preconditions.find((p) => p.kind === 'targetStateIn');
+  assert.deepEqual(state.states, [1]);
+});
+
+test('条件：目标标签不满足，面板拦并禁用看结果', () => {
+  const { w, m } = trialFixture();
+  api.update((d) => {
+    const o = d.maps[0].objects[0];
+    o.interaction.tags = [];
+    o.interaction.overrides[0].preconditions = [{ kind: 'targetHasProp', prop: '易燃物' }];
+  });
+  mount(api.getWorld(), 'clay', m.id);
+  assert.match(document.body.textContent, /目标不是「易燃物」/);
+  const preview = [...document.querySelectorAll('button')].find((x) => x.textContent?.trim() === '看结果');
+  assert.equal(preview.disabled, true);
 });
 
 } else {

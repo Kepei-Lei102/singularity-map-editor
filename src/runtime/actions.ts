@@ -478,6 +478,7 @@ const findFlow = (w: World | Draft<World>, id: string) => w.flows.find((f) => f.
 export function setObjectStates(mapId: string, objId: string, states: string[]) {
   let lost: string[] = [];
   let lostEffects: string[] = [];
+  let lostConditions: string[] = [];
   update((d) => {
     const o = findObj(d, mapId, objId);
     if (!o) return;
@@ -539,6 +540,7 @@ export function setObjectStates(mapId: string, objId: string, states: string[]) 
     }
     // 物件的互动档案也按同一套序号映射迁；被删掉的状态不硬塞到第一个状态，
     // 否则「大成功→碎」可能悄悄变成「大成功→完好」，语义完全变了。直接清空这一档。
+    const keptOverrides = [];
     for (const ov of o.interaction?.overrides ?? []) {
       for (const tier of TIERS) {
         const v = ov.outcomes[tier];
@@ -547,13 +549,35 @@ export function setObjectStates(mapId: string, objId: string, states: string[]) 
         if (j < 0) { delete ov.outcomes[tier]; lostEffects.push(`${ov.actionId}/${TIER_LABEL[tier]}`); }
         else ov.outcomes[tier] = j;
       }
+      // 前置条件里的目标状态也按序号迁。一个条件的所有目标状态都没了，
+      // 就把这条动作映射整个删掉；不能让「必须裂开」悄悄变成「无条件可用」。
+      if (ov.preconditions) {
+        const next = [];
+        let lostStateCondition = false;
+        for (const p of ov.preconditions) {
+          if (p.kind !== 'targetStateIn') { next.push(p); continue; }
+          const mapped = [...new Set(p.states.map(to))].filter((j) => j >= 0).sort((a, b) => a - b);
+          if (!mapped.length) { lostStateCondition = true; continue; }
+          next.push({ ...p, states: mapped });
+        }
+        if (lostStateCondition) {
+          lostConditions.push(`${ov.actionId}`);
+          continue;
+        }
+        if (next.length) ov.preconditions = next;
+        else delete ov.preconditions;
+      }
+      keptOverrides.push(ov);
     }
+    if (o.interaction) o.interaction.overrides = keptOverrides;
   }, { coalesce: 'states' + objId });
   const notes: string[] = [];
   lost = [...new Set(lost)];
   if (lost.length) notes.push(`这些事件引用的状态被删掉了，已改成第一个状态：${lost.join('、')}`);
   lostEffects = [...new Set(lostEffects)];
   if (lostEffects.length) notes.push(`这些互动档位引用的状态被删掉了，已清空：${lostEffects.join('、')}`);
+  lostConditions = [...new Set(lostConditions)];
+  if (lostConditions.length) notes.push(`这些互动动作的状态条件引用了被删掉的状态，已删掉动作映射：${lostConditions.join('、')}`);
   if (notes.length) toast(notes.join('；'));
 }
 /** 一个事件可能是从哪几条连线过来的：起点已经发生了的连线，条件满足的排前面，同样满足的按起点发生的时间从近到远。 */

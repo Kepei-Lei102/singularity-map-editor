@@ -7,7 +7,7 @@
 // 派生层不在这里：挡路/挡视线已经由 perception.blocksMovement() 从 state 现算，
 // 所以"门关了就走不过去"这句不需要任何代码——改完 state，通行自己变。
 
-import type { GameMap, Tier } from '../core/types';
+import type { GameMap, Precondition, Tier } from '../core/types';
 
 /**
  * 六维＋【幸运】。动作库里有动作的判定依据用到【幸运】（【教唆】【隐匿】），
@@ -677,12 +677,7 @@ export function applyAdHoc(map: GameMap, effects: AdHocEffect[]): void {
 // 动作库只有「动作释义」，没有前置条件栏。但【点火】原文就带前提（目标满足易燃物属性、
 // 默认拥有者带安全打火机），【撬锁】【开锁】也各有锁具前提。所以卡上单列，不让见证者现记。
 
-export type Precondition =
-  | { kind: 'targetHasProp'; prop: string }           // 易燃物、物理锁具、电子锁具 …
-  | { kind: 'targetStateIn'; states: number[] }       // 只在某些状态成立
-  | { kind: 'targetEnabled' }                         // 物件没有被禁用
-  | { kind: 'withinRange'; cells: number }            // 目标在几格内
-  | { kind: 'actorHas'; tag: string };                // 有打火机之类
+export type { Precondition } from '../core/types';
 
 export interface ActionRange {
   cells: number;
@@ -706,7 +701,7 @@ export interface PreconditionResult {
 }
 
 /** 纯校验：只报哪些前提没满足，不改世界、不掷骰。 */
-export function checkPreconditions(def: ActionDef, ctx: PreconditionContext): PreconditionResult {
+export function checkPreconditions(def: Pick<ActionDef, 'preconditions'>, ctx: PreconditionContext): PreconditionResult {
   const unmet: Precondition[] = [];
   for (const p of def.preconditions ?? []) {
     const has = (() => {

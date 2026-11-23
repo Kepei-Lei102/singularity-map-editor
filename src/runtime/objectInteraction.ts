@@ -30,7 +30,7 @@ export function commitObjectInteraction(input: CommitInteractionInput): string |
   const actor = w.party.find((p) => p.id === input.actorId);
   if (!actor) return '找不到发起角色';
   // 预览和落账走同一份条件；这里再算一次，挡住预览后人物移动/行动点被吃掉/物件被禁用。
-  const gate = physicalActionError({ world: w, map, object: o, actor, trial: getUI().trial });
+  const gate = physicalActionError({ world: w, map, object: o, actor, actionId: input.actionId, trial: getUI().trial });
   if (gate) return gate;
   const tier = input.result.tier;
   if (!tier) return '这次判定没有档位';

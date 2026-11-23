@@ -9,12 +9,13 @@
 // - 战斗里通用互动占 1 行动点
 // - 物件没被禁用；试玩里要看得见
 // - 默认贴身 1 格内（按物件占位矩形算，不是棋子中心到棋子中心）
-// 动作级前置条件、ME、技能来源仍未接。
-import type { GameMap, MapObject, PC, World } from '../core/types';
+// 动作 × 物件的范围/前置条件见 v0.3；ME、技能来源仍未接。
+import type { GameMap, MapObject, PC, Precondition, World } from '../core/types';
 import { objectEnabled } from '../core/objectData.js';
 import { architectureGeometry, architectureObjectBounds, isArchitectureObject, objectRect, tokenPosition } from '../scene/architecture';
 import { viewerOf, visiblePoint } from '../scene/sight';
 import { statusBlocksAction } from './combat';
+import { checkPreconditions, describeUnmet } from './interaction';
 
 /** 试玩里判断行动归属需要的那几项；不依赖 UIState 的其余字段。 */
 export interface PhysicalTrialView {
@@ -33,7 +34,9 @@ export interface PhysicalActionInput {
   actor: PC;
   /** 不在试玩里就传 null：没有棋子位置，只查物件启用状态。 */
   trial?: PhysicalTrialView | null;
-  /** 默认贴身 1 格；以后动作卡有范围再从这里传。 */
+  /** 动作 id：用来取这个动作在这件物件上的 range / preconditions。 */
+  actionId?: string;
+  /** 显式范围；不传就用 override 的 range，最后回落贴身 1 格。 */
   range?: number;
 }
 
@@ -62,8 +65,35 @@ export function physicalActionError(input: PhysicalActionInput): string | null {
   const { world, map, object, actor, trial } = input;
   if (!objectEnabled(map, object)) return '物件已经被禁用，不能互动';
 
-  // 不在试玩里：没有棋子，距离/视线/行动点都无从算；保留原来的备团/试排行为。
-  if (!trial) return null;
+  const override = input.actionId
+    ? object.interaction?.overrides.find((x) => x.actionId === input.actionId)
+    : undefined;
+  const range = Math.max(0, input.range ?? override?.range ?? PHYSICAL_REACH);
+  const preconditions = override?.preconditions ?? [];
+
+  // 目标的属性标签：作者在物件互动档案里写的标签，加上锁具类型。
+  const targetProps = [...(object.interaction?.tags ?? [])];
+  if (object.lock) targetProps.push(object.lock.kind === 'physical' ? '物理锁具' : '电子锁具');
+  const checkCtx = {
+    targetProps,
+    targetState: object.state,
+    targetEnabled: true,
+    distance: trial ? physicalActionDistance(map, object, map.tokens.find((t) => t.id === trial.players[trial.current]?.tokenId) ?? { x: 0, y: 0 }) : undefined,
+    actorTags: actor.tags ?? [],
+  };
+  const checkPre = (list: typeof preconditions) => checkPreconditions({ preconditions: list }, checkCtx);
+  const describeConditions = (unmet: Precondition[]) => unmet.map((p) =>
+    p.kind === 'targetStateIn'
+      ? `目标状态不是：${p.states.map((i) => object.states[i] ?? String(i)).join('、')}`
+      : describeUnmet([p]),
+  ).join('；');
+
+  // 不在试玩里：没有棋子位置，距离/视线/行动点不算；但目标标签/状态、发起者标签照查。
+  if (!trial) {
+    const pre = checkPre(preconditions.filter((p) => p.kind !== 'withinRange'));
+    if (!pre.ok) return describeConditions(pre.unmet);
+    return null;
+  }
 
   if (trial.mapId !== map.id) return '试玩不在当前地图';
   const current = trial.players[trial.current];
@@ -81,9 +111,13 @@ export function physicalActionError(input: PhysicalActionInput): string | null {
 
   if (object.hidden) return '看不见这个物件';
 
-  const range = input.range ?? PHYSICAL_REACH;
   const distance = physicalActionDistance(map, object, token);
-  if (distance > range) return `要贴身才能操作（${cellText(distance)} 格 > ${range} 格）`;
+  checkCtx.distance = distance;
+  if (distance > range) {
+    return range === PHYSICAL_REACH
+      ? `要贴身才能操作（${cellText(distance)} 格 > ${range} 格）`
+      : `目标不在 ${range} 格内（${cellText(distance)} 格 > ${range} 格）`;
+  }
 
   const b = objectBounds(map, object);
   // 门开门时排除目标自己的构件；物件也一样，别让物件自己挡自己的视线。
@@ -92,5 +126,10 @@ export function physicalActionError(input: PhysicalActionInput): string | null {
   const sightMap = { ...map, objects: map.objects.filter((x) => x.id !== object.id) };
   const eye = { ...viewerOf(token, { sex: actor.sex, heightCm: actor.heightCm }), facing: undefined };
   if (!visiblePoint(world, sightMap, eye, { x: b.x + b.w / 2, y: b.y + b.h / 2 }, geometry)) return '看不见这个物件';
+
+  if (preconditions.length) {
+    const pre = checkPre(preconditions);
+    if (!pre.ok) return describeConditions(pre.unmet);
+  }
   return null;
 }

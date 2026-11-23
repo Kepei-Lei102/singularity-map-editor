@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import type { ObjectInteraction, World } from '../core/types';
+import type { ObjectInteraction, ObjectInteractionOverride, Precondition, World } from '../core/types';
 import { TIER_LABEL, TIERS, type MapObject, type Tier } from '../core/types';
 import { getUI, toast, update } from '../core/store';
+import { MAX_SIDE } from '../core/schema.js';
 import { ACTION_LIBRARY, PANEL_ACTIONS, actionById, actionCheckSpec, type RawAction } from '../rules/actionLibrary';
 import { resolve, type Advantage, type Attr, type CheckResult, type CheckSpec } from '../rules/interaction';
 import { physicalActionError } from '../rules/physicalAction';
@@ -50,6 +51,17 @@ function ActionPick({ value, onChange, list }: { value: string; onChange: (id: s
   );
 }
 
+const splitTags = (v: string) => v.split(/[,，]/).map((s) => s.trim()).filter(Boolean);
+
+const preconditionProps = (ov: ObjectInteractionOverride) =>
+  (ov.preconditions ?? []).filter((p) => p.kind === 'targetHasProp').map((p) => p.prop);
+const preconditionActorTags = (ov: ObjectInteractionOverride) =>
+  (ov.preconditions ?? []).filter((p) => p.kind === 'actorHas').map((p) => p.tag);
+const preconditionStates = (ov: ObjectInteractionOverride) => {
+  const p = (ov.preconditions ?? []).find((x) => x.kind === 'targetStateIn');
+  return p?.kind === 'targetStateIn' ? p.states : [];
+};
+
 function Mapping({ mapId, o }: { mapId: string; o: MapObject }) {
   const oi = o.interaction;
   const mut = (fn: (x: ObjectInteraction) => void) => update((d) => {
@@ -65,12 +77,37 @@ function Mapping({ mapId, o }: { mapId: string; o: MapObject }) {
     if (!value) delete ov.outcomes[tier];
     else ov.outcomes[tier] = +value;
   });
+  const setRange = (index: number, text: string) => {
+    const trimmed = text.trim();
+    const n = Number(trimmed);
+    mut((x) => {
+      const ov = x.overrides[index];
+      if (!ov) return;
+      if (!trimmed) { delete ov.range; return; }
+      if (Number.isFinite(n)) ov.range = Math.max(0, Math.min(MAX_SIDE, Math.round(n)));
+    });
+  };
+  const setConditions = (index: number, kind: 'targetHasProp' | 'actorHas' | 'targetStateIn', next: Precondition[]) => mut((x) => {
+    const ov = x.overrides[index];
+    if (!ov) return;
+    const rest = (ov.preconditions ?? []).filter((p) => p.kind !== kind);
+    const list = [...rest, ...next];
+    if (list.length) ov.preconditions = list;
+    else delete ov.preconditions;
+  });
+  const toggleState = (index: number, state: number) => {
+    const ov = o.interaction?.overrides[index];
+    if (!ov) return;
+    const current = preconditionStates(ov);
+    const next = current.includes(state) ? current.filter((x) => x !== state) : [...current, state].sort((a, b) => a - b);
+    setConditions(index, 'targetStateIn', next.length ? [{ kind: 'targetStateIn', states: next }] : []);
+  };
   if (!oi) return <Section title="互动（模组）">
     <div className="hint">这个物件还没有互动档案。先建一份，再给「动作 × 本物件」配四档结果。</div>
     <div className="btns"><button onClick={() => mut(() => {})}>＋建互动档案</button></div>
   </Section>;
   return <Section title="互动（模组）">
-    <div className="hint">效果只在模组里，不进公共动作库。四档各选一个本物件状态；留空＝这一档没有预置效果。</div>
+    <div className="hint">效果只在模组里，不进公共动作库。四档各选一个本物件状态；留空＝这一档没有预置效果。动作条件不满足时，「看结果」会被拦住。</div>
     <Row label="材质"><Txt value={oi.material ?? ''} placeholder="作者备注，如 橡皮泥" onChange={(v) => mut((x) => { if (v.trim()) x.material = v.trim(); else delete x.material; })} /></Row>
     <Row label="标签"><Txt value={(oi.tags ?? []).join(', ')} placeholder="逗号分隔" onChange={(v) => mut((x) => { x.tags = v.split(/[,，]/).map((s) => s.trim()).filter(Boolean); })} /></Row>
     <div className="btns"><button className="small" onClick={() => mut((x) => { const used = new Set(x.overrides.map((o) => o.actionId)); const next = ACTION_LIBRARY.find((a) => !used.has(a.id)); if (next) x.overrides.push({ actionId: next.id, outcomes: {} }); })}>＋加一个动作</button></div>
@@ -81,6 +118,15 @@ function Mapping({ mapId, o }: { mapId: string; o: MapObject }) {
         mut((x) => { x.overrides[i].actionId = id; });
       }} /></div>
       <div className="btns"><button className="danger small" onClick={() => mut((x) => { x.overrides.splice(i, 1); })}>删掉这个动作</button></div>
+      <div className="hint">动作条件：距离留空＝贴身 1 格；目标状态/标签、发动者标签留空＝不限制。</div>
+      <Row label="距离（格）"><Txt value={ov.range === undefined ? '' : String(ov.range)} placeholder="留空＝1" onChange={(v) => setRange(i, v)} /></Row>
+      <Row label="目标状态">
+        <div className="chips">
+          {o.states.map((s, k) => <label key={k} className="check"><input type="checkbox" checked={preconditionStates(ov).includes(k)} onChange={() => toggleState(i, k)} /> {k} {s}</label>)}
+        </div>
+      </Row>
+      <Row label="目标标签"><Txt value={preconditionProps(ov).join(', ')} placeholder="物件标签，如 易燃物" onChange={(v) => setConditions(i, 'targetHasProp', splitTags(v).map((prop) => ({ kind: 'targetHasProp', prop })))} /></Row>
+      <Row label="发动者标签"><Txt value={preconditionActorTags(ov).join(', ')} placeholder="角色途径标签，如 打火机" onChange={(v) => setConditions(i, 'actorHas', splitTags(v).map((tag) => ({ kind: 'actorHas', tag })))} /></Row>
       {TIERS.map((tier) => <Row key={tier} label={TIER_LABEL[tier]}>
         <select value={ov.outcomes[tier] ?? ''} onChange={(e) => setOutcome(i, tier, e.target.value)}>
           <option value="">无效果</option>
@@ -110,7 +156,7 @@ function RunPanel({ world, mapId, o, defaultActorId }: { world: World; mapId: st
   const checked = action ? actionCheckSpec(action) : { error: '找不到动作' };
   const spec = 'spec' in checked ? checked.spec : null;
   const map = world.maps.find((m) => m.id === mapId);
-  const gate = map && actor ? physicalActionError({ world, map, object: o, actor, trial: getUI().trial }) : null;
+  const gate = map && actor ? physicalActionError({ world, map, object: o, actor, actionId, trial: getUI().trial }) : null;
 
   useEffect(() => {
     if (!defaultActorId) appliedDefault.current = null;
@@ -153,7 +199,7 @@ function RunPanel({ world, mapId, o, defaultActorId }: { world: World; mapId: st
     setMsg('');
     if (!spec || !actor) { setMsg('先选动作和角色'); return; }
     if (!map) { setMsg('找不到地图'); return; }
-    const gateNow = physicalActionError({ world, map, object: o, actor, trial: getUI().trial });
+    const gateNow = physicalActionError({ world, map, object: o, actor, actionId, trial: getUI().trial });
     if (gateNow) { setMsg(gateNow); return; }
     const attrs = actor.attributes as Record<Attr, number> | undefined;
     if (!attrs) { setMsg(`${actor.name} 还没填六维`); return; }

@@ -93,12 +93,24 @@ export interface MediaAttach {
   fired?: boolean;
 }
 
+/** 动作前置条件。动作库没有条件列，所以条件也存在「动作 × 本物件」的映射上。 */
+export type Precondition =
+  | { kind: 'targetHasProp'; prop: string }           // 易燃物、物理锁具、电子锁具 …
+  | { kind: 'targetStateIn'; states: number[] }       // 只在某些状态成立
+  | { kind: 'targetEnabled' }                         // 物件没有被禁用
+  | { kind: 'withinRange'; cells: number }            // 目标在几格内
+  | { kind: 'actorHas'; tag: string };                // 有打火机之类
+
 /** 物件自己的互动档案：只在模组里，不进公共动作库。 */
 export interface ObjectInteractionOverride {
   /** 指向 src/rules/actions.json 的动作 id。 */
   actionId: string;
   /** 四档各改到哪个 state；没写的档＝这一档没有预置效果。 */
   outcomes: Partial<Record<Tier, number>>;
+  /** 这个动作在这件物件上的格数范围；不填按公共贴身 1 格。 */
+  range?: number;
+  /** 这个动作在这件物件上的前置条件；不填就只看公共条件。 */
+  preconditions?: Precondition[];
 }
 
 export interface ObjectInteraction {

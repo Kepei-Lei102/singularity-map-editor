@@ -143,6 +143,20 @@ test('改状态列表时，互动四档跟着序号迁移；被删的档清空�
   assert.equal(o.interaction.overrides[0].outcomes.success, undefined);
 });
 
+test('改状态列表时，互动条件里的目标状态也迁移；条件全丢就删动作映射', () => {
+  const { m } = fixture();
+  api.update((d) => {
+    d.maps[0].objects[0].interaction.overrides[0].preconditions = [{ kind: 'targetStateIn', states: [2] }];
+  });
+  api.setObjectStates(m.id, 'clay', ['完好', '碎']);
+  let o = api.getWorld().maps[0].objects[0];
+  assert.deepEqual(o.interaction.overrides[0].preconditions, [{ kind: 'targetStateIn', states: [1] }]);
+
+  api.setObjectStates(m.id, 'clay', ['完好']);
+  o = api.getWorld().maps[0].objects[0];
+  assert.equal(o.interaction.overrides.length, 0, '条件状态全没了，不能把动作变成无条件可用');
+});
+
 test('成功但目标状态没变：不造 delta，也不白涨 stateRev', () => {
   const { m } = fixture();
   api.update((d) => { d.maps[0].objects[0].interaction.overrides[0].outcomes.success = 0; });
@@ -381,6 +395,55 @@ test('旧档互动档案：材质/标签边界与空 states', () => {
   api.repairWorld(w3);
   assert.equal(o3.interaction, undefined);
   assert.throws(() => api.checkWorld(w3), /states/);
+});
+
+test('动作条件/范围：好值保留，坏值 repair 清掉；坏条件删整条映射；checkWorld 拒绝坏值', () => {
+  fixture();
+  const w1 = JSON.parse(JSON.stringify(api.getWorld()));
+  const ov = w1.maps[0].objects[0].interaction.overrides[0];
+  ov.range = 2;
+  ov.preconditions = [
+    { kind: 'targetHasProp', prop: ' 易燃物 ' },
+    { kind: 'actorHas', tag: '打火机' },
+    { kind: 'targetStateIn', states: [2, 1, 2] },
+    { kind: 'targetEnabled' },
+    { kind: 'withinRange', cells: 2 },
+  ];
+  const fixed = api.repairWorld(w1);
+  assert.equal(ov.range, 2);
+  assert.equal(ov.preconditions.length, 5);
+  assert.equal(ov.preconditions[0].prop, '易燃物');
+  assert.deepEqual(ov.preconditions[2].states, [1, 2]);
+  assert.doesNotThrow(() => api.checkWorld(w1));
+
+  const w2 = JSON.parse(JSON.stringify(api.getWorld()));
+  const ov2 = w2.maps[0].objects[0].interaction.overrides[0];
+  ov2.range = -1;
+  ov2.preconditions = [
+    { kind: 'noSuchKind' },
+    { kind: 'targetHasProp', prop: '  ' },
+    { kind: 'targetStateIn', states: [99] },
+    { kind: 'withinRange', cells: 2.5 },
+  ];
+  api.repairWorld(w2);
+  assert.equal(ov2.range, undefined);
+  assert.equal(ov2.preconditions, undefined);
+  assert.equal(w2.maps[0].objects[0].interaction, undefined, '坏条件不能留下无条件的动作');
+  assert.doesNotThrow(() => api.checkWorld(w2));
+
+  const w4 = JSON.parse(JSON.stringify(api.getWorld()));
+  const ov4 = w4.maps[0].objects[0].interaction.overrides[0];
+  ov4.preconditions = [{ kind: 'targetStateIn', states: [99] }];
+  const fixed4 = api.repairWorld(w4);
+  assert.equal(w4.maps[0].objects[0].interaction, undefined);
+  assert.ok(fixed4.some((x) => x.includes('整条动作映射')));
+  assert.doesNotThrow(() => api.checkWorld(w4));
+
+  const w3 = JSON.parse(JSON.stringify(api.getWorld()));
+  const ov3 = w3.maps[0].objects[0].interaction.overrides[0];
+  ov3.range = 1.5;
+  ov3.preconditions = [{ kind: 'targetStateIn', states: [99] }];
+  assert.throws(() => api.checkWorld(w3), /range/);
 });
 
 test('快照工厂：把角色属性、物件映射、状态名都序列化进快照', () => {

@@ -78,7 +78,7 @@ const successResult = () => api.resolve({
   d20s: [[15], [10]],
 });
 
-test('不在试玩里：只查物件启用，不查距离/视线/行动点', () => {
+test('不在试玩里且不传动作 id：只查物件启用，不查距离/视线/行动点', () => {
   const { w, m } = fixture();
   assert.equal(gate(w, m, null), null);
   api.update((d) => { d.maps[0].objects[0].enabled = false; });
@@ -179,6 +179,101 @@ test('1/3 格吸附家具：距离按真实占位矩形算', () => {
   const now = api.getWorld().maps[0];
   assert.ok(api.physicalActionDistance(now, now.objects[0], now.tokens[0]) < 1);
   assert.equal(gate(w, now, TRIAL(now)), null);
+});
+
+test('动作覆盖：range 放宽到 2 格，超出报具体格数', () => {
+  const { w, m } = fixture();
+  api.update((d) => {
+    const dm = d.maps[0];
+    dm.objects[0].interaction.overrides[0].range = 2;
+    dm.tokens[0].x = 4;
+  });
+  let ww = api.getWorld();
+  let now = ww.maps[0];
+  assert.match(gate(ww, now, TRIAL(now)), /要贴身/, '不带动作 id 时仍按默认 1 格');
+  assert.equal(gate(ww, now, TRIAL(now), { actionId: '5' }), null);
+  api.update((d) => { d.maps[0].tokens[0].x = 6; });
+  ww = api.getWorld(); now = ww.maps[0];
+  assert.match(gate(ww, now, TRIAL(now), { actionId: '5' }), /目标不在 2 格内/);
+});
+
+test('动作前置条件：目标标签、发动者标签、目标状态', () => {
+  const { w, m } = fixture();
+  api.update((d) => {
+    const o = d.maps[0].objects[0];
+    o.interaction.tags = ['易燃物'];
+    o.interaction.overrides[0].preconditions = [
+      { kind: 'targetHasProp', prop: '易燃物' },
+      { kind: 'actorHas', tag: '打火机' },
+      { kind: 'targetStateIn', states: [1] },
+    ];
+  });
+  let ww = api.getWorld(); let now = ww.maps[0];
+  assert.match(gate(ww, now, TRIAL(now), { actionId: '5' }), /打火机/);
+  assert.match(gate(ww, now, TRIAL(now), { actionId: '5' }), /目标状态不是：裂/);
+  api.update((d) => {
+    d.party[0].tags = ['打火机'];
+    d.maps[0].objects[0].state = 1;
+  });
+  ww = api.getWorld(); now = ww.maps[0];
+  assert.equal(gate(ww, now, TRIAL(now), { actionId: '5' }), null);
+  api.update((d) => { d.maps[0].objects[0].interaction.tags = []; });
+  ww = api.getWorld(); now = ww.maps[0];
+  assert.match(gate(ww, now, TRIAL(now), { actionId: '5' }), /易燃物/);
+});
+
+test('withinRange 条件：范围放 2 格，但条件只允许 1 格', () => {
+  const { w, m } = fixture();
+  api.update((d) => {
+    const dm = d.maps[0];
+    dm.objects[0].interaction.overrides[0].range = 2;
+    dm.objects[0].interaction.overrides[0].preconditions = [{ kind: 'withinRange', cells: 1 }];
+    dm.tokens[0].x = 4;
+  });
+  const ww = api.getWorld(); const now = ww.maps[0];
+  assert.match(gate(ww, now, TRIAL(now), { actionId: '5' }), /1 格内/);
+});
+
+test('锁具类型自动作为目标属性', () => {
+  const { w, m } = fixture();
+  api.update((d) => {
+    const o = d.maps[0].objects[0];
+    o.lock = { kind: 'physical', locked: true, keyable: true };
+    o.interaction.overrides[0].preconditions = [{ kind: 'targetHasProp', prop: '物理锁具' }];
+  });
+  const ww = api.getWorld(); const now = ww.maps[0];
+  assert.equal(gate(ww, now, TRIAL(now), { actionId: '5' }), null);
+});
+
+test('备团（无试玩）也查目标/发起者条件，不查距离/视线', () => {
+  const { w, m } = fixture();
+  api.update((d) => {
+    const o = d.maps[0].objects[0];
+    o.interaction.tags = ['易燃物'];
+    o.interaction.overrides[0].preconditions = [
+      { kind: 'targetHasProp', prop: '易燃物' },
+      { kind: 'withinRange', cells: 1 },
+    ];
+  });
+  const ww = api.getWorld(); const now = ww.maps[0];
+  assert.equal(gate(ww, now, null, { actionId: '5' }), null, '备团不查距离');
+  api.update((d) => { d.maps[0].objects[0].interaction.tags = []; });
+  const ww2 = api.getWorld();
+  assert.match(gate(ww2, ww2.maps[0], null, { actionId: '5' }), /易燃物/);
+});
+
+test('确认落账复核动作前置条件：缺目标标签不落账', () => {
+  const { w, m } = fixture();
+  api.update((d) => {
+    d.maps[0].objects[0].interaction.overrides[0].preconditions = [{ kind: 'targetHasProp', prop: '易燃物' }];
+  });
+  const err = api.commitObjectInteraction({
+    mapId: m.id, objectId: 'clay', actorId: 'a', actionId: '5', actionName: '教授',
+    result: successResult(), merge: 'any', scale: 'd20',
+  });
+  assert.match(err, /易燃物/);
+  assert.equal(api.getWorld().maps[0].objects[0].state, 0);
+  assert.equal((api.getWorld().events ?? []).length, 0);
 });
 
 test('确认落账：战斗里成功一次把行动点用掉，非战斗不扣', () => {
