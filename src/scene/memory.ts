@@ -7,8 +7,9 @@ import { current, isDraft, type Draft } from 'immer';
 import { buildFineCells, groupBounds, objectFootprintCells } from '../core/grid';
 import type { CellGroup, GameMap, Id, MapObject, SeenObject, TextureSpec, VisionLayer, World } from '../core/types';
 import { linesToFlow } from '../rules/flow';
-import { normalizeNpcHp } from '../rules/combat';
+import { normalizeNpcHp, type NpcHpMigrationWarning } from '../rules/combat';
 import { DEFAULT_MATERIALS } from '../core/defaults';
+import { uid } from '../core/util';
 import { cloneLayer, emptyVision, mergeLayers, pruneMemory, spatialFog, visionKey } from './vision';
 import type { VisionPlan } from './visionPlan';
 
@@ -354,7 +355,24 @@ export function migrateWorld(w: World): World {
   for (const p of w.party) if (p.visionGroupId && !groupIds.has(p.visionGroupId)) p.visionGroupId = null;
   for (const m of w.maps) for (const id of Object.keys(m.views)) if (!w.party.some(p => p.id === id)) delete m.views[id];
   w.marks ??= [];
-  normalizeNpcHp(w);
+  w.session ??= 1;
+  const logWasMissing = w.log === undefined;
+  const logWasBroken = !logWasMissing && !Array.isArray(w.log);
+  if (logWasMissing || logWasBroken) w.log = [];
+  const hpWarnings: NpcHpMigrationWarning[] = [];
+  normalizeNpcHp(w, hpWarnings);
+  if (logWasBroken) {
+    w.log.push({ id: uid(), at: Date.now(), session: w.session, kind: 'note', text: '旧档事件日志损坏，已重建。' });
+  }
+  if (hpWarnings.length) {
+    const names = hpWarnings.slice(0, 5).map((x) => x.reason === 'no-max'
+      ? `${x.name}（hp ${x.hpBefore}，按默认上限 10）`
+      : `${x.name}（hp ${x.hpBefore} 超过上限 ${x.hpMaxBefore}）`).join('、');
+    w.log.push({
+      id: uid(), at: Date.now(), session: w.session, kind: 'note',
+      text: `旧档 NPC 血条：${names}${hpWarnings.length > 5 ? ' 等' : ''}已按当前上限写回；没填有效 hpMax 的按默认 10，要保留原值请补/改 hpMax。`,
+    });
+  }
   w.npcs ??= [];
   for (const n of w.npcs) { n.progress ??= { status: 'waiting', beatsDone: [] }; n.progress.beatsDone ??= []; }
   // Imported revisions are world-local; keep the next actual observation newer than

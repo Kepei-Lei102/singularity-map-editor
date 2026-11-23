@@ -166,13 +166,31 @@ test('canTarget 直接入口也拦 PC 濒死（HP>0）', () => {
   assert.equal(check.reason, '目标已经濒死');
 });
 
-test('PC 昏厥但 HP>0 也不能打', () => {
+test('PC 昏厥但 HP>0 也不能打（down 字段和 status 标签都拦）', () => {
   fight({ targetToken: { down: true }, targetHp: 4 });
-  const target = api.trialAttackTargets().find((x) => x.tokenId === 'tb');
+  let target = api.trialAttackTargets().find((x) => x.tokenId === 'tb');
   assert.equal(target.canHit, false);
-  const err = api.trialAttack('tb', { roll: 50, roller: () => 3 });
+  let err = api.trialAttack('tb', { roll: 50, roller: () => 3 });
   assert.match(err ?? '', /昏厥/);
   assert.equal((api.getWorld().events ?? []).length, 0);
+
+  fight({ targetToken: { status: { label: '昏厥', skipTurns: 1 } }, targetHp: 4 });
+  target = api.trialAttackTargets().find((x) => x.tokenId === 'tb');
+  assert.equal(target.canHit, false);
+  err = api.trialAttack('tb', { roll: 50, roller: () => 3 });
+  assert.match(err ?? '', /昏厥/);
+  assert.equal((api.getWorld().events ?? []).length, 0);
+});
+
+test('倒地 NPC hp4 仍在目标列表里，且 canHit true', () => {
+  const { m } = fight({ targetToken: { down: true }, targetHp: 4 });
+  api.update((d) => {
+    const t = api.findMap(d, m.id).tokens.find((x) => x.id === 'tb');
+    delete t.pcId; t.hp = 4; t.hpMax = 10;
+  });
+  const target = api.trialAttackTargets().find((x) => x.tokenId === 'tb');
+  assert.equal(target.canHit, true, 'NPC down 仍可被攻击');
+  assert.equal(target.hp, 4);
 });
 
 test('带非濒死状态被打到 0：status.from 是原来的状态名，不是 null', () => {

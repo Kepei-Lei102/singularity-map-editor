@@ -53,6 +53,58 @@ test('NPC 血条：没填默认 10，hp 硬夹在 [0, hpMax]', () => {
   assert.deepEqual(api.npcHpPool({ hp: 5, hpMax: 10, down: true }), { hp: 5, max: 10 }, '明确填了 hp 就尊重它');
 });
 
+test('normalizeNpcHp 防御 malformed 旧档', () => {
+  assert.doesNotThrow(() => api.normalizeNpcHp(null));
+  assert.doesNotThrow(() => api.normalizeNpcHp({ maps: null }));
+  assert.doesNotThrow(() => api.normalizeNpcHp({ maps: [null, { tokens: null }, { tokens: [null, {}] }] }));
+});
+
+test('migrateWorld 防御非数组 log', () => {
+  const w = api.emptyWorld();
+  w.log = null;
+  assert.doesNotThrow(() => api.migrateWorld(w));
+  assert.ok(Array.isArray(w.log));
+  assert.match(w.log.at(-1).text, /事件日志损坏/);
+});
+
+test('migrateWorld 对缺失 log 不误报损坏', () => {
+  const w = api.emptyWorld();
+  delete w.log;
+  assert.doesNotThrow(() => api.migrateWorld(w));
+  assert.ok(Array.isArray(w.log));
+  assert.equal(w.log.length, 0, '只是缺字段，不该提示损坏');
+});
+
+test('迁移 warning 不误报 round 后没缩水的上限', () => {
+  const w = api.emptyWorld();
+  const m = api.newMap('小数上限', '现实', 1, 10, 10, 'floor', false);
+  m.tokens = [
+    { id: 'n5', pcId: null, name: '小数上限', color: '#888', x: 2, y: 2, hp: 1, hpMax: 0.4 },
+    { id: 'n8', pcId: null, name: '半整数上限', color: '#888', x: 3, y: 2, hp: 11, hpMax: 10.5 },
+  ];
+  w.maps = [m];
+  const mw = api.migrateWorld(w);
+  const byId = new Map(mw.maps[0].tokens.map((t) => [t.id, t]));
+  assert.equal(byId.get('n5').hp, 1);
+  assert.equal(byId.get('n5').hpMax, 1);
+  assert.equal(byId.get('n8').hp, 11);
+  assert.equal(byId.get('n8').hpMax, 11);
+  assert.equal(mw.log.some((x) => x.text.includes('旧档 NPC 血条')), false, 'round 后没缩水就不提示');
+});
+
+test('raw 缺省 NPC：attackTargets 直接按默认 10，不依赖 store 归一', () => {
+  const w = api.emptyWorld();
+  const m = api.newMap('raw', '现实', 1, 10, 10, 'floor', false);
+  m.objects = [];
+  const attacker = { id: 'ta', pcId: 'a', name: '打手', color: '#fff', x: 2, y: 2 };
+  const npc = { id: 'npc', pcId: null, name: '路人', color: '#888', x: 2, y: 3 };
+  m.tokens = [attacker, npc];
+  w.maps = [m];
+  const target = api.attackTargets(w, m, attacker, () => true).find((x) => x.tokenId === 'npc');
+  assert.equal(target.hp, 10, 'raw 棋子没填 hp/hpMax 也应显示 10');
+  assert.equal(target.canHit, true);
+});
+
 test('update 立刻把会话里的 NPC 血条归一', () => {
   const w = api.emptyWorld();
   const m = api.newMap('归一', '现实', 1, 10, 10, 'floor', false);
@@ -66,6 +118,35 @@ test('update 立刻把会话里的 NPC 血条归一', () => {
   const t = api.getWorld().maps[0].tokens.find((x) => x.id === 'npc');
   assert.equal(t.hpMax, 10);
   assert.equal(t.hp, 5);
+});
+
+test('update 归一幂等；PC token 的 raw hp/hpMax 会被清掉', () => {
+  const w = api.emptyWorld();
+  const m = api.newMap('幂等', '现实', 1, 10, 10, 'floor', false);
+  w.party = [{ id: 'a', name: '甲', color: '#fff', tags: [], attributes: { 力量: 30, 敏捷: 30, 意志: 30, 观察: 30, 智慧: 30, 魅力: 30 } }];
+  m.tokens = [
+    { id: 'npc', pcId: null, name: '路人', color: '#888', x: 2, y: 2 },
+    { id: 'pc', pcId: 'a', name: '甲', color: '#fff', x: 3, y: 2, hp: 3, hpMax: 0 },
+  ];
+  w.maps = [m];
+  api.replaceWorld(w);
+  api.update((d) => {
+    const npc = d.maps[0].tokens.find((x) => x.id === 'npc');
+    npc.hp = 5; npc.hpMax = 0;
+    const pc = d.maps[0].tokens.find((x) => x.id === 'pc');
+    pc.hp = 3; pc.hpMax = 0;
+  });
+  const after = api.getWorld().maps[0].tokens;
+  assert.equal(after.find((x) => x.id === 'npc').hp, 5);
+  assert.equal(after.find((x) => x.id === 'npc').hpMax, 10);
+  assert.equal(after.find((x) => x.id === 'pc').hp, undefined);
+  assert.equal(after.find((x) => x.id === 'pc').hpMax, undefined);
+  const before = JSON.stringify(after);
+  api.update((d) => { d.maps[0].tokens.find((x) => x.id === 'npc').name = '改名'; });
+  const second = api.getWorld().maps[0].tokens;
+  assert.equal(second.find((x) => x.id === 'npc').hp, 5);
+  assert.equal(second.find((x) => x.id === 'npc').hpMax, 10);
+  assert.notEqual(JSON.stringify(second), before, '名字确实改了');
 });
 
 test('NPC 上限输入：空/0回默认，正小数按四舍五入，至少 1', () => {
@@ -84,9 +165,10 @@ test('NPC 上限输入：空/0回默认，正小数按四舍五入，至少 1', 
   assert.equal(api.clampHpToMax(10, 10), 10);
 });
 
-test('读档迁移：NPC 血条写回成确定值', () => {
+test('读档迁移：NPC 血条写回成确定值，PC token 的 raw HP 清掉', () => {
   const w = api.emptyWorld();
   const m = api.newMap('旧档', '现实', 1, 10, 10, 'floor', false);
+  w.party = [{ id: 'a', name: '甲', color: '#fff', tags: [], attributes: { 力量: 30, 敏捷: 30, 意志: 30, 观察: 30, 智慧: 30, 魅力: 30 } }];
   m.tokens = [
     { id: 'n1', pcId: null, name: '零上限', color: '#888', x: 2, y: 2, hp: 5, hpMax: 0 },
     { id: 'n2', pcId: null, name: '只有HP', color: '#888', x: 3, y: 2, hp: 80 },
@@ -94,9 +176,13 @@ test('读档迁移：NPC 血条写回成确定值', () => {
     { id: 'n4', pcId: null, name: '濒死没填', color: '#888', x: 5, y: 2, status: { label: '濒死', roundsLeft: 3 } },
     { id: 'n5', pcId: null, name: '小数上限', color: '#888', x: 6, y: 2, hp: 1, hpMax: 0.4 },
     { id: 'n6', pcId: null, name: '正常上限', color: '#888', x: 7, y: 2, hp: 15, hpMax: 20 },
+    { id: 'n7', pcId: null, name: '超上限', color: '#888', x: 9, y: 2, hp: 15, hpMax: 10 },
+    { id: 'p1', pcId: 'a', name: '甲', color: '#fff', x: 8, y: 2, hp: 3, hpMax: 0 },
   ];
   w.maps = [m];
-  const migrated = api.migrateWorld(w).maps[0].tokens;
+  const mw = api.migrateWorld(w);
+  assert.doesNotThrow(() => api.checkWorld(mw, true), '迁移日志要能过严格 schema');
+  const migrated = mw.maps[0].tokens;
   const byId = new Map(migrated.map((t) => [t.id, t]));
   assert.equal(byId.get('n1').hpMax, 10);
   assert.equal(byId.get('n1').hp, 5);
@@ -110,6 +196,16 @@ test('读档迁移：NPC 血条写回成确定值', () => {
   assert.equal(byId.get('n5').hp, 1);
   assert.equal(byId.get('n6').hpMax, 20);
   assert.equal(byId.get('n6').hp, 15);
+  assert.equal(byId.get('n7').hpMax, 10);
+  assert.equal(byId.get('n7').hp, 10);
+  assert.equal(byId.get('p1').hp, undefined, 'PC 的血走角色卡，token 上的 hp 清掉');
+  assert.equal(byId.get('p1').hpMax, undefined);
+  assert.match(mw.log.at(-1).text, /旧档 NPC 血条/);
+  assert.match(mw.log.at(-1).text, /只有HP.*hp 80/);
+  assert.match(mw.log.at(-1).text, /超上限.*超过上限 10/);
+  const logLen = mw.log.length;
+  api.migrateWorld(mw);
+  assert.equal(mw.log.length, logLen, '第二次迁移不再重复提示');
 });
 
 test('攻击：95–99 大成功，1D8 变 2D8', () => {
@@ -554,6 +650,16 @@ test('借机攻击不打 PC 0 HP / 濒死目标', () => {
   assert.match(api.getUI().trial.msg, /昏厥/);
   assert.equal((api.getWorld().events ?? []).length, beforeDown, 'PC 昏厥也不结算借机攻击');
 
+  // 只有 status:'昏厥' 标签、没有 down 字段，也要拦
+  opportunityFight({ hp: 4, hpMax: 4 });
+  api.update((d) => {
+    d.maps[0].tokens.find((k) => k.id === 'ta').status = { label: '昏厥', skipTurns: 1 };
+  });
+  const beforeLabel = (api.getWorld().events ?? []).length;
+  assert.equal(api.trialOpportunityAttack({ roll: 50, roller: () => 4 }), null);
+  assert.match(api.getUI().trial.msg, /昏厥/);
+  assert.equal((api.getWorld().events ?? []).length, beforeLabel, 'PC status 昏厥也不结算');
+
   // down + 濒死同时存在：和普通攻击/canTarget 一样报濒死
   opportunityFight({ hp: 4, hpMax: 4 });
   api.update((d) => {
@@ -672,6 +778,29 @@ test('NPC 救治不超过 HP 上限', () => {
   assert.equal(npc.hpMax, 10);
   assert.equal(npc.down, undefined);
   assert.equal(npc.status, undefined);
+});
+
+test('救治 hp 高于 1 的 NPC：保留原 HP，不写 HP delta', () => {
+  const w = api.emptyWorld();
+  const m = api.newMap('救治保持', '现实', 1, 10, 10, 'floor', false);
+  m.objects = []; m.fog = m.fog.map(() => 1);
+  const attrs = { 力量: 30, 敏捷: 30, 意志: 30, 观察: 30, 智慧: 30, 魅力: 30 };
+  w.party = [{ id: 'a', name: '医生', color: '#fff', tags: [], attributes: attrs, skills: ['011-9-102'] }];
+  m.tokens = [
+    { id: 'ta', pcId: 'a', name: '医生', color: '#fff', x: 2, y: 2 },
+    { id: 'npc', pcId: null, name: '伤员', color: '#f00', x: 2, y: 3, hp: 6, hpMax: 10, down: true },
+  ];
+  w.maps = [m]; api.replaceWorld(w); api.startTrial();
+  api.setUI({ trial: { mapId: m.id, players: [{ tokenId: 'ta', pcId: 'a', name: '医生' }], current: 0, combat: true, moved: {}, turn: 1, msg: '', markSymbol: '!', markText: '', markMode: false } });
+  assert.equal(api.trialRescue('npc', { roll: 60 }), null);
+  const npc = api.getWorld().maps[0].tokens.find((k) => k.id === 'npc');
+  assert.equal(npc.hp, 6, '原本 6 HP 不被拉回 1');
+  assert.equal(npc.hpMax, 10);
+  assert.equal(npc.down, undefined);
+  assert.equal(npc.status, undefined);
+  const ev = api.getWorld().events.at(-1);
+  assert.equal(ev.deltas.some((d) => d.kind === 'hp'), false, 'HP 没变就不写 HP delta');
+  assert.ok(ev.deltas.some((d) => d.kind === 'status' && d.to === null));
 });
 
 test('没解锁急救技能的人不能救治', () => {
@@ -895,7 +1024,7 @@ test('非战斗状态：濒死挂「急救机器人正在赶来」，到点自�
   ];
   m.tokens = [
     { id: 'ta', pcId: 'a', name: '队友', color: '#fff', x: 2, y: 2 },
-    { id: 'tb', pcId: 'b', name: '伤员', color: '#f00', x: 3, y: 2, status: api.robotIncoming(now) },
+    { id: 'tb', pcId: 'b', name: '伤员', color: '#f00', x: 3, y: 2, down: true, status: api.robotIncoming(now) },
   ];
   m.fog = m.fog.map(() => 1);
   w.maps = [m];
@@ -910,10 +1039,12 @@ test('非战斗状态：濒死挂「急救机器人正在赶来」，到点自�
   api.tickRobots(now + api.ROBOT_ETA_MS);
   const tb = api.findMap(api.getWorld(), m.id).tokens.find((t) => t.id === 'tb');
   assert.equal(tb.status, undefined, '到点清掉状态');
+  assert.equal(tb.down, undefined, '机器人到场也解除 PC 昏厥');
   assert.equal(api.getWorld().party.find((p) => p.id === 'b').hp, api.RESCUED_HP, '机器人把人拉起来，1 HP');
+  assert.match(api.getWorld().log.at(-1).text, /1 HP/);
 });
 
-test('急救机器人拉起 NPC：没填上限按 10，只给 1 HP', () => {
+test('急救机器人拉起 NPC：到 1 HP，解除昏厥', () => {
   const now = 1_000_000;
   const w = api.emptyWorld();
   const m = api.newMap('机器人 NPC', '现实', 1, 10, 10, 'floor', false);

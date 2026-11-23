@@ -166,13 +166,45 @@ export function npcHpPool(t: NpcHpSource): { hp: number; max: number } {
   return { hp: Math.max(0, Math.min(Math.round(hp), max)), max };
 }
 
+export interface NpcHpMigrationWarning {
+  tokenId: string;
+  name: string;
+  hpBefore: number;
+  hpMaxBefore?: number;
+  reason: 'no-max' | 'over-max';
+}
+
 /** 读档/导入/每次 update 时把 NPC 的血条写回成确定值：hpMax 归一到默认或正整数，hp 夹进 [0, hpMax]。
- *  已倒地/濒死但没填 hp 的旧数据按 0 处理，避免“躺着却满血”的自相矛盾。 */
-export function normalizeNpcHp(world: World): void {
+ *  已倒地/濒死但没填 hp 的旧数据按 0 处理，避免“躺着却满血”的自相矛盾。
+ *  PC 的血走角色卡，棋子上的 raw hp/hpMax 一律清掉，免得和角色卡对不上。
+ *  warnings 只在读档迁移时传入，用来提示“旧档 hp 超过写回上限（没填有效 hpMax 按 10，或超过 hpMax）被夹小”。 */
+export function normalizeNpcHp(world: World, warnings?: NpcHpMigrationWarning[]): void {
+  if (!world || !Array.isArray(world.maps)) return;
   for (const m of world.maps) {
+    if (!m || !Array.isArray(m.tokens)) continue;
     for (const t of m.tokens) {
-      if (t.pcId) continue;
+      if (!t || typeof t !== 'object') continue;
+      if (t.pcId) {
+        delete t.hp;
+        delete t.hpMax;
+        continue;
+      }
+      const rawHp = t.hp;
+      const rawMax = t.hpMax;
       const pool = npcHpPool(t);
+      if (warnings && typeof rawHp === 'number' && Number.isFinite(rawHp)) {
+        // 按真正写回的整数比较，避免 hp1/hpMax0.4、hp11/hpMax10.5 这种
+        // “raw 值看着超了，round 后其实没缩水”的误报。
+        const roundedHp = Math.round(rawHp);
+        if (roundedHp > pool.hp) {
+          const validMax = typeof rawMax === 'number' && Number.isFinite(rawMax) && rawMax > 0;
+          warnings.push({
+            tokenId: t.id, name: t.name, hpBefore: roundedHp,
+            reason: validMax ? 'over-max' : 'no-max',
+            hpMaxBefore: validMax ? pool.max : undefined,
+          });
+        }
+      }
       t.hpMax = pool.max;
       t.hp = pool.hp;
     }
@@ -264,7 +296,7 @@ export function fmt(roll: number): string {
   return roll === 100 ? '00' : String(roll);
 }
 
-/** 一个棋子能不能被攻击：活着（没有濒死）、在攻击距离内、看得见（可选）。 */
+/** 一个棋子能不能被攻击：PC 要活着且没濒死/昏厥；NPC 0 HP 也允许（作者口径）；再查距离/可见。 */
 export function canTarget(world: World, map: GameMap, attacker: Token, target: Token, visible: boolean, range = ATTACK_RANGE): { ok: boolean; reason?: string } {
   if (attacker.id === target.id) return { ok: false, reason: '不能打自己' };
   if (!world) return { ok: false, reason: '没有世界' };

@@ -3,7 +3,7 @@ import { isArchitectureObject, openingIsOpen, architectureObjectBounds, furnitur
 import { objectEnabled } from '../core/objectData.js';
 import { toggleArchitectureDoor } from '../runtime/actions';
 import type { Draft } from 'immer';
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { canEditMap, getUI, getWorld, setUI, toast, update, useUI, useWorld, worldContext, type UIState } from '../core/store';
 import type { Connection, GameMap, MapObject, Secret, TextureFit, Token, World } from '../core/types';
 import { CONN_LABEL, TIERS, TIER_LABEL } from '../core/types';
@@ -740,7 +740,7 @@ function RevealButtons({ mapId, o, s, t, privTo }: { mapId: string; o: MapObject
   );
 }
 
-function TokenInspector({ world, mapId, t }: { world: World; mapId: string; t: Token }) {
+export function TokenInspector({ world, mapId, t }: { world: World; mapId: string; t: Token }) {
   const up = (fn: (x: Draft<Token>) => void, key?: string) =>
     update((d) => { const x = findMap(d, mapId)?.tokens.find((y) => y.id === t.id); if (x) fn(x); }, { coalesce: key && key + t.id });
   return (
@@ -765,7 +765,7 @@ function TokenInspector({ world, mapId, t }: { world: World; mapId: string; t: T
           <Num value={npcHpPool(t).hp} min={0} max={npcHpPool(t).max}
             onChange={(v) => up((x) => { const max = npcHpPool(x).max; x.hp = Math.max(0, Math.min(Math.round(v), max)); x.hpMax ??= max; })} />
           <span className="muted">/</span>
-          <NpcHpMaxInput value={npcHpPool(t).max}
+          <NpcHpMaxInput key={`${mapId}:${t.id}`} value={npcHpPool(t).max}
             onChange={(v) => up((x) => {
               x.hpMax = v;
               x.hp = clampHpToMax(x.hp, v);
@@ -847,16 +847,33 @@ function CellInput({ x, y, onChange }: { x: number; y: number; onChange: (p: { x
 /** NPC 上限输入：清空后失焦回默认 10；小数按 helper 的四舍五入口径走（0.4→1）。 */
 function NpcHpMaxInput({ value, onChange }: { value: number; onChange: (v: number) => void }) {
   const [text, setText] = useState<string | null>(null);
+  const textRef = useRef(text);
+  textRef.current = text;
+  const cancelledRef = useRef(false);
+  const onChangeRef = useRef(onChange);
+  onChangeRef.current = onChange;
+  // 输入框所在的棋子检查器被切走/卸载时，先把没失焦的文本提交掉，别把用户刚敲的
+  // 上限悄悄丢掉；已经 blur/Enter 提交过的话 text 是 null，这里不会重复提交。
+  // Escape 会同步置 cancelledRef：App 的全局 Escape 可能在同一拍清掉选择、卸载检查器，
+  // React 还来不及把 text=null 刷进 ref —— 不能让取消键反而把输入提交掉。
+  useEffect(() => () => {
+    if (!cancelledRef.current && textRef.current !== null) {
+      onChangeRef.current(parseNpcHpMaxInput(textRef.current));
+    }
+  }, []);
   const commit = () => {
     if (text === null) return;
     onChange(parseNpcHpMaxInput(text));
     setText(null);
   };
   return (
-    <input type="number" min={0} value={text ?? String(value)}
-      onChange={(e) => setText(e.target.value)}
+    <input type="number" min={0} step={1} aria-label="NPC HP 上限" value={text ?? String(value)}
+      onChange={(e) => { cancelledRef.current = false; setText(e.target.value); }}
       onBlur={commit}
-      onKeyDown={(e) => { if (e.key === 'Enter') commit(); if (e.key === 'Escape') setText(null); }} />
+      onKeyDown={(e) => {
+        if (e.key === 'Enter') commit();
+        if (e.key === 'Escape') { cancelledRef.current = true; setText(null); }
+      }} />
   );
 }
 
