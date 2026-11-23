@@ -10,6 +10,7 @@ import { applyMediaIndex, mediaChanged } from '../runtime/media';
 import { assetKeyOf, createAssetReceiver, isAssetMessage, type AssetReceiver } from '../runtime/assets';
 import { DiceTray, type DiceTrayRecord } from './DiceTray';
 import { hpOf } from '../rules/combat';
+import { groupPublicSkills } from '../core/skillTree';
 import { damageLanded, damageLost } from '../runtime/trial';
 
 export type PlayerMedia = { mediaId: string; label: string; mime: string; blob?: Blob; failed?: boolean; progress?: { received: number; total?: number } };
@@ -59,6 +60,7 @@ export function PlayerView() {
   const [skills, setSkills] = useState<PublicSkill[]>([]);
   const [pathway, setPathway] = useState<string | null>(null);
   const [avatar, setAvatar] = useState<string | null>(null);
+  const skillTree = groupPublicSkills(skills);
   /** 自己按方向键走格子的结果。没消息就是成了。 */
   const [moveNote, setMoveNote] = useState<{ ok: boolean; msg: string } | null>(null);
   /** 轮到自己掷的判定。玩家不能拒掷，所以只给「掷」。 */
@@ -287,11 +289,24 @@ export function PlayerView() {
               )))}
             {drawer === 'skills' && (skills.length === 0
               ? <div className="muted">还没有解锁技能。</div>
-              : skills.map((sk) => (
-                <div key={sk.id} className="player-skill">
-                  <b>【{sk.name}】</b> <span className="muted">{sk.pathway} · 序列 {sk.sequence} · {sk.me} ME</span>
-                  {pathway && sk.pathway !== pathway && <span className="badge">换途径 +1 ME</span>}
-                  <div>{sk.desc}</div>
+              : skillTree.map((path) => (
+                <div key={path.pathway} className="player-skill-pathway">
+                  <div className="player-skill-pathway-head">
+                    <b>{path.pathway}</b>
+                    {pathway === path.pathway && <span className="badge">当前</span>}
+                  </div>
+                  {path.groups.map((group) => (
+                    <div key={group.name} className="player-skill-group">
+                      <div className="player-skill-group-name">{group.name}</div>
+                      {group.skills.map((sk) => (
+                        <div key={sk.id} className="player-skill">
+                          <b>【{sk.name}】</b> <span className="muted">{sk.group} · 序列 {sk.sequence} · {sk.me} ME</span>
+                          {pathway && sk.pathway !== pathway && <span className="badge">换途径 +1 ME</span>}
+                          <div>{sk.desc}</div>
+                        </div>
+                      ))}
+                    </div>
+                  ))}
                 </div>
               )))}
             {drawer === 'talk' && <>

@@ -9,6 +9,16 @@
 .player-avatar { position: absolute; right: 14px; top: 14px; width: 56px; height: 56px; border-radius: 50%; object-fit: cover; border: 2px solid #3a3a44; z-index: 6; }
 .pc-skills { margin-top: 6px; }
 .pc-skill { display: block; padding: 3px 0; font-size: 13px; }
+.skill-tree-editor > summary { cursor: pointer; font-weight: 600; }
+.skill-tree-search { width: 100%; margin: 6px 0; }
+.skill-tree-pathway { margin: 4px 0 0 8px; }
+.skill-tree-pathway > summary { cursor: pointer; color: var(--accent); font-size: 13px; }
+.skill-tree-group { margin: 2px 0 4px 14px; }
+.skill-tree-group-name { color: #9aa0b4; font-size: 12px; margin-top: 4px; }
+.player-skill-pathway { margin-bottom: 10px; }
+.player-skill-pathway-head { padding: 4px 0; border-bottom: 1px solid #2a2a33; }
+.player-skill-group { margin-left: 8px; }
+.player-skill-group-name { color: #9aa0b4; font-size: 12px; margin-top: 4px; }
 .player-skills {
   position: absolute; left: 14px; top: 14px; width: 280px; max-height: 55%; overflow-y: auto;
   background: rgba(15, 15, 20, 0.88); border: 1px solid #3a3a44; border-radius: 10px; padding: 10px; z-index: 4;

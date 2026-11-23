@@ -7,6 +7,7 @@ import { SKILL_LIBRARY, currentPathwayOf } from '../rules/skills';
 import { ATTRS, hpOf, hpMaxOf } from '../rules/combat';
 import { uid } from '../core/util';
 import { Num, Row, Section, Txt } from './fields';
+import { SkillTreeEditor } from './SkillTreeEditor';
 
 const COLORS = ['#e07a5f', '#81b29a', '#f2cc8f', '#3d85c6', '#b07cc6', '#e0a458'];
 
@@ -113,20 +114,7 @@ export function PartyPanel() {
             <div className="hint">勾了「携带锐器」，战斗里攻击时才能勾「锐器」。钝器把人打倒是<b>昏厥</b>（战斗结束自动醒），锐器打倒是<b>濒死</b>（3 回合内要救治）。</div>
           </details>
           <div className="hint">只能发动「当前途径」下的技能；换途径多付 1 ME。</div>
-          <details className="pc-skills">
-            <summary>已解锁技能 <span className="muted">{p.skills?.length ?? 0}</span></summary>
-            {SKILL_LIBRARY.map((s) => (
-              <label key={s.id} className="pc-skill">
-                <input type="checkbox" checked={p.skills?.includes(s.id) ?? false} onChange={(e) => update((d) => {
-                  const pc = d.party.find((x) => x.id === p.id)!; const set = new Set(pc.skills ?? []);
-                  if (e.target.checked) set.add(s.id); else set.delete(s.id);
-                  pc.skills = [...set];
-                })} />
-                【{s.name}】 <span className="muted">{s.pathway} · 序列 {s.sequence}</span>
-              </label>
-            ))}
-            <div className="hint">勾上的技能会出现在这个角色的玩家窗口「我的技能」里，只发公开说明。</div>
-          </details>
+          <SkillTreeEditor pc={p} />
         </div>
       ))}
     </Section>

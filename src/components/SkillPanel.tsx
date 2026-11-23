@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { getWorld, update, useUI, useWorld } from '../core/store';
-import { SKILL_LIBRARY, currentPathwayOf, filterSkills, groupSkills, type SkillDef } from '../rules/skills';
+import { SKILL_LIBRARY, buildSkillTree, currentPathwayOf, filterSkills, type SkillDef } from '../rules/skills';
 import { objectEnabled } from '../core/objectData.js';
 import { approveSkillCast, beginSkillCast, cancelSkillCast, closeSkillCast, resolveSkillCast, timeoutSkillCast } from '../rules/skillCast';
 import { findMap } from '../runtime/actions';
@@ -102,7 +102,7 @@ export function SkillPanel() {
     );
   };
 
-  const groups = q ? null : groupSkills(SKILL_LIBRARY, unlocked, { levelUp });
+  const groups = q || !actor ? null : buildSkillTree(actor, { levelUp });
   const hits = q ? filterSkills(SKILL_LIBRARY, q, unlocked, { levelUp }) : [];
   const skillsInGroup = groups?.find((g) => g.pathway === pathway)?.groups.find((g) => g.name === group)?.skills ?? [];
 
@@ -135,16 +135,16 @@ export function SkillPanel() {
           {actor && actor.me == null && <p className="muted">这个角色还没填 ME，技能暂时不能发动（去队伍面板填 ME 当前 / 上限）。</p>}
           {q && hits.length === 0 && <p className="muted">没找到。</p>}
           {q && hits.map((s) => (
-            <button key={s.id} className="skill-item" onClick={() => start(s)}>
+            <button key={s.id} className="skill-item" disabled={!unlocked.has(s.id)} title={!unlocked.has(s.id) ? '还没解锁' : undefined} onClick={() => start(s)}>
               【{s.name}】· {s.group} · {s.me} ME{switchNote(s.pathway)}
             </button>
           ))}
           {!q && (
             <>
-              <div className="btns">{groups?.map((g) => <button key={g.pathway} className={pathway === g.pathway ? 'on' : ''} onClick={() => { setPathway(g.pathway); setGroup(null); }}>{g.pathway}</button>)}</div>
+              <div className="btns">{groups?.map((g) => <button key={g.pathway} className={pathway === g.pathway ? 'on' : ''} onClick={() => { setPathway(g.pathway); setGroup(null); }}>{g.pathway}{g.current ? ' · 当前' : ''}</button>)}</div>
               {pathway && <div className="btns">{groups?.find((g) => g.pathway === pathway)?.groups.map((g) => <button key={g.name} className={group === g.name ? 'on' : ''} onClick={() => setGroup(g.name)}>{g.name}</button>)}</div>}
               {group && skillsInGroup.map((s) => (
-                <button key={s.id} className="skill-item" onClick={() => start(s)}>【{s.name}】· {s.me} ME{switchNote(s.pathway)}</button>
+                <button key={s.id} className="skill-item" disabled={!unlocked.has(s.id)} title={!unlocked.has(s.id) ? '还没解锁' : undefined} onClick={() => start(s)}>【{s.name}】· {s.me} ME{switchNote(s.pathway)}</button>
               ))}
               {pathway && !group && <p className="muted">选一个技能组。</p>}
               {!pathway && <p className="muted">选一个途径。</p>}

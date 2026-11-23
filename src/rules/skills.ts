@@ -48,7 +48,7 @@ const IAN_SKILLS: SkillDef[] = [
   { id: '037-9-201', name: '长考', pathway: '金手指途径', group: '知识·技艺', sequence: 9, me: 1, desc: '花时间把整盘读完，换一次更稳的判断。' },
 ];
 
-/** 技能库 = 手录的 Ian 4 条 + 自动生成的四个职业序列9 50 条。 */
+/** 技能库 = 手录的 Ian 4 条 + 自动生成的 16 条途径序列9 194 条。 */
 export const SKILL_LIBRARY: SkillDef[] = [...IAN_SKILLS, ...SKILL_DATA];
 
 export interface SkillGroup {
@@ -85,4 +85,32 @@ export function filterSkills(skills: SkillDef[], q: string, unlocked?: Set<strin
 export function canCast(skill: SkillDef, meLeft: number | null): { ok: boolean; reason?: string } {
   if (meLeft !== null && skill.me > meLeft) return { ok: false, reason: `ME 不够（要 ${skill.me}）` };
   return { ok: true };
+}
+
+/** 主持人端技能树：途径 → 技能组 → 技能；不持久化，PC.skills 仍是唯一真相。 */
+export interface SkillTreePathway {
+  pathway: string;
+  /** 是不是角色当前的途径。 */
+  current: boolean;
+  unlockedCount: number;
+  totalCount: number;
+  groups: { name: string; skills: SkillDef[] }[];
+}
+
+export function buildSkillTree(
+  pc: Pick<PC, 'skills' | 'pathway'>,
+  opts: { levelUp?: boolean } = {},
+): SkillTreePathway[] {
+  const unlocked = new Set(pc.skills ?? []);
+  const current = currentPathwayOf(pc);
+  return groupSkills(SKILL_LIBRARY, unlocked, { levelUp: opts.levelUp }).map((group): SkillTreePathway => {
+    const skills = group.groups.flatMap((g) => g.skills);
+    return {
+      pathway: group.pathway,
+      current: current === group.pathway,
+      unlockedCount: skills.filter((s) => unlocked.has(s.id)).length,
+      totalCount: skills.length,
+      groups: group.groups,
+    };
+  });
 }

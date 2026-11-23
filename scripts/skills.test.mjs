@@ -74,6 +74,19 @@ test('玩家发起：直接进确认，focus 立起来', () => {
   assert.equal(api.getUI().focus, null);
 });
 
+test('未解锁技能不能发动：不扣 ME、不立 focus、不建 cast', () => {
+  fixture();
+  api.update((d) => { const pc = d.party[0]; pc.me = 10; pc.meMax = 10; });
+  api.setUI({ cast: null, focus: null });
+  const before = api.getWorld().party[0].me;
+  assert.match(api.beginSkillCast('pc', '001-9-001', 'player') ?? '', /没有解锁/);
+  assert.match(api.beginSkillCast('pc', '001-9-001', 'gm') ?? '', /没有解锁/);
+  assert.match(api.beginSkillCast('pc', '001-9-001', 'player', true) ?? '', /没有解锁/);
+  assert.equal(api.castOf(), null);
+  assert.equal(api.getUI().focus, null);
+  assert.equal(api.getWorld().party[0].me, before);
+});
+
 test('见证者代发起：先等同意，同意后才进确认', () => {
   fixture();
   api.beginSkillCast('pc', '037-9-101', 'gm');
