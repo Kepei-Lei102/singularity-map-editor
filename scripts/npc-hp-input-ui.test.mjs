@@ -209,6 +209,7 @@ test('切到另一个棋子：文本不串到新棋子，旧棋子输入照常�
   assert.equal(tokens.find((t) => t.id === 'npc').hpMax, 50, '旧棋子把已输入值提交');
   assert.equal(tokens.find((t) => t.id === 'npc2').hpMax, 10, '新棋子不能被串成 50');
   assert.equal(document.querySelector('input[aria-label="NPC HP 上限"]').value, '10');
+  api.act(() => root.unmount());
   const i = mounted.findIndex((x) => x.root === root);
   if (i >= 0) mounted.splice(i, 1);
 });
@@ -225,6 +226,7 @@ test('Escape 同一拍清掉选择/卸载检查器：不提交输入', () => {
   });
   assert.equal(token().hpMax, 10, 'Escape 取消不能被卸载 cleanup 提交');
   assert.equal(token().hp, 10);
+  api.act(() => root.unmount());
   const i = mounted.findIndex((x) => x.root === root);
   if (i >= 0) mounted.splice(i, 1);
 });

@@ -75,6 +75,37 @@ test('migrateWorld 对缺失 log 不误报损坏', () => {
   assert.equal(w.log.length, 0, '只是缺字段，不该提示损坏');
 });
 
+test('迁移 warning：hp10.6/hpMax10.3 写回 10/10 并提示，down 不误报', () => {
+  const w = api.emptyWorld();
+  const m = api.newMap('边界', '现实', 1, 10, 10, 'floor', false);
+  m.tokens = [
+    { id: 'f1', pcId: null, name: '小数缩水', color: '#888', x: 2, y: 2, hp: 10.6, hpMax: 10.3 },
+    { id: 'd1', pcId: null, name: '倒地小数上限', color: '#888', x: 3, y: 2, down: true, hp: 1, hpMax: 0.4 },
+    { id: 'd2', pcId: null, name: '倒地大血', color: '#888', x: 4, y: 2, down: true, hp: 80 },
+    { id: 'd3', pcId: null, name: '倒地没填', color: '#888', x: 5, y: 2, down: true },
+    { id: 'd4', pcId: null, name: '倒地超上限', color: '#888', x: 6, y: 2, down: true, hp: 15, hpMax: 10 },
+  ];
+  w.maps = [m];
+  const mw = api.migrateWorld(w);
+  const byId = new Map(mw.maps[0].tokens.map((t) => [t.id, t]));
+  assert.equal(byId.get('f1').hp, 10);
+  assert.equal(byId.get('f1').hpMax, 10);
+  assert.equal(byId.get('d1').hp, 1);
+  assert.equal(byId.get('d1').hpMax, 1);
+  assert.equal(byId.get('d2').hp, 10);
+  assert.equal(byId.get('d2').hpMax, 10);
+  assert.equal(byId.get('d3').hp, 0);
+  assert.equal(byId.get('d3').hpMax, 10);
+  assert.equal(byId.get('d4').hp, 10);
+  assert.equal(byId.get('d4').hpMax, 10);
+  const note = mw.log.filter((x) => x.text.includes('旧档 NPC 血条')).map((x) => x.text).join('\n');
+  assert.match(note, /小数缩水（hp 11 超过上限 10）/);
+  assert.match(note, /倒地大血（hp 80，按默认上限 10）/);
+  assert.match(note, /倒地超上限（hp 15 超过上限 10）/);
+  assert.doesNotMatch(note, /倒地小数上限/);
+  assert.doesNotMatch(note, /倒地没填/);
+});
+
 test('迁移 warning 不误报 round 后没缩水的上限', () => {
   const w = api.emptyWorld();
   const m = api.newMap('小数上限', '现实', 1, 10, 10, 'floor', false);
