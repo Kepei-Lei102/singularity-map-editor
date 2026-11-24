@@ -141,7 +141,19 @@ function repairOverrideConditions(ov, states, label, actionId, fixed) {
     delete ov.preconditions;
     return true;
   }
-  if (keep.length) ov.preconditions = keep;
+  const seen = new Set();
+  const deduped = [];
+  for (const p of keep) {
+    const key = p.kind === 'targetHasProp' ? `targetHasProp:${p.prop}`
+      : p.kind === 'actorHas' ? `actorHas:${p.tag}`
+      : p.kind === 'targetStateIn' ? `targetStateIn:${p.states.join(',')}`
+      : p.kind === 'withinRange' ? `withinRange:${p.cells}`
+      : 'targetEnabled';
+    if (seen.has(key)) { fixed.push(`${at} 的前置条件有重复条目，已去重`); continue; }
+    seen.add(key);
+    deduped.push(p);
+  }
+  if (deduped.length) ov.preconditions = deduped;
   else delete ov.preconditions;
   return false;
 }

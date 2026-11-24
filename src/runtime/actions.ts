@@ -3,7 +3,8 @@ import { objectEnabled } from '../core/objectData.js';
 import { architectureGeometry, architectureWalls, architectureObjectBounds, isArchitectureObject, openingIsOpen, objectStateError, architectureTransitionError, normalizeArchitectureBounds, clipArchitecture, characterPathClear, setTokenPosition, tokenPosition } from '../scene/architecture';
 import { checkArchitecture } from '../core/schema.js';
 import type { Draft } from 'immer';
-import JSZip from 'jszip';
+// JSZip 只在导出/导入时用；按需 load，玩家端不需要把 zip 打进主包。
+const loadJSZip = async () => (await import('jszip')).default;
 import { getUI, getWorld, reachableWorlds, replaceWorld, setUI, toast, update, worldContext, type Selection } from '../core/store';
 import { blocksMovement, pcWithin } from '../scene/perception';
 import { sightCacheFor, viewerOf, visiblePoint } from '../scene/sight';
@@ -932,6 +933,7 @@ async function buildProjectZip(allowMissing = false) {
   if (unresolved.length) throw new Error(unresolved.join('；'));
   if (doorHints.length) toast(doorHints.join('；'));
   checkWorld(w);
+  const JSZip = await loadJSZip();
   const zip = new JSZip();
   zip.file('world.json', JSON.stringify(w, null, 2));
   const missing: string[] = [];
@@ -1180,6 +1182,7 @@ async function importProject(file: File, ctx: string): Promise<boolean> {
     if (/\.json$/i.test(file.name)) {
       w = parseWorldWithConfirm(await file.text()); // 单独的 JSON 不带媒体文件：浏览器里有的照用
     } else {
+      const JSZip = await loadJSZip();
       const zip = await JSZip.loadAsync(file);
       const json = zip.file('world.json');
       if (!json) throw new Error('压缩包里没有 world.json');
@@ -1281,7 +1284,8 @@ export async function importAnyFile(file: File): Promise<boolean> {
         const j = JSON.parse(await file.text());
         rabbithole = Array.isArray(j.levels) && !Array.isArray(j.maps);
       } else {
-        const zip = await JSZip.loadAsync(file);
+        const JSZip = await loadJSZip();
+      const zip = await JSZip.loadAsync(file);
         rabbithole = !zip.file('world.json') && !!zip.file('map.json');
       }
     } catch (e) {

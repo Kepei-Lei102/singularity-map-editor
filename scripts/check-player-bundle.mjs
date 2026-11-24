@@ -1,7 +1,8 @@
 // 玩家包闸门：玩家端不该带完整技能库。构建完 dist-player 后跑。
 // 只按技能 id 判定；动作库里有同名动作（威吓等），按名字会误报。
 import { readFile, readdir, stat } from 'node:fs/promises';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
+import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
@@ -19,22 +20,35 @@ export function findLeak(codes, ids) {
   return null;
 }
 
-async function main() {
-  const dir = join(root, 'dist-player');
-  const data = await readFile(join(root, 'src/rules/skills-data.ts'), 'utf8');
-  const skills = await readFile(join(root, 'src/rules/skills.ts'), 'utf8');
-  const ids = skillIdsOf([data, skills]);
-  if (ids.length !== 198) throw new Error(`技能 id 数不对：期望 198，实际 ${ids.length}`);
-  const assets = [];
+/** 玩家产物里该查的文件：assets 的 JS + 根级 JS + 根 index.html；public/dice 不算玩家包代码。 */
+export async function bundleFiles(dir) {
+  const files = [];
   const walk = async (p) => {
     for (const entry of await readdir(p, { withFileTypes: true })) {
       const full = join(p, entry.name);
       if (entry.isDirectory()) await walk(full);
-      else if (entry.name.endsWith('.js')) assets.push(full);
+      else if (entry.name.endsWith('.js') || entry.name.endsWith('.html')) files.push(full);
     }
   };
-  await walk(join(dir, 'assets'));
-  if (assets.length === 0) throw new Error('dist-player 里没有 JS，先跑 npm run build:split');
+  for (const entry of await readdir(dir, { withFileTypes: true })) {
+    if (entry.isFile() && entry.name.endsWith('.js')) files.push(join(dir, entry.name));
+  }
+  const assetsDir = join(dir, 'assets');
+  if (existsSync(assetsDir)) await walk(assetsDir);
+  const index = join(dir, 'index.html');
+  if (!existsSync(index)) throw new Error('dist-player 里没有 index.html，先跑 npm run build:split');
+  files.push(index);
+  return files;
+}
+
+async function main() {
+  const dir = process.argv[2] ? resolve(process.argv[2]) : join(root, 'dist-player');
+  const data = await readFile(join(root, 'src/rules/skills-data.ts'), 'utf8');
+  const skills = await readFile(join(root, 'src/rules/skills.ts'), 'utf8');
+  const ids = skillIdsOf([data, skills]);
+  if (ids.length !== 198) throw new Error(`技能 id 数不对：期望 198，实际 ${ids.length}`);
+  const assets = await bundleFiles(dir);
+  if (!assets.length) throw new Error('dist-player 里没有可检查的文件，先跑 npm run build:split');
   let bytes = 0;
   for (const file of assets) bytes += (await stat(file)).size;
   const codes = await Promise.all(assets.map((file) => readFile(file, 'utf8')));
@@ -43,7 +57,7 @@ async function main() {
     console.error(`玩家包里仍有技能库 id：${leaked}`);
     process.exit(1);
   }
-  console.log(`玩家包闸门：${assets.length} 个 JS / ${(bytes / 1024).toFixed(0)} KiB，${ids.length} 个技能 id 都没命中。`);
+  console.log(`玩家包闸门：${assets.length} 个 JS/HTML 文件 / ${(bytes / 1024).toFixed(0)} KiB，${ids.length} 个技能 id 都没命中。`);
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) await main();

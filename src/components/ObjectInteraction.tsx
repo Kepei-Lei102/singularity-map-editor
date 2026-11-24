@@ -51,16 +51,14 @@ function ActionPick({ value, onChange, list }: { value: string; onChange: (id: s
   );
 }
 
-const splitTags = (v: string) => v.split(/[,，]/).map((s) => s.trim()).filter(Boolean);
+const splitTags = (v: string) => [...new Set(v.split(/[,，]/).map((s) => s.trim()).filter(Boolean))];
 
 const preconditionProps = (ov: ObjectInteractionOverride) =>
   (ov.preconditions ?? []).filter((p) => p.kind === 'targetHasProp').map((p) => p.prop);
 const preconditionActorTags = (ov: ObjectInteractionOverride) =>
   (ov.preconditions ?? []).filter((p) => p.kind === 'actorHas').map((p) => p.tag);
-const preconditionStates = (ov: ObjectInteractionOverride) => {
-  const p = (ov.preconditions ?? []).find((x) => x.kind === 'targetStateIn');
-  return p?.kind === 'targetStateIn' ? p.states : [];
-};
+const stateConditions = (ov: ObjectInteractionOverride) =>
+  (ov.preconditions ?? []).filter((p): p is Extract<Precondition, { kind: 'targetStateIn' }> => p.kind === 'targetStateIn');
 
 function Mapping({ mapId, o }: { mapId: string; o: MapObject }) {
   const oi = o.interaction;
@@ -95,12 +93,18 @@ function Mapping({ mapId, o }: { mapId: string; o: MapObject }) {
     if (list.length) ov.preconditions = list;
     else delete ov.preconditions;
   });
-  const toggleState = (index: number, state: number) => {
+  const toggleState = (index: number, conditionIndex: number, state: number) => {
     const ov = o.interaction?.overrides[index];
     if (!ov) return;
-    const current = preconditionStates(ov);
+    const conditions = stateConditions(ov);
+    const target = conditions[conditionIndex];
+    const current = target?.states ?? [];
     const next = current.includes(state) ? current.filter((x) => x !== state) : [...current, state].sort((a, b) => a - b);
-    setConditions(index, 'targetStateIn', next.length ? [{ kind: 'targetStateIn', states: next }] : []);
+    const rest = conditions.filter((_, j) => j !== conditionIndex);
+    const list = [...rest];
+    if (next.length) list.push({ kind: 'targetStateIn', states: next });
+    const deduped = list.filter((p, i) => !list.slice(0, i).some((x) => x.states.length === p.states.length && x.states.every((v, k) => v === p.states[k])));
+    setConditions(index, 'targetStateIn', deduped);
   };
   if (!oi) return <Section title="互动（模组）">
     <div className="hint">这个物件还没有互动档案。先建一份，再给「动作 × 本物件」配四档结果。</div>
@@ -121,12 +125,20 @@ function Mapping({ mapId, o }: { mapId: string; o: MapObject }) {
       <div className="hint">动作条件：距离留空＝贴身 1 格；目标状态/标签、发动者标签留空＝不限制。</div>
       <Row label="距离（格）"><Txt value={ov.range === undefined ? '' : String(ov.range)} placeholder="留空＝1" onChange={(v) => setRange(i, v)} /></Row>
       <Row label="目标状态">
-        <div className="chips">
-          {o.states.map((s, k) => <label key={k} className="check"><input type="checkbox" checked={preconditionStates(ov).includes(k)} onChange={() => toggleState(i, k)} /> {k} {s}</label>)}
-        </div>
+        {(() => {
+          const conditions = stateConditions(ov);
+          const groups = conditions.length ? conditions : [null];
+          return <>
+            {groups.map((p, j) => <div key={j} className="chips">
+              {conditions.length > 1 && <span className="muted">条件 {j + 1}</span>}
+              {o.states.map((s, k) => <label key={k} className="check"><input type="checkbox" checked={p?.states.includes(k) ?? false} onChange={() => toggleState(i, j, k)} /> {k} {s}</label>)}
+            </div>)}
+            {conditions.length > 1 && <div className="hint">多条目标状态条件是「且」关系：每条都要满足才能发动。</div>}
+          </>;
+        })()}
       </Row>
       <Row label="目标标签"><Txt value={preconditionProps(ov).join(', ')} placeholder="物件标签，如 易燃物" onChange={(v) => setConditions(i, 'targetHasProp', splitTags(v).map((prop) => ({ kind: 'targetHasProp', prop })))} /></Row>
-      <Row label="发动者标签"><Txt value={preconditionActorTags(ov).join(', ')} placeholder="角色途径标签，如 打火机" onChange={(v) => setConditions(i, 'actorHas', splitTags(v).map((tag) => ({ kind: 'actorHas', tag })))} /></Row>
+      <Row label="发动者标签"><Txt value={preconditionActorTags(ov).join(', ')} placeholder="角色标签（途径/职业）" onChange={(v) => setConditions(i, 'actorHas', splitTags(v).map((tag) => ({ kind: 'actorHas', tag })))} /></Row>
       {TIERS.map((tier) => <Row key={tier} label={TIER_LABEL[tier]}>
         <select value={ov.outcomes[tier] ?? ''} onChange={(e) => setOutcome(i, tier, e.target.value)}>
           <option value="">无效果</option>

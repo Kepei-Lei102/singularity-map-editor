@@ -408,12 +408,18 @@ test('动作条件/范围：好值保留，坏值 repair 清掉；坏条件删�
     { kind: 'targetStateIn', states: [2, 1, 2] },
     { kind: 'targetEnabled' },
     { kind: 'withinRange', cells: 2 },
+    { kind: 'targetHasProp', prop: '易燃物' },
+    { kind: 'actorHas', tag: '打火机' },
+    { kind: 'targetStateIn', states: [1, 2] },
+    { kind: 'targetEnabled' },
+    { kind: 'withinRange', cells: 2 },
   ];
   const fixed = api.repairWorld(w1);
   assert.equal(ov.range, 2);
   assert.equal(ov.preconditions.length, 5);
   assert.equal(ov.preconditions[0].prop, '易燃物');
   assert.deepEqual(ov.preconditions[2].states, [1, 2]);
+  assert.ok(fixed.some((x) => x.includes('重复条目')));
   assert.doesNotThrow(() => api.checkWorld(w1));
 
   const w2 = JSON.parse(JSON.stringify(api.getWorld()));

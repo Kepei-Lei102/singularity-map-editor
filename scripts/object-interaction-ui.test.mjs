@@ -21,7 +21,8 @@ export { createRoot } from 'react-dom/client';
 export { act } from 'react';
 export * from './src/core/defaults';
 export * from './src/core/schema.js';
-export * from './src/core/store';`,
+export * from './src/core/store';
+export * from './src/rules/interaction';`,
     resolveDir: root,
   },
   outfile: bundle, bundle: true, platform: 'node', format: 'cjs',
@@ -403,14 +404,14 @@ test('编辑器：距离、目标标签、发动者标签、目标状态写回�
   let ov = api.getWorld().maps[0].objects[0].interaction.overrides[0];
   assert.equal(ov.range, 2);
 
-  setField('物件标签，如 易燃物', '易燃物, 金属');
+  setField('物件标签，如 易燃物', '易燃物, 易燃物, 金属');
   ov = api.getWorld().maps[0].objects[0].interaction.overrides[0];
   assert.deepEqual(ov.preconditions, [
     { kind: 'targetHasProp', prop: '易燃物' },
     { kind: 'targetHasProp', prop: '金属' },
   ]);
 
-  setField('角色途径标签，如 打火机', '打火机');
+  setField('角色标签（途径/职业）', '打火机');
   ov = api.getWorld().maps[0].objects[0].interaction.overrides[0];
   assert.ok(ov.preconditions.some((p) => p.kind === 'actorHas' && p.tag === '打火机'));
 
@@ -420,6 +421,32 @@ test('编辑器：距离、目标标签、发动者标签、目标状态写回�
   ov = api.getWorld().maps[0].objects[0].interaction.overrides[0];
   const state = ov.preconditions.find((p) => p.kind === 'targetStateIn');
   assert.deepEqual(state.states, [1]);
+});
+
+test('编辑器：多条 targetStateIn 不丢未展示状态', () => {
+  const { w } = fixture();
+  api.update((d) => {
+    d.maps[0].objects[0].interaction.overrides[0].preconditions = [
+      { kind: 'targetStateIn', states: [0] },
+      { kind: 'targetStateIn', states: [1] },
+    ];
+  });
+  mount(api.getWorld(), 'clay', w.maps[0].id, true);
+  const preconditions = [{ kind: 'targetStateIn', states: [0] }, { kind: 'targetStateIn', states: [1] }];
+  assert.equal(api.checkPreconditions({ preconditions }, { targetState: 0 }).ok, false, '两条 AND 条件时状态 0 不应通过');
+  assert.equal(api.checkPreconditions({ preconditions }, { targetState: 1 }).ok, false, '两条 AND 条件时状态 1 也不应通过');
+
+  // 每条 targetStateIn 单独一组勾选框，不再把两条揉成并集。
+  const checks = [...document.querySelectorAll('input[type="checkbox"]')];
+  assert.equal(checks.length, 4);
+  assert.equal(checks[0].checked, true, '条件 1 的状态 0 应勾选');
+  assert.equal(checks[1].checked, false);
+  assert.equal(checks[2].checked, false);
+  assert.equal(checks[3].checked, true, '条件 2 的状态 1 应勾选');
+  api.act(() => checks[0].click());
+  const ov = api.getWorld().maps[0].objects[0].interaction.overrides[0];
+  assert.deepEqual(ov.preconditions, [{ kind: 'targetStateIn', states: [1] }]);
+  assert.equal(api.checkPreconditions(ov, { targetState: 1 }).ok, true, '改完后状态 1 应按剩余条件通过');
 });
 
 test('条件：目标标签不满足，面板拦并禁用看结果', () => {
@@ -433,6 +460,22 @@ test('条件：目标标签不满足，面板拦并禁用看结果', () => {
   assert.match(document.body.textContent, /目标不是「易燃物」/);
   const preview = [...document.querySelectorAll('button')].find((x) => x.textContent?.trim() === '看结果');
   assert.equal(preview.disabled, true);
+});
+
+test('编辑器：改一条条件后与另一条重复，不会存重复 targetStateIn', () => {
+  const { w } = fixture();
+  api.update((d) => {
+    d.maps[0].objects[0].interaction.overrides[0].preconditions = [
+      { kind: 'targetStateIn', states: [0, 1] },
+      { kind: 'targetStateIn', states: [1] },
+    ];
+  });
+  mount(api.getWorld(), 'clay', w.maps[0].id, true);
+  const checks = [...document.querySelectorAll('input[type="checkbox"]')];
+  assert.equal(checks.length, 4);
+  api.act(() => checks[0].click()); // 条件 1 的 0 去掉，条件 1 变成 [1]，与条件 2 重复
+  const ov = api.getWorld().maps[0].objects[0].interaction.overrides[0];
+  assert.deepEqual(ov.preconditions, [{ kind: 'targetStateIn', states: [1] }]);
 });
 
 } else {

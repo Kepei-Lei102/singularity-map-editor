@@ -31,7 +31,7 @@ export function SkillPanel() {
 
   // 角色列表变化后（新加/删掉角色），旧选择可能已经不存在：落回第一个角色。
   useEffect(() => {
-    if (!party.some((p) => p.id === actorId)) setActorId(party[0]?.id ?? '');
+    if (!party.some((p) => p.id === actorId)) { setActorId(party[0]?.id ?? ''); setPathway(null); setGroup(null); }
   }, [actorId, party]);
 
   const unlocked = new Set(actor?.skills ?? []);
@@ -102,8 +102,9 @@ export function SkillPanel() {
     );
   };
 
-  const groups = q || !actor ? null : buildSkillTree(actor, { levelUp });
-  const hits = q ? filterSkills(SKILL_LIBRARY, q, unlocked, { levelUp }) : [];
+  const searching = q.trim().length > 0;
+  const groups = searching || !actor ? null : buildSkillTree(actor, { levelUp });
+  const hits = searching ? filterSkills(SKILL_LIBRARY, q.trim(), unlocked, { levelUp }) : [];
   const skillsInGroup = groups?.find((g) => g.pathway === pathway)?.groups.find((g) => g.name === group)?.skills ?? [];
 
   return (
@@ -133,13 +134,13 @@ export function SkillPanel() {
           <label className="muted"><input type="checkbox" checked={levelUp} onChange={(e) => setLevelUp(e.target.checked)} /> 升级视图（显示未解锁的名字）</label>
           {!actor?.skills?.length && <p className="muted">这个角色还没有已解锁的技能。技能数据随编辑器走，角色身上只记 id。</p>}
           {actor && actor.me == null && <p className="muted">这个角色还没填 ME，技能暂时不能发动（去队伍面板填 ME 当前 / 上限）。</p>}
-          {q && hits.length === 0 && <p className="muted">没找到。</p>}
-          {q && hits.map((s) => (
+          {searching && hits.length === 0 && <p className="muted">没找到。</p>}
+          {searching && hits.map((s) => (
             <button key={s.id} className="skill-item" disabled={!unlocked.has(s.id)} title={!unlocked.has(s.id) ? '还没解锁' : undefined} onClick={() => start(s)}>
               【{s.name}】· {s.group} · {s.me} ME{switchNote(s.pathway)}
             </button>
           ))}
-          {!q && (
+          {!searching && (
             <>
               <div className="btns">{groups?.map((g) => <button key={g.pathway} className={pathway === g.pathway ? 'on' : ''} onClick={() => { setPathway(g.pathway); setGroup(null); }}>{g.pathway}{g.current ? ' · 当前' : ''}</button>)}</div>
               {pathway && <div className="btns">{groups?.find((g) => g.pathway === pathway)?.groups.map((g) => <button key={g.name} className={group === g.name ? 'on' : ''} onClick={() => setGroup(g.name)}>{g.name}</button>)}</div>}

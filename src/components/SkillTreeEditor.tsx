@@ -1,13 +1,15 @@
 import { useState } from 'react';
 import type { PC } from '../core/types';
-import { update } from '../core/store';
+import { getWorld, update, useWorld } from '../core/store';
 import { buildSkillTree } from '../rules/skills';
 
 /** 主持人端的技能树：按途径 → 技能组展开，勾选写入 PC.skills；树本身不入档。 */
 export function SkillTreeEditor({ pc }: { pc: PC }) {
+  useWorld();
+  const current = getWorld().party.find((p) => p.id === pc.id) ?? pc;
   const [q, setQ] = useState('');
-  const tree = buildSkillTree(pc, { levelUp: true });
-  const unlocked = new Set(pc.skills ?? []);
+  const tree = buildSkillTree(current, { levelUp: true });
+  const unlocked = new Set(current.skills ?? []);
   const all = tree.flatMap((path) => path.groups.flatMap((group) => group.skills.map((skill) => ({ path, group, skill }))));
   const hits = q.trim()
     ? all.filter(({ skill }) => `${skill.name}${skill.group}${skill.pathway}${skill.desc}`.includes(q.trim()))
@@ -15,7 +17,7 @@ export function SkillTreeEditor({ pc }: { pc: PC }) {
   const unlockedTotal = all.filter(({ skill }) => unlocked.has(skill.id)).length;
 
   const toggle = (skillId: string, checked: boolean) => update((d) => {
-    const x = d.party.find((p) => p.id === pc.id);
+    const x = d.party.find((p) => p.id === current.id);
     if (!x) return;
     const set = new Set(x.skills ?? []);
     if (checked) set.add(skillId); else set.delete(skillId);

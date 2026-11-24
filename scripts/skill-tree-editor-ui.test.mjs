@@ -145,10 +145,7 @@ test('勾选写回 PC.skills，取消勾选移除', async () => {
   assert.equal(box.checked, false);
   api.act(() => { box.click(); });
   assert.deepEqual(api.getWorld().party[0].skills, ['001-9-001']);
-  // 组件没订阅 world；重新挂载看已勾中状态
-  const fresh = mount(api.getWorld().party[0]);
-  const freshLabel = [...fresh.querySelectorAll('label.pc-skill')].find((x) => x.textContent?.includes('游戏解题'));
-  assert.ok(freshLabel?.querySelector('input[type="checkbox"]')?.checked);
+  assert.equal(box.checked, true, '勾选后组件应随 store 重渲染');
 });
 
 test('发动面板：升级视图里锁定技能按钮禁用，已解锁可点', () => {
@@ -168,6 +165,33 @@ test('发动面板：升级视图里锁定技能按钮禁用，已解锁可点',
   const open = [...container.querySelectorAll('button.skill-item')].find((x) => x.textContent?.includes('冥想'));
   assert.ok(open);
   assert.equal(open.disabled, false);
+});
+
+test('发动面板：只输入空格不进入搜索平铺，仍显示途径', () => {
+  const w = api.emptyWorld();
+  w.party = [{ id: 'pc', name: 'Ian', color: '#fff', tags: [], skills: ['037-9-101'], pathway: '金手指途径', me: 10, meMax: 10 }];
+  const container = mountSkillPanel(w);
+  const search = container.querySelector('input[placeholder*="搜索技能"]');
+  assert.ok(search);
+  setValue(search, '   ');
+  assert.equal(container.querySelectorAll('button.skill-item').length, 0);
+  assert.ok([...container.querySelectorAll('button')].some((x) => x.textContent?.includes('金手指途径')));
+});
+
+test('发动面板：删掉当前角色后落回第一个并清掉旧途径', () => {
+  const w = api.emptyWorld();
+  w.party = [
+    { id: 'pc', name: 'Ian', color: '#fff', tags: [], skills: ['037-9-101'], pathway: '金手指途径', me: 10, meMax: 10 },
+    { id: 'pc2', name: 'B', color: '#fff', tags: [], skills: [], me: 10, meMax: 10 },
+  ];
+  const container = mountSkillPanel(w);
+  const pathwayButton = [...container.querySelectorAll('button')].find((x) => x.textContent?.includes('金手指途径'));
+  assert.ok(pathwayButton);
+  api.act(() => pathwayButton.click());
+  api.act(() => api.update((d) => { d.party = d.party.filter((p) => p.id !== 'pc'); }));
+  assert.equal(container.querySelector('select')?.value, 'pc2');
+  assert.ok(![...container.querySelectorAll('button')].some((x) => x.textContent?.includes('金手指途径')));
+  assert.match(container.textContent ?? '', /选一个途径/);
 });
 
 }
