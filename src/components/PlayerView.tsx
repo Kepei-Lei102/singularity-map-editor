@@ -159,7 +159,7 @@ export function PlayerView() {
         setMedia(null);
       }
     };
-    document.title = '奇点之后 · 玩家视角';
+    document.title = '奇点之后 · 玩家端';
     ensureOnlinePlayer()
       .then((isOnline) => {
         if (cancelled) return;

@@ -93,18 +93,47 @@ function Mapping({ mapId, o }: { mapId: string; o: MapObject }) {
     if (list.length) ov.preconditions = list;
     else delete ov.preconditions;
   });
+  /** 只改这一条目标状态条件，保留其他条件在原位置；删掉一条时不移位后面的条件。 */
+  const setStateConditions = (index: number, conditionIndex: number, nextStates: number[]) => {
+    update((d) => {
+      const ov = d.maps.find((m) => m.id === mapId)?.objects.find((x) => x.id === o.id)?.interaction?.overrides[index];
+      if (!ov) return;
+      const all = ov.preconditions ?? [];
+      const key = (states: number[]) => [...states].sort((a, b) => a - b).join(',');
+      const seen = new Set<string>();
+      const out: Precondition[] = [];
+      let si = 0;
+      let touched = false;
+      for (const p of all) {
+        if (p.kind !== 'targetStateIn') { out.push(p); continue; }
+        if (si === conditionIndex) {
+          touched = true;
+          if (nextStates.length) {
+            const k = key(nextStates);
+            if (!seen.has(k)) { seen.add(k); out.push({ kind: 'targetStateIn', states: [...nextStates].sort((a, b) => a - b) }); }
+          }
+        } else {
+          const k = key(p.states);
+          if (!seen.has(k)) { seen.add(k); out.push(p); }
+        }
+        si++;
+      }
+      if (!touched && nextStates.length) {
+        const k = key(nextStates);
+        if (!seen.has(k)) out.push({ kind: 'targetStateIn', states: [...nextStates].sort((a, b) => a - b) });
+      }
+      if (out.length) ov.preconditions = out;
+      else delete ov.preconditions;
+    });
+  };
   const toggleState = (index: number, conditionIndex: number, state: number) => {
     const ov = o.interaction?.overrides[index];
     if (!ov) return;
     const conditions = stateConditions(ov);
     const target = conditions[conditionIndex];
     const current = target?.states ?? [];
-    const next = current.includes(state) ? current.filter((x) => x !== state) : [...current, state].sort((a, b) => a - b);
-    const rest = conditions.filter((_, j) => j !== conditionIndex);
-    const list = [...rest];
-    if (next.length) list.push({ kind: 'targetStateIn', states: next });
-    const deduped = list.filter((p, i) => !list.slice(0, i).some((x) => x.states.length === p.states.length && x.states.every((v, k) => v === p.states[k])));
-    setConditions(index, 'targetStateIn', deduped);
+    const next = (current.includes(state) ? current.filter((x) => x !== state) : [...current, state]).sort((a, b) => a - b);
+    setStateConditions(index, conditionIndex, next);
   };
   if (!oi) return <Section title="互动（模组）">
     <div className="hint">这个物件还没有互动档案。先建一份，再给「动作 × 本物件」配四档结果。</div>

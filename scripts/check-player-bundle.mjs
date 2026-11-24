@@ -41,23 +41,27 @@ export async function bundleFiles(dir) {
   return files;
 }
 
-async function main() {
-  const dir = process.argv[2] ? resolve(process.argv[2]) : join(root, 'dist-player');
+/** 跑一遍闸门：返回文件数/体积/泄漏 id；不退出进程，方便测试。 */
+export async function checkBundle(dir) {
   const data = await readFile(join(root, 'src/rules/skills-data.ts'), 'utf8');
   const skills = await readFile(join(root, 'src/rules/skills.ts'), 'utf8');
   const ids = skillIdsOf([data, skills]);
   if (ids.length !== 198) throw new Error(`技能 id 数不对：期望 198，实际 ${ids.length}`);
-  const assets = await bundleFiles(dir);
-  if (!assets.length) throw new Error('dist-player 里没有可检查的文件，先跑 npm run build:split');
+  const files = await bundleFiles(dir);
   let bytes = 0;
-  for (const file of assets) bytes += (await stat(file)).size;
-  const codes = await Promise.all(assets.map((file) => readFile(file, 'utf8')));
-  const leaked = findLeak(codes, ids);
+  for (const file of files) bytes += (await stat(file)).size;
+  const codes = await Promise.all(files.map((file) => readFile(file, 'utf8')));
+  return { files, bytes, ids, leaked: findLeak(codes, ids) };
+}
+
+async function main() {
+  const dir = process.argv[2] ? resolve(process.argv[2]) : join(root, 'dist-player');
+  const { files, bytes, ids, leaked } = await checkBundle(dir);
   if (leaked) {
     console.error(`玩家包里仍有技能库 id：${leaked}`);
     process.exit(1);
   }
-  console.log(`玩家包闸门：${assets.length} 个 JS/HTML 文件 / ${(bytes / 1024).toFixed(0)} KiB，${ids.length} 个技能 id 都没命中。`);
+  console.log(`玩家包闸门：${files.length} 个 JS/HTML 文件 / ${(bytes / 1024).toFixed(0)} KiB，${ids.length} 个技能 id 都没命中。`);
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) await main();

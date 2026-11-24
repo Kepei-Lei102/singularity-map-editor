@@ -237,3 +237,15 @@ test('ME 没填就不能发动，强行也不行', () => {
   assert.match(api.beginSkillCast('pc', '037-9-101', 'gm', true) ?? '', /还没填 ME/);
   assert.equal(api.castOf(), null);
 });
+
+test('同意前技能被撤掉：不再发动，不扣 ME，清掉 focus', () => {
+  fixture();
+  const before = api.getWorld().party[0].me;
+  api.beginSkillCast('pc', '037-9-101', 'gm');
+  assert.equal(api.castOf().step, 'approval');
+  api.update((d) => { d.party[0].skills = ['037-9-102']; });
+  assert.match(api.approveSkillCast(true) ?? '', /撤掉/);
+  assert.equal(api.castOf(), null);
+  assert.equal(api.getUI().focus, null);
+  assert.equal(api.getWorld().party[0].me, before);
+});

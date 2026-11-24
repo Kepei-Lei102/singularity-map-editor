@@ -25,7 +25,7 @@ function TagInput({ tags, onChange }: { tags: string[]; onChange: (t: string[]) 
           <span key={t} className="chip on">{t} <a onClick={() => onChange(tags.filter((x) => x !== t))}>×</a></span>
         ))}
       </div>
-      <input value={draft} list="pathway-sugg" placeholder="加途径标签，回车" onChange={(e) => setDraft(e.target.value)}
+      <input value={draft} list="pathway-sugg" placeholder="加途径/职业标签，回车" onChange={(e) => setDraft(e.target.value)}
         onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); add(); } }} onBlur={add} />
       <datalist id="pathway-sugg">{PATHWAY_SUGGESTIONS.map((p) => <option key={p} value={p} />)}</datalist>
     </div>

@@ -478,6 +478,75 @@ test('编辑器：改一条条件后与另一条重复，不会存重复 targetS
   assert.deepEqual(ov.preconditions, [{ kind: 'targetStateIn', states: [1] }]);
 });
 
+test('编辑器：改条件 2 不影响条件 1，其他条件位置不漂移', () => {
+  const { w } = fixture();
+  api.update((d) => {
+    d.maps[0].objects[0].interaction.overrides[0].preconditions = [
+      { kind: 'targetHasProp', prop: '金属' },
+      { kind: 'targetStateIn', states: [0] },
+      { kind: 'targetStateIn', states: [1] },
+      { kind: 'actorHas', tag: '打火机' },
+    ];
+  });
+  mount(api.getWorld(), 'clay', w.maps[0].id, true);
+  const checks = [...document.querySelectorAll('input[type="checkbox"]')];
+  assert.equal(checks.length, 4);
+  api.act(() => checks[2].click()); // 第二个条件的状态 0，加上后变 [0,1]
+  const ov = api.getWorld().maps[0].objects[0].interaction.overrides[0];
+  assert.deepEqual(ov.preconditions, [
+    { kind: 'targetHasProp', prop: '金属' },
+    { kind: 'targetStateIn', states: [0] },
+    { kind: 'targetStateIn', states: [0, 1] },
+    { kind: 'actorHas', tag: '打火机' },
+  ]);
+});
+
+test('编辑器：删掉靠前的目标状态条件，后面的条件不越过其他条件', () => {
+  const { w } = fixture();
+  api.update((d) => {
+    d.maps[0].objects[0].interaction.overrides[0].preconditions = [
+      { kind: 'targetStateIn', states: [0] },
+      { kind: 'targetHasProp', prop: '金属' },
+      { kind: 'targetStateIn', states: [1] },
+      { kind: 'actorHas', tag: '打火机' },
+    ];
+  });
+  mount(api.getWorld(), 'clay', w.maps[0].id, true);
+  const checks = [...document.querySelectorAll('input[type="checkbox"]')];
+  api.act(() => checks[0].click()); // 删掉第一条状态条件
+  const ov = api.getWorld().maps[0].objects[0].interaction.overrides[0];
+  assert.deepEqual(ov.preconditions, [
+    { kind: 'targetHasProp', prop: '金属' },
+    { kind: 'targetStateIn', states: [1] },
+    { kind: 'actorHas', tag: '打火机' },
+  ]);
+});
+
+test('编辑器：三条状态条件编辑中间一条，前后条件位置不变', () => {
+  const { w } = fixture();
+  api.update((d) => {
+    d.maps[0].objects[0].interaction.overrides[0].preconditions = [
+      { kind: 'targetStateIn', states: [0] },
+      { kind: 'targetHasProp', prop: '金属' },
+      { kind: 'targetStateIn', states: [0] },
+      { kind: 'actorHas', tag: '打火机' },
+      { kind: 'targetStateIn', states: [1] },
+    ];
+  });
+  mount(api.getWorld(), 'clay', w.maps[0].id, true);
+  const checks = [...document.querySelectorAll('input[type="checkbox"]')];
+  assert.equal(checks.length, 6);
+  api.act(() => checks[3].click()); // 第二条状态条件的状态 1
+  const ov = api.getWorld().maps[0].objects[0].interaction.overrides[0];
+  assert.deepEqual(ov.preconditions, [
+    { kind: 'targetStateIn', states: [0] },
+    { kind: 'targetHasProp', prop: '金属' },
+    { kind: 'targetStateIn', states: [0, 1] },
+    { kind: 'actorHas', tag: '打火机' },
+    { kind: 'targetStateIn', states: [1] },
+  ]);
+});
+
 } else {
   test('面板 UI 测试需要按文件隔离进程', { skip: '默认 npm test 按文件分进程；--test-isolation=none 下 jsdom 全局会和别的测试打架' }, () => {});
 }

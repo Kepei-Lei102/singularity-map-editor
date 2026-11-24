@@ -5,7 +5,7 @@ import { readFile, mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { skillIdsOf, findLeak, bundleFiles } from './check-player-bundle.mjs';
+import { skillIdsOf, findLeak, bundleFiles, checkBundle } from './check-player-bundle.mjs';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
 
@@ -50,5 +50,21 @@ test('闸门：缺 index.html 应报错', async () => {
     await mkdir(join(dir, 'assets'));
     await writeFile(join(dir, 'assets', 'app.js'), 'const x = 1;');
     await assert.rejects(bundleFiles(dir), /index\.html/);
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});
+
+test('闸门主逻辑：干净 fixture 不报，带技能 id 的 fixture 报', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'ts-player-gate-main-'));
+  try {
+    await mkdir(join(dir, 'assets'));
+    await writeFile(join(dir, 'index.html'), '<div id="root"></div>');
+    await writeFile(join(dir, 'assets', 'app.js'), 'const ok = 1;');
+    const clean = await checkBundle(dir);
+    assert.equal(clean.leaked, null);
+    assert.equal(clean.files.length, 2);
+
+    await writeFile(join(dir, 'assets', 'leak.js'), 'const id = "001-9-001";');
+    const dirty = await checkBundle(dir);
+    assert.equal(dirty.leaked, '001-9-001');
   } finally { await rm(dir, { recursive: true, force: true }); }
 });

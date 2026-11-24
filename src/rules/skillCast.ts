@@ -78,6 +78,11 @@ export function approveSkillCast(ok = true): string | null {
   if (c.step !== 'approval') return '这个技能已经同意过了';
   if (c.expiresAt && c.expiresAt <= Date.now()) { cancelSkillCast('玩家没在时限内回应，视为休眠'); return '已超时'; }
   if (!ok) { cancelSkillCast('玩家不同意'); return null; }
+  const actor = getWorld().party.find((p) => p.id === c.actorPcId);
+  if (!actor || !(actor.skills ?? []).includes(c.skillId)) {
+    cancelSkillCast('技能已经从角色身上撤掉');
+    return '技能已撤掉，发动取消';
+  }
   const next: SkillCast = { ...c, step: 'confirm', expiresAt: undefined };
   setCast(next);
   charge(next); // 玩家点头了，才算发动，这时扣 ME

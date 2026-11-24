@@ -3,5 +3,4 @@ import { createRoot } from 'react-dom/client';
 import { PlayerView } from './components/PlayerView';
 import './styles.css';
 
-document.title = '奇点之后 · 玩家端';
 createRoot(document.getElementById('root')!).render(<PlayerView />);
