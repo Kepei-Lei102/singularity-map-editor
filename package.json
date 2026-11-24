@@ -7,7 +7,7 @@
     "dev": "node scripts/open.mjs",
     "dev:host": "vite --mode host",
     "dev:player": "vite --mode player",
-    "build:split": "tsc --noEmit && vite build --mode host && vite build --mode player",
+    "build:split": "tsc --noEmit && vite build --mode host && vite build --mode player && node scripts/check-player-bundle.mjs",
     "preview:host": "vite preview --mode host",
     "preview:player": "vite preview --mode player",
     "test": "node --test scripts/*.test.mjs",
@@ -16,7 +16,8 @@
     "build:single": "tsc --noEmit && SINGLE=1 vite build --outDir release-build",
     "start": "node scripts/open.mjs",
     "check:secrets": "node scripts/扫涉密.mjs",
-    "server": "node scripts/serve.mjs"
+    "server": "node scripts/serve.mjs",
+    "check:player-bundle": "node scripts/check-player-bundle.mjs"
   },
   "dependencies": {
     "immer": "10.1.1",

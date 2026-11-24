@@ -1,0 +1,26 @@
+// 玩家包闸门的解析/判定单测：技能库 198 个 id、单/双引号都能取，动作同名不误报。
+import assert from 'node:assert/strict';
+import { test } from 'node:test';
+import { readFile } from 'node:fs/promises';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { skillIdsOf, findLeak } from './check-player-bundle.mjs';
+
+const root = fileURLToPath(new URL('..', import.meta.url));
+
+test('技能源里正好 198 个 id，含 Ian 手录', async () => {
+  const data = await readFile(join(root, 'src/rules/skills-data.ts'), 'utf8');
+  const skills = await readFile(join(root, 'src/rules/skills.ts'), 'utf8');
+  const ids = skillIdsOf([data, skills]);
+  assert.equal(ids.length, 198);
+  assert.equal(new Set(ids).size, 198);
+  assert.ok(ids.includes('001-9-001'));
+  assert.ok(ids.includes('037-9-101'));
+});
+
+test('闸门按 id 抓泄漏，不按动作名误报', () => {
+  const ids = ['001-9-001', '037-9-101'];
+  assert.equal(findLeak(['const code = "001-9-001"'], ids), '001-9-001');
+  assert.equal(findLeak(['const name = "威吓"'], ids), null);
+  assert.equal(findLeak(['const name = "001-9-001"', 'const other = "037-9-101"'], ids), '001-9-001');
+});
