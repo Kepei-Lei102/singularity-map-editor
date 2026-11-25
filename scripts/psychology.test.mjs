@@ -64,7 +64,10 @@ test('观察者各记各的：不知道 1D4，知道 1D8', () => {
   assert.match(api.getWorld().events.at(-1).note, /1D4 ME/);
 
   s = setup({ known: true, targetMe: 10, roller: () => 8 });
-  assert.equal(api.trialPsychUtterance(s.u.id, '38', true, { roller: s.roll }), null);
+  const sides8 = [];
+  const roll8 = (n) => { sides8.push(n); return 8; };
+  assert.equal(api.trialPsychUtterance(s.u.id, '38', true, { roller: roll8 }), null);
+  assert.deepEqual(sides8, [8], '知道弱点时必须真的掷 1D8');
   tok = api.getWorld().maps[0].tokens.find((x) => x.id === 'tb');
   assert.equal(tok.me, 2, '知道弱点打 1D8');
   assert.match(api.getUI().trial.msg, /已知弱点 1D8/);
@@ -86,7 +89,9 @@ test('目标没有心理弱点也走普通 ME 伤害 1D4，不冒充真伤', () 
   assert.equal(api.trialPsychUtterance(s.u.id, '38', true, { roller: s.roll }), null);
   const tok = api.getWorld().maps[0].tokens.find((x) => x.id === 'tb');
   assert.equal(tok.me, 6);
-  assert.match(api.getUI().trial.msg, /未知弱点 1D4/);
+  assert.match(api.getUI().trial.msg, /普通 ME 1D4/);
+  assert.doesNotMatch(api.getUI().trial.msg, /未知弱点/);
+  assert.match(api.getWorld().events.at(-1).note, /普通 1D4 ME/);
 });
 
 test('心理真伤只挂在已有动作上；不新增动作库条目', () => {
@@ -168,8 +173,8 @@ test('旧档迁移：旧 false 不迁成有弱点；true → 有弱点 + 全队�
   w.maps = [m];
   w.version = 1;
   api.migrateWorld(w);
-  const t = w.maps[0].tokens[0];
-  const f = w.maps[0].tokens[1];
+  const t = w.maps[0].tokens.find((x) => x.id === 'tb');
+  const f = w.maps[0].tokens.find((x) => x.id === 'tc');
   assert.equal(t.weakness.psychological, true);
   assert.equal(t.weaknessKnownBy.a.psychological, true);
   assert.equal(f.weakness.psychological, false);
@@ -232,6 +237,7 @@ test('NPC 的 ME 归零被驱逐后，恢复到 1 点也自动解除', () => {
   const s = setup({ known: true, targetMe: 5, roller: () => 8 });
   assert.equal(api.trialPsychUtterance(s.u.id, '38', true, { roller: () => 8 }), null);
   let tok = api.getWorld().maps[0].tokens.find((x) => x.id === 'tb');
+  assert.equal(tok.me, 0);
   assert.equal(tok.status.label, '被驱逐');
   api.update((d) => { d.maps[0].tokens.find((x) => x.id === 'tb').me = 1; });
   tok = api.getWorld().maps[0].tokens.find((x) => x.id === 'tb');
@@ -282,6 +288,36 @@ test('同一句话只接一次；战斗中行动点用掉后不能再接', () =>
   api.say('第二句。', 'tb');
   const u2 = api.getWorld().utterances.at(-1);
   assert.match(api.trialPsychUtterance(u2.id, '149', true), /行动点已经用掉了/);
+});
+
+test('发起者被暂停时不能结算心理动作', () => {
+  const s = setup({ known: true, targetMe: 10, roller: () => 8 });
+  api.setUI({ trial: { ...api.getUI().trial, players: [{ ...api.getUI().trial.players[0], paused: true }] } });
+  assert.match(api.trialPsychUtterance(s.u.id, '38', true), /被暂停/);
+  const tok = api.getWorld().maps[0].tokens.find((x) => x.id === 'tb');
+  assert.equal(tok.me, 10);
+  assert.equal(api.getWorld().utterances.find((x) => x.id === s.u.id).resolution ?? null, null);
+});
+
+test('目标 blocksAction 不拦嘴炮（和攻击口径一致），文档写明', () => {
+  const s = setup({ known: true, targetMe: 10, targetStatus: { label: '眩晕', blocksAction: true, skipTurns: true }, roller: () => 8 });
+  assert.equal(api.trialPsychUtterance(s.u.id, '38', true, { roller: () => 8 }), null);
+  const tok = api.getWorld().maps[0].tokens.find((x) => x.id === 'tb');
+  assert.equal(tok.me, 2);
+  assert.equal(tok.status.label, '眩晕');
+});
+
+test('v4 在 migrateWorld/replaceWorld 被拒绝，不静默降成 v3', () => {
+  const w = api.emptyWorld(); w.version = 4;
+  assert.throws(() => api.migrateWorld(w), /工程版本/);
+  const w2 = api.emptyWorld(); w2.version = 4;
+  assert.throws(() => api.replaceWorld(w2), /工程版本/);
+});
+
+test('schema 接受真实 v1 结构：没有 fineCells 也能给 CLI 搬运', () => {
+  const w = api.emptyWorld(); w.version = 1; delete w.maps[0].fineCells;
+  assert.doesNotThrow(() => api.checkWorld(w));
+  assert.throws(() => { const bad = api.emptyWorld(); bad.version = 4; api.checkWorld(bad); }, /version/);
 });
 
 test('玩家载荷不泄露别人知道的心理弱点', () => {

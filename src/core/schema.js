@@ -544,7 +544,12 @@ export function checkWorld(w, migrated = false) {
     }
     const n = m.width * m.height;
     strings(m.cells, `${at}.cells`, n);
-    strings(m.fineCells, `${at}.fineCells`, n * 9);
+    if (w.version === 1) {
+      // v1 没有细分子格；CLI 只搬运、不迁移，这里要让它能过结构校验。
+      if (m.fineCells !== undefined) strings(m.fineCells, `${at}.fineCells`, n * 9);
+    } else {
+      strings(m.fineCells, `${at}.fineCells`, n * 9);
+    }
     if (m.fineMaterials !== undefined) for (const [key, value] of Object.entries(obj(m.fineMaterials, `${at}.fineMaterials`))) { int(+key, `${at}.fineMaterials key`, 0, n * 9 - 1); str(value, `${at}.fineMaterials value`); }
     checkArchitecture(m);
     if (m.architectureFragments !== undefined) fragments(m.architectureFragments, `${at}.architectureFragments`);

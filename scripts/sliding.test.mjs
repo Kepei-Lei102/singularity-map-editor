@@ -742,6 +742,16 @@ test('native geometry sync contains only anonymous clipped fragments without hid
   assert.ok(!JSON.stringify(payload).includes('wallId')); assert.ok(!JSON.stringify(payload).includes('GM-only'));
   assert.ok(payload.architectureFragments.every(r => Object.keys(r).sort().join(',') === 'h,material,w,x,y'));
 });
+test('JS project reader accepts real v1 without fineCells; CLI only transports, browser migrates', async () => {
+  const { writeFile, mkdir } = await import('node:fs/promises'); const { readProject } = await import('./tsmap.mjs');
+  const dir = join(temp, 'v1-no-fine'); await mkdir(dir); const w = api.emptyWorld();
+  w.version = 1; delete w.maps[0].fineCells;
+  await writeFile(join(dir, 'world.json'), JSON.stringify(w)); const result = await readProject(dir);
+  assert.equal(result.world.version, 1);
+  assert.equal(result.world.maps[0].fineCells, undefined);
+  api.checkWorld(result.world);
+});
+
 test('JS project reader migrates legacy architecture for command-line consumers', async () => {
   const { writeFile, mkdir } = await import('node:fs/promises'); const { readProject } = await import('./tsmap.mjs');
   const dir = join(temp, 'legacy'); await mkdir(dir); const { world } = fineFixture();

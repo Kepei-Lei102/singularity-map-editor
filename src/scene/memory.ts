@@ -299,6 +299,10 @@ export function syncMemory(d: Draft<World>, plan?: VisionPlan) {
 /** 旧存档（只有 0/1 迷雾）补上记忆字段。 */
 export function migrateWorld(w: World): World {
   const sourceVersion = (w as { version?: unknown }).version;
+  // 未来版本不能被这个编辑器静默降成 3；parseWorld 有门，但 load/replaceWorld 也要有。
+  if (sourceVersion !== undefined && (typeof sourceVersion !== 'number' || sourceVersion > 3)) {
+    throw new Error(`工程版本是 ${JSON.stringify(sourceVersion)}，这个编辑器只认 1 / 2 / 3`);
+  }
   // v3 起 weakness.psychological 表示「客观存在」，weaknessKnownBy 按观察者记。
   // v1/v2（以及没写 version 的旧档）的 psychological=true 仍是旧的「队里已知」，需要迁成全队 knownBy。
   const legacyWeakness = typeof sourceVersion !== 'number' || sourceVersion < 3;

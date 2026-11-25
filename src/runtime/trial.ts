@@ -1211,6 +1211,7 @@ export function trialPsychUtterance(
   if (!actor) return '说话的人不在场';
   const pl = t.players.find((x) => x.tokenId === actor.id);
   if (!pl || pl.pcId !== u.pcId) return '说话的人不在试玩队伍里';
+  if (pl.paused) return `${pl.name} 被暂停了，不能接心理动作`;
   if (!u.targetTokenId) return '这句话没有指向目标；先让玩家对某个人说';
   const target = m.tokens.find((x) => x.id === u.targetTokenId);
   if (!target) return '目标不在了';
@@ -1228,6 +1229,7 @@ export function trialPsychUtterance(
   const name = psychActionName(actionId);
   const actionName = `【${name}】`;
   const observerId = pl.pcId;
+  const hasWeakness = !!target.weakness?.psychological;
   const known = knowsPsychologicalWeakness(target, observerId);
   const roller = opts.roller ?? randomDie;
   const damage = hit ? rollPsychDamage(known, roller) : 0;
@@ -1259,11 +1261,17 @@ export function trialPsychUtterance(
         deltas.push({ kind: 'me', id: dt.pcId ?? dt.id, name: dt.name, from: before, to: after! });
       }
       const landed = after! < before;
-      const formula = hit && landed ? (known ? '已知弱点 1D8' : '未知弱点 1D4') : '';
+      const formula = hit && landed
+        ? (hasWeakness ? (known ? '已知弱点 1D8' : '未知弱点 1D4') : '普通 ME 1D4')
+        : '';
       msg = `${actionName}${hit ? '命中' : '落空'}：${dt.name} ME ${before}${after === before ? '' : `→${after}`}${formula ? `（${formula}）` : ''}`;
       if (!hit) ledgerNote = '落空';
       else if (before === 0) ledgerNote = `${actionName}命中：目标已无 ME，未再扣`;
-      else if (after! < before) ledgerNote = known ? `${actionName}命中：心理弱点已知，1D8 ME` : `${actionName}命中：心理弱点未知，1D4 ME`;
+      else if (after! < before) {
+        ledgerNote = hasWeakness
+          ? (known ? `${actionName}命中：心理弱点已知，1D8 ME` : `${actionName}命中：心理弱点未知，1D4 ME`)
+          : `${actionName}命中：目标没有心理弱点，普通 1D4 ME`;
+      }
       else ledgerNote = `${actionName}命中：没有扣到 ME`;
       if (after === 0 && before > 0 && !dt.corpse && !dt.down && dt.status?.label !== DYING_LABEL) {
         const from = dt.status?.label ?? null;
