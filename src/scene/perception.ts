@@ -2,11 +2,11 @@ import { objectEnabled } from '../core/objectData.js';
 import { architectureBlocksSight, architectureGeometry, isArchitectureObject, tokenPosition, isSubdivided } from './architecture';
 import { produce } from 'immer';
 import type { GameMap, MapObject, Token, VisionLayer, World } from '../core/types';
-import { partyVisionOf, sightCacheFor, visiblePoint, viewerOf, type SightCache, type SightCtx, type Viewer } from './sight';
+import { partyVisionOf, sightCacheFor, visiblePoint, viewerOf, VISION_RADIUS_CELLS, type SightCache, type SightCtx, type Viewer } from './sight';
 import { sightCtxFor } from './sightIndex';
 import { diffWorld, isManualFog, markManualFog, mapVisionChanged, partyVisionChanged, tokensVisionChanged } from './dirty';
 import { planVision, type MapScope, type VisionPlan } from './visionPlan';
-import { cloneLayer, emptyVision, mergeLayers, visionKey } from './vision';
+import { cloneLayer, emptyVision, mergeLayers, mergeLayersScoped, mergeLayersScopedInto, visionKey } from './vision';
 import { cellLine, gridDist } from '../core/util';
 
 // 视野。尺度：1 格 = 0.75 米。
@@ -95,7 +95,7 @@ const step = (f: number, seeing: number) => (seeing ? 1 : f === 1 ? 2 : f);
  * 各自独立：每个玩家角色一份（map.views），只算他自己的眼睛；地图上那份是所有人的并集，给主持人看。
  */
 export function withVision(next: World, prev: World, opts: { full?: boolean; plan?: VisionPlan; onManualPending?: (mapId: string) => void } = {}): World {
-  // 只有「纯棋子移动」才收窄到圆盘；结构变化和世界级変化一律整图重算。
+  // 棋子移动按旧/新圆盘收窄；结构视野改动按观察者半径收窄；手动雾、开关雾、增删棋子、世界级变化仍整图。
   const plan = opts.full ? null : opts.plan ?? planVision(next, diffWorld(prev, next));
   const scopeOf = (mapId: string): MapScope | undefined => {
     if (!plan || plan.full) return undefined; // 整图
@@ -135,13 +135,25 @@ export function withVision(next: World, prev: World, opts: { full?: boolean; pla
       const apply = (L: VisionLayer, members: Set<string>) => {
         if (scope && scope.size === 0) return; // 这张图没变
         const mine = src.tokens.filter(t => t.pcId && members.has(t.pcId));
+        // 结构视野收窄时，这一组没有任何棋子靠近脏区：它不可能因这次改动变化，别白算一遍。
+        // 换 pcId/增减棋子/移动不在这个快路径里（会清掉旧视野），所以只对 viewerScoped 生效。
+        const tokensChanged = !!before && tokensVisionChanged(before.tokens, src.tokens);
+        if (plan?.viewerScoped && !tokensChanged && scope && !mine.some(t => {
+          for (const i of scope) {
+            const x = i % src.width, y = Math.floor(i / src.width);
+            if (gridDist(x - Math.floor(t.x), y - Math.floor(t.y)) <= VISION_RADIUS_CELLS + 1) return true;
+          }
+          return false;
+        })) return;
         const cells = scope ? [...scope] : undefined;
         const vis = detailedVisionRulebook(next, src, mine, sightCtx, cells);
         if (cells) for (const i of cells) L.fog[i] = step(L.fog[i], vis[i]);
         else L.fog = L.fog.map((f, i) => step(f, vis[i]));
       };
-      if (prev.visionMode === 'shared' && next.visionMode !== 'shared' && before)
-        for (const p of d.party) m.views[p.id] = cloneLayer(before);
+      // 分组/共享都会共用一份视野层；切到会逐人写视图的模式前，先给每人补真副本。
+      if (before && prev.visionMode !== next.visionMode && next.visionMode !== 'shared'
+        && (prev.visionMode === 'shared' || prev.visionMode === 'grouped'))
+        for (const p of d.party) m.views[p.id] = cloneLayer(m.views[p.id] ?? before.views?.[p.id] ?? emptyVision(m.width * m.height));
       if (next.visionMode === 'shared') {
         if (prev.visionMode !== 'shared') Object.assign(m, mergeLayers(src, d.party.map(p => m.views[p.id])));
         if (m.autoFog && (otherDirty || opts.full)) apply(m, ids);
@@ -149,17 +161,27 @@ export function withVision(next: World, prev: World, opts: { full?: boolean; pla
         // 切到「各自独立」时上面的 cloneLayer(before) 会补上真正的副本。
         for (const p of d.party) m.views[p.id] = { fog: m.fog, seen: m.seen };
       } else {
+        // 地形-only 且没有建筑片时，个体/分组的聚合层也只重算脏区；
+        // 否则 4 个玩家每次改一格地形都要为聚合扫 36 万子格。
+        const terrainOnly = !!plan?.terrainOnlyMaps?.has(src.id);
+        const noArchitecture = !src.architectureFragments?.length && !src.architecture?.walls?.length && !src.architecture?.doors?.length && !src.seen.architecture?.length;
+        const scopedMerge = terrainOnly && noArchitecture && scope;
         const groups = new Map<string, string[]>();
         for (const p of d.party) { const key = visionKey(next, p.id); groups.set(key, [...groups.get(key) ?? [], p.id]); }
         for (const members of groups.values()) {
           // 单人组直接在自己的 draft 上算，不用先 clone 一份再 clone 回来；
           // 多人组 merge 出新层后，第一个成员共用它，其余成员才复制。
-          const L = members.length === 1 ? m.views[members[0]] : mergeLayers(src, members.map(id => m.views[id]));
+          const firstView = m.views[members[0]];
+          const sameView = members.every((id) => m.views[id] === firstView);
+          const L = members.length === 1 || sameView ? firstView
+            : scopedMerge ? mergeLayersScoped(firstView, src, members.map(id => m.views[id]), scope)
+            : mergeLayers(src, members.map(id => m.views[id]));
           if (m.autoFog && (otherDirty || opts.full)) apply(L, new Set(members));
-          m.views[members[0]] = L;
-          for (let k = 1; k < members.length; k++) m.views[members[k]] = cloneLayer(L);
+          // 同组看到的东西完全相同，直接共用一份层；切模式时上面会补真副本。
+          for (const id of members) m.views[id] = L;
         }
-        Object.assign(m, mergeLayers(src, d.party.map(p => m.views[p.id])));
+        if (scopedMerge) mergeLayersScopedInto(m, src, d.party.map(p => m.views[p.id]), scope);
+        else Object.assign(m, mergeLayers(src, d.party.map(p => m.views[p.id])));
       }
     }
   });

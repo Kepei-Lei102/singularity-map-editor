@@ -14,6 +14,21 @@ export interface Dirty {
   visionStructure?: boolean;
   /** 换图、首次同步、导入：整份重算。 */
   full: boolean;
+  /**
+   * 结构视野脏（地形/建筑物件/D100），但当前图开着自动雾、没有手动雾、
+   * 也没有增删棋子：影响范围只可能在每个 PC 棋子视野半径内，可收窄重算。
+   */
+  viewerScope?: boolean;
+  /** 建筑几何（含建筑型物件状态）变了：记忆建筑层不能按脏区近似，必须整层重排。 */
+  architectureChanged?: boolean;
+  /** 只改地形（cells/fineCells）时，被改到的主格。用来把记忆同步从整片视野缩到真脏格。 */
+  changedTerrainCells?: Set<number>;
+  /** 这次结构改动只有地形，没有物件/建筑/D100：记忆可以按真脏格收窄。 */
+  terrainOnly?: boolean;
+  /** 只改材质（materialCells/fineMaterials）时，被改到的主格。 */
+  changedMaterialCells?: Set<number>;
+  /** 这次结构改动只有材质：记忆可以按真脏格收窄。 */
+  materialOnly?: boolean;
 }
 
 const samePoint = (a?: Point | null, b?: Point | null) =>
@@ -90,6 +105,43 @@ function mapStructureChanged(a: GameMap, b: GameMap): boolean {
     || a.groups !== b.groups || a.fog !== b.fog || a.views !== b.views || a.autoFog !== b.autoFog;
 }
 
+/** cells/fineCells 里真正变了的主格。只在结构改动时调用，引用没变直接跳过。 */
+function terrainCellsChanged(a: GameMap, b: GameMap): Set<number> {
+  const out = new Set<number>();
+  if (a.cells !== b.cells) {
+    const n = Math.min(a.cells.length, b.cells.length);
+    for (let i = 0; i < n; i++) if (a.cells[i] !== b.cells[i]) out.add(i);
+  }
+  if (a.fineCells !== b.fineCells) {
+    const w3 = a.width * 3;
+    const n = Math.min(a.fineCells.length, b.fineCells.length);
+    for (let key = 0; key < n; key++) if (a.fineCells[key] !== b.fineCells[key]) {
+      const x = key % w3, y = Math.floor(key / w3);
+      out.add(Math.floor(y / 3) * a.width + Math.floor(x / 3));
+    }
+  }
+  return out;
+}
+
+
+/** materialCells/fineMaterials 里真正变了的主格。 */
+function materialCellsChanged(a: GameMap, b: GameMap): Set<number> {
+  const out = new Set<number>();
+  const w3 = a.width * 3;
+  const diffMap = (x?: Record<number, string>, y?: Record<number, string>, sub = false) => {
+    const keys = new Set([...Object.keys(x ?? {}), ...Object.keys(y ?? {})]);
+    for (const raw of keys) {
+      const key = +raw;
+      if ((x?.[key] ?? '') === (y?.[key] ?? '')) continue;
+      if (sub) { const sx = key % w3, sy = Math.floor(key / w3); out.add(Math.floor(sy / 3) * a.width + Math.floor(sx / 3)); }
+      else out.add(key);
+    }
+  };
+  diffMap(a.materialCells, b.materialCells);
+  diffMap(a.fineMaterials, b.fineMaterials, true);
+  return out;
+}
+
 /** prev → next 的脏集。地图按 id 对齐，新增的地图标 full。 */
 export function diffWorld(prev: World, next: World): Dirty[] {
   // 这几个一换，所有地图的视野都可能变：地形系数、队员身份/视野组/模式。
@@ -111,8 +163,33 @@ export function diffWorld(prev: World, next: World): Dirty[] {
     // 自动迷雾从关到开：之前是手动态，地图 fog 没被自动规则算过，这次必须整图补上。
     const autoFogOn = !before.autoFog && m.autoFog;
     const structure = added || isManualFog(before) || autoFogOn || mapStructureChanged(before, m);
-    const visionStructure = added || isManualFog(before) || autoFogOn || mapVisionChanged(before, m);
-    out.push({ mapId: m.id, moved, structure, visionStructure, full: false });
+    const sightChanged = mapVisionChanged(before, m);
+    const objectsChanged = objectsVisionChanged(before.objects, m.objects);
+    const terrainChanged = before.cells !== m.cells || before.fineCells !== m.fineCells;
+    const changedTerrainCells = terrainChanged ? terrainCellsChanged(before, m) : undefined;
+    // 记忆再收窄只在地形数组单独变化时成立；材质/贴图组/高度/房间/物件/建筑/D100
+    // 任何一项同时动，脏区外的记忆也可能要改，仍走原来的视野圆盘。
+    const terrainOnly = terrainChanged && !objectsChanged &&
+      before.architecture === m.architecture && before.d100 === m.d100 && before.materialCells === m.materialCells &&
+      before.fineMaterials === m.fineMaterials && before.groups === m.groups && before.heights === m.heights &&
+      before.rooms === m.rooms && before.roomCells === m.roomCells && before.fog === m.fog && before.views === m.views &&
+      before.tokens === m.tokens && before.architectureFragments === m.architectureFragments;
+    const materialChanged = before.materialCells !== m.materialCells || before.fineMaterials !== m.fineMaterials;
+    const changedMaterialCells = materialChanged ? materialCellsChanged(before, m) : undefined;
+    const materialOnly = materialChanged && !terrainChanged && !objectsChanged &&
+      before.architecture === m.architecture && before.d100 === m.d100 && before.groups === m.groups &&
+      before.heights === m.heights && before.rooms === m.rooms && before.roomCells === m.roomCells &&
+      before.fog === m.fog && before.views === m.views && before.autoFog === m.autoFog &&
+      before.tokens === m.tokens && before.architectureFragments === m.architectureFragments;
+    const visionStructure = added || isManualFog(before) || autoFogOn || sightChanged;
+    // 视野半径是硬上限：结构变了，也只有观察者半径内的格子可能换可见性。
+    // 手动雾、autoFog 关→开、增删棋子、改地图尺寸都不做这个近似，仍走整图。
+    // 同一次 update 里手动改了雾：旧语义是整图接管，不能只圈观察者半径。
+    const manualChanged = before.fog !== m.fog || before.views !== m.views;
+    const viewerScope = !!m.autoFog && sightChanged && !added && !isManualFog(before)
+      && !autoFogOn && !manualChanged && before.width === m.width && before.height === m.height;
+    const architectureChanged = before.architecture !== m.architecture || before.objects !== m.objects;
+    out.push({ mapId: m.id, moved, structure, visionStructure, full: false, viewerScope, architectureChanged, changedTerrainCells, terrainOnly, changedMaterialCells, materialOnly });
   }
   return out;
 }

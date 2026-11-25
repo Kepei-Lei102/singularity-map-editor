@@ -12,7 +12,7 @@ const temp = await mkdtemp(join(tmpdir(), 'ts-ui-test-'));
 const bundle = join(temp, 'editor.cjs');
 // Exercise the real pointer handlers without a DOM. Only React hooks and canvas are replaced.
 await build({
-  stdin: { contents: `export * from './src/core/defaults'; export * from './src/core/store'; export * from './src/scene/render'; export * from './src/components/Sidebar'; export * from './src/components/toolGroups'; export * from './src/components/MapCanvas'; export * from './src/runtime/actions';`, resolveDir: root },
+  stdin: { contents: `export * from './src/core/defaults'; export * from './src/core/store'; export * from './src/scene/render'; export * from './src/components/Sidebar'; export * from './src/components/toolGroups'; export * from './src/components/MapCanvas'; export * from './src/runtime/actions'; export { syncMemory } from './src/scene/memory'; export { produce } from 'immer';`, resolveDir: root },
   outfile: bundle, bundle: true, platform: 'node', format: 'cjs', logLevel: 'silent',
   plugins: [{ name: 'hooks', setup(b) {
     b.onResolve({ filter: /^react\/jsx-runtime$/ }, () => ({ path: 'jsx', namespace: 'test' }));
@@ -27,6 +27,8 @@ await build({
       export const useEffect = () => {};
       export const useLayoutEffect = () => {};
       export const useSyncExternalStore = (_, get) => get();
+      export const useMemo = (fn) => fn();
+      export const memo = (component) => component;
     ` }));
   } }],
 });
@@ -62,7 +64,7 @@ test('pan over furniture, zone border/interior, token and empty space changes on
     const pick = { mapId: map.id, x: 0, y: 0 };
     api.setUI({ mode, tool: 'pan', selection, pick, trial: null, views: { [map.id]: { zoom: 1, panX: 10, panY: 20 } } });
     globalThis.testRefs = [{}, { setPointerCapture() {}, getBoundingClientRect: () => ({ left: 0, top: 0 }) }];
-    const tree = api.MapCanvas({ world: api.getWorld(), map: api.getWorld().maps[0], mode });
+    const tree = api.MapCanvasImpl({ world: api.getWorld(), map: api.getWorld().maps[0], mode });
     const canvas = tree.props.children[0].props;
     assert.equal(canvas.style.cursor, 'grab');
     const before = api.getWorld();
@@ -227,7 +229,7 @@ function heightFixture(w = 10, h = 10) {
 
 function canvasHandlers() {
   globalThis.testRefs = [{}, { setPointerCapture() {}, getBoundingClientRect: () => ({ left: 0, top: 0 }) }];
-  const tree = api.MapCanvas({ world: api.getWorld(), map: api.getWorld().maps[0], mode: 'edit' });
+  const tree = api.MapCanvasImpl({ world: api.getWorld(), map: api.getWorld().maps[0], mode: 'edit' });
   return tree.props.children[0].props;
 }
 
@@ -452,6 +454,185 @@ test('store：autoFog=true 的棋子移动仍同步记忆', () => {
     assert.ok(api.getWorld().observationSeq > seq, `${mode} 开着自动雾移动必须跑 syncMemory`);
     assert.notEqual(api.getWorld().maps[0].fog, fog, `${mode} 开着自动雾移动必须重新写雾`);
   }
+});
+
+
+
+test('MapCanvas memo：世界名/浅拷贝不触发，相关字段变化才触发', () => {
+  const { world, map } = fixture();
+  const base = { world, map, mode: 'edit' };
+  assert.equal(api.sameCanvasInputs(base, { ...base, world: { ...world, name: '改个名' } }), true);
+  assert.equal(api.sameCanvasInputs(base, { ...base, mode: 'prep' }), false);
+  assert.equal(api.sameCanvasInputs(base, { ...base, world: { ...world, party: [...world.party] } }), false);
+  assert.equal(api.sameCanvasInputs(base, { ...base, map: { ...map } }), false);
+});
+
+test('store：批量地形编辑拖动期间先欠视野/记忆，松手补一次全量', () => {
+  const map = autoFogWorld(true);
+  const base = api.getWorld();
+  const seq = base.observationSeq, fog = base.maps[0].fog;
+  api.beginBatch();
+  api.paintTerrainCells(map.id, [[6, 5]], 'wall');
+  api.paintTerrainCells(map.id, [[7, 5]], 'wall');
+  assert.equal(api.getWorld().maps[0].cells[5 * 50 + 7], 'wall', '地形应该已经写入');
+  assert.equal(api.getWorld().observationSeq, seq, '拖动中不跑整图记忆同步');
+  assert.equal(api.getWorld().maps[0].fog, fog, '拖动中不重写整图视野');
+  api.endBatch();
+  assert.equal(api.getWorld().observationSeq, seq + 1, '松手只补算一次');
+  assert.notEqual(api.getWorld().maps[0].fog, fog, '松手后视野应重新落盘');
+});
+
+
+test('store：地形快速路径仍是一步撤销，原样再点不记步', () => {
+  const map = autoFogWorld(true);
+  const before = api.getWorld();
+  api.paintTerrainCells(map.id, [[6, 5]], 'wall');
+  assert.notEqual(api.getWorld(), before, '改地形要落盘');
+  api.undo();
+  assert.equal(api.getWorld(), before, '一步撤销回到改前');
+  api.paintTerrainCells(map.id, [[6, 5]], 'floor');
+  assert.equal(api.getWorld().maps[0].cells[5 * 50 + 6], 'floor');
+  api.paintTerrainCells(map.id, [[6, 5]], 'floor');
+  assert.equal(api.getWorld().maps[0].cells[5 * 50 + 6], 'floor', '原样再点一次仍对');
+});
+
+
+test('store：批量擦墙松手后，新看见的物件/记忆与全量同步一致', () => {
+  const world = api.emptyWorld();
+  const map = api.newMap('批量记忆', '现实', 0, 60, 40, 'floor', false);
+  map.autoFog = true;
+  map.tokens = [{ id: 't1', pcId: 'a', name: '甲', color: '', x: 20, y: 20 }];
+  map.objects = [api.newObject('object', 30, 20, 2, 2)];
+  for (let y = 15; y <= 25; y++) {
+    map.cells[y * map.width + 26] = 'wall';
+    for (let sy = 0; sy < 3; sy++) for (let sx = 0; sx < 3; sx++) map.fineCells[(y * 3 + sy) * map.width * 3 + 26 * 3 + sx] = 'wall';
+  }
+  world.party = [{ id: 'a', name: '甲', sex: '男', heightCm: 173, color: '' }];
+  world.maps = [map];
+  api.replaceWorld(world);
+  api.beginBatch();
+  for (let y = 15; y <= 25; y++) api.paintTerrainCells(map.id, [[26, y]], 'floor');
+  api.endBatch();
+  const out = api.getWorld();
+  const full = api.produce(out, (d) => api.syncMemory(d));
+  const seenIds = (w) => w.maps[0].seen.objects.map((o) => o.id);
+  assert.ok(seenIds(out).length > 0, '松手后柜子应该进入记忆');
+  assert.deepEqual(seenIds(out), seenIds(full), 'seen.objects 应与全量一致');
+  const keys = (obj) => Object.keys(obj ?? {}).sort().join(',');
+  assert.equal(keys(out.maps[0].seen.observed), keys(full.maps[0].seen.observed), 'observed 键应与全量一致');
+  assert.deepEqual(out.maps[0].seen.cellRevs.map(Boolean), full.maps[0].seen.cellRevs.map(Boolean), 'cellRevs 有无应与全量一致');
+});
+
+
+test('store：批量拖动欠视野时 undo/redo 不会把未补世界写进历史', () => {
+  for (const order of ['undo-redo', 'undo-end-redo']) {
+    const map = autoFogWorld(true);
+    const initial = JSON.parse(JSON.stringify(api.getWorld()));
+    api.paintTerrainCells(map.id, [[6, 5]], 'wall');
+    const expectedFog = api.getWorld().maps[0].fog.slice();
+    api.replaceWorld(initial);
+    const map2 = api.getWorld().maps[0];
+    api.beginBatch();
+    api.paintTerrainCells(map2.id, [[6, 5]], 'wall');
+    if (order === 'undo-redo') {
+      api.undo();
+      api.redo();
+      api.endBatch();
+    } else {
+      api.undo();
+      api.endBatch();
+      api.redo();
+    }
+    assert.deepEqual(api.getWorld().maps[0].fog, expectedFog, `${order}：redo 后雾应等于非批量结果`);
+  }
+});
+
+test('store：批量地形编辑仍只占一步撤销', () => {
+  autoFogWorld(true);
+  const before = api.getWorld();
+  api.beginBatch();
+  api.update((d) => { d.maps[0].cells[0] = 'wall'; });
+  api.update((d) => { d.maps[0].cells[1] = 'wall'; });
+  api.endBatch();
+  assert.notEqual(api.getWorld().maps[0].cells[1], before.maps[0].cells[1]);
+  api.undo();
+  assert.deepEqual(api.getWorld().maps[0].cells, before.maps[0].cells);
+});
+
+
+test('store：批量材质拖动也延后记忆，松手补一次', () => {
+  const map = autoFogWorld(true);
+  const seq = api.getWorld().observationSeq;
+  api.beginBatch();
+  api.paintMaterialCells(map.id, [[0, 0]], 'stone');
+  api.paintMaterialCells(map.id, [[1, 0]], 'stone');
+  assert.equal(api.getWorld().observationSeq, seq, '批量材质拖动中不该扫整张记忆');
+  api.endBatch();
+  assert.equal(api.getWorld().observationSeq, seq + 1, '松手补一次');
+});
+
+test('store：批量中撤销后松手不再多算视野', () => {
+  autoFogWorld(true);
+  const seq = api.getWorld().observationSeq;
+  api.beginBatch();
+  api.update((d) => { d.maps[0].cells[0] = 'wall'; });
+  api.update((d) => { d.maps[0].cells[1] = 'wall'; });
+  api.undo();
+  api.undo();
+  assert.equal(api.getWorld().observationSeq, seq);
+  api.endBatch();
+  assert.equal(api.getWorld().observationSeq, seq, '撤销后的快照自带视野，补算不该再跑');
+});
+
+test('store：批量里先地形后手动雾，松手后仍保留手动雾', () => {
+  const idx = 0;
+  autoFogWorld(true);
+  api.update((d) => { d.maps[0].cells[0] = 'wall'; });
+  api.update((d) => { d.maps[0].fog[idx] = 1; });
+  assert.equal(api.getWorld().maps[0].fog[idx], 1, '非批量顺序应保留手动雾');
+
+  autoFogWorld(true);
+  api.beginBatch();
+  api.update((d) => { d.maps[0].cells[0] = 'wall'; });
+  api.update((d) => { d.maps[0].fog[idx] = 1; });
+  api.endBatch();
+  assert.equal(api.getWorld().maps[0].fog[idx], 1, '批量收尾应与非批量顺序一致');
+});
+
+
+test('store：手动雾和地形同一批/同一 update，圆盘外雾按整图接管', () => {
+  const idx = 30 * 50 + 40;
+  let map = autoFogWorld(true);
+  api.paintFog(map.id, [[40, 30]], 'fogReveal');
+  api.paintTerrainCells(map.id, [[0, 0]], 'wall');
+  assert.equal(api.getWorld().maps[0].fog[idx], 2, '非批量：雾→地形应收成灰');
+
+  map = autoFogWorld(true);
+  api.beginBatch();
+  api.paintFog(map.id, [[40, 30]], 'fogReveal');
+  api.paintTerrainCells(map.id, [[0, 0]], 'wall');
+  api.endBatch();
+  assert.equal(api.getWorld().maps[0].fog[idx], 2, '批量：雾→地形松手应收成灰');
+
+  map = autoFogWorld(true);
+  api.update((d) => {
+    const m = d.maps[0];
+    m.fog[idx] = 1;
+    m.cells[0] = 'wall';
+    for (let i = 0; i < 9; i++) m.fineCells[i] = 'wall';
+  });
+  assert.equal(api.getWorld().maps[0].fog[idx], 2, '同一 update：雾+地形应整图接管');
+});
+
+test('store：批量里的纯棋子移动仍即时同步记忆', () => {
+  autoFogWorld(true);
+  const seq = api.getWorld().observationSeq;
+  api.beginBatch();
+  api.update((d) => { d.maps[0].tokens[0].x += 1; });
+  assert.ok(api.getWorld().observationSeq > seq, '小脏集不该被批量延迟');
+  const after = api.getWorld().observationSeq;
+  api.endBatch();
+  assert.equal(api.getWorld().observationSeq, after, '松手不应重复补算');
 });
 
 test('store：只改 architectureFragments 不跑 syncMemory', () => {

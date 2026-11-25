@@ -2,7 +2,7 @@ import { effectiveLayer } from '../scene/vision';
 import { objectEnabled } from '../core/objectData.js';
 import { architectureWalls, architectureDoors, isArchitectureObject, characterPathClear, furnitureSweepBlocked, isSubdivided, tokenPosition, objectRect, anchorFromPoint } from '../scene/architecture';
 import { addArchitectureDoor, addArchitectureWall, eraseArchitecture, moveMapToken, paintFog, paintMaterialCells, paintMaterialSubcells, paintCellGroup, paintTerrainCells, paintTerrainSubcells, toggleArchitectureDoor, nudgeHeight } from '../runtime/actions';
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { GameMap, World } from '../core/types';
 import { CS, cellLine, uid } from '../core/util';
 import { beginBatch, canEditMap, endBatch, getUI, getWorld, setUI, toast, update, useUI, type Selection, type View } from '../core/store';
@@ -41,13 +41,26 @@ function fitView(map: GameMap, w: number, h: number): View {
   return { zoom, panX: (w - map.width * CS * zoom) / 2, panY: (h - map.height * CS * zoom) / 2 };
 }
 
-export function MapCanvas({ world, map, mode, playerNumbers = false, follow, viewer, onCellClick, cursor: cursorProp }: {
+export interface MapCanvasProps {
   world: World; map: GameMap; mode: Mode; playerNumbers?: boolean;
   follow?: string; // 镜头跟着这个棋子
   viewer?: string; // 玩家视角以谁的眼睛看
   onCellClick?: (x: number, y: number) => void; // 玩家视角下点格子（试玩时：放标记 / 点人切换）
   cursor?: string;
-}) {
+}
+
+/** 只比较真正影响画面的世界字段；世界名、日志、试玩 UI 等变化不该让画布重画。 */
+export function sameCanvasInputs(a: MapCanvasProps, b: MapCanvasProps): boolean {
+  if (a.map !== b.map || a.mode !== b.mode || a.playerNumbers !== b.playerNumbers
+    || a.follow !== b.follow || a.viewer !== b.viewer || a.cursor !== b.cursor || a.onCellClick !== b.onCellClick) return false;
+  const x = a.world, y = b.world;
+  return x.terrains === y.terrains && x.materials === y.materials && x.party === y.party
+    && x.labels === y.labels && x.connections === y.connections && x.npcs === y.npcs
+    && x.marks === y.marks && x.viewerId === y.viewerId && x.visionMode === y.visionMode
+    && x.visionGroups === y.visionGroups;
+}
+
+export function MapCanvasImpl({ world, map, mode, playerNumbers = false, follow, viewer, onCellClick, cursor: cursorProp }: MapCanvasProps) {
   const wrap = useRef<HTMLDivElement>(null);
   const canvas = useRef<HTMLCanvasElement>(null);
   const ui = useUI();
@@ -57,7 +70,9 @@ export function MapCanvas({ world, map, mode, playerNumbers = false, follow, vie
   const drag = useRef<Drag | null>(null);
   const space = useRef(false);
 
-  const view = ui.views[map.id] ?? (size.w ? fitView(map, size.w, size.h) : { zoom: 1, panX: 0, panY: 0 });
+  const fallbackView = useRef<View>({ zoom: 1, panX: 0, panY: 0 }).current;
+  const storedView = ui.views[map.id];
+  const view = useMemo(() => storedView ?? (size.w ? fitView(map, size.w, size.h) : fallbackView), [storedView, map, size.w, size.h]);
   const viewRef = useRef(view);
   viewRef.current = view;
   const setView = (v: View) => setUI((s) => ({ views: { ...s.views, [map.id]: v } }));
@@ -97,35 +112,51 @@ export function MapCanvas({ world, map, mode, playerNumbers = false, follow, vie
   }, [follow, size.w, map.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // 贴图是懒加载的：图片加载完通知一次，画布重画。
-  const [, setTexTick] = useState(0);
+  const [texTick, setTexTick] = useState(0);
   useEffect(() => subscribeTexture(() => setTexTick((n) => n + 1)), []);
 
   // 有标记时，每 10 秒重画一次（标记按真实时间变淡）
-  const [, setTick] = useState(0);
+  const [tick, setTick] = useState(0);
   const hasMarks = world.marks.some((k) => k.mapId === map.id);
+  const marks = useMemo(() => world.marks.filter((k) => k.mapId === map.id), [world.marks, map.id]);
   useEffect(() => {
     if (!hasMarks) return;
     const id = window.setInterval(() => setTick((n) => n + 1), 10000);
     return () => window.clearInterval(id);
   }, [hasMarks]);
 
-  // 绘制
+  // 画笔值只影响悬停/预览时的笔尖框；鼠标不在图上时改画笔不该整张重画。
+  const brushDep = hover || preview ? ui.brush : null;
+  // 绘制：只把真正影响画面的输入放进依赖；世界名、日志、无关 UI 变化不再整张重画。
+  // 同一帧里多次变化由 rAF 合并成一次，避免拖动时每来一个事件同步画一次。
   useEffect(() => {
     const c = canvas.current;
     if (!c || !size.w) return;
-    const dpr = window.devicePixelRatio || 1;
-    if (c.width !== size.w * dpr || c.height !== size.h * dpr) {
-      c.width = size.w * dpr;
-      c.height = size.h * dpr;
-    }
-    render(c.getContext('2d')!, size.w, size.h, dpr, world, map, view, {
-      mode, selection: mode === 'player' ? null : ui.selection, preview, hover, brush: ui.brush,
-      tool: ui.tool, pending: ui.pendingConn, showFog: ui.showFogInEdit, viewer,
-      numbers: mode === 'player' ? playerNumbers : ui.showNumbers, rulers: mode === 'player' ? true : ui.showRulers,
-      subgrid: ui.showSubgrid,
-      fineEdit: ui.fine,
-    });
-  });
+    let frame = 0;
+    const draw = () => {
+      frame = 0;
+      const dpr = window.devicePixelRatio || 1;
+      if (c.width !== size.w * dpr || c.height !== size.h * dpr) {
+        c.width = size.w * dpr;
+        c.height = size.h * dpr;
+      }
+      render(c.getContext('2d')!, size.w, size.h, dpr, world, map, view, {
+        mode, selection: mode === 'player' ? null : ui.selection, preview, hover, brush: ui.brush,
+        tool: ui.tool, pending: ui.pendingConn, showFog: ui.showFogInEdit, viewer,
+        numbers: mode === 'player' ? playerNumbers : ui.showNumbers, rulers: mode === 'player' ? true : ui.showRulers,
+        subgrid: ui.showSubgrid,
+        fineEdit: ui.fine,
+      });
+    };
+    frame = requestAnimationFrame(draw);
+    return () => { if (frame) cancelAnimationFrame(frame); };
+  }, [
+    map, view, size.w, size.h, mode, preview, hover,
+    ui.selection, brushDep, ui.tool, ui.pendingConn, ui.showFogInEdit, ui.showNumbers, ui.showRulers, ui.showSubgrid, ui.fine,
+    viewer, playerNumbers, texTick, tick, marks,
+    world.terrains, world.materials, world.party, world.labels, world.connections, world.npcs,
+    world.viewerId, world.visionMode, world.visionGroups,
+  ]);
 
   // 滚轮缩放（需要非 passive 监听）
   useEffect(() => {
@@ -555,3 +586,5 @@ export function MapCanvas({ world, map, mode, playerNumbers = false, follow, vie
     </div>
   );
 }
+
+export const MapCanvas = memo(MapCanvasImpl, sameCanvasInputs);

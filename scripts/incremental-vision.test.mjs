@@ -75,12 +75,23 @@ test('diffWorld：只挪一格时只报一个 moved，不算结构变化', () =>
   assert.equal(dirty[0].full, false);
 });
 
-test('diffWorld：改一格地形就是结构变化，整图重算', () => {
-  const prev = mkWorld();
+test('diffWorld：改一格地形是结构变化，但视野只圈观察者半径', () => {
+  const prev = mkWorld('shared', [60, 40]);
   const next = produce(prev, (d) => { d.maps[0].cells[3 * d.maps[0].width + 3] = 'grass'; });
   const dirty = diffWorld(prev, next);
   assert.equal(dirty[0].structure, true);
-  assert.equal(planVision(next, dirty).full, true);
+  assert.equal(dirty[0].viewerScope, true);
+  const plan = planVision(next, dirty);
+  assert.equal(plan.full, false);
+  assert.equal(plan.viewerScoped, true);
+  const m = next.maps[0];
+  const cells = plan.maps.get(m.id);
+  assert.ok(cells && cells.size > 0);
+  assert.ok(cells.size < m.width * m.height, '结构视野不该再整图');
+  const inc = withVision(next, prev);
+  const full = withVision(next, prev, { full: true });
+  sameFog(inc.maps[0].fog, full.maps[0].fog, '地形 scoped');
+  for (const id of Object.keys(full.maps[0].views)) sameFog(inc.maps[0].views[id].fog, full.maps[0].views[id].fog, `地形 scoped：${id}`);
 });
 
 test('diffWorld：转身/蹲下也算脏（原地），不能漏', () => {
@@ -214,6 +225,59 @@ test('planVision：一格移动只圈两个圆盘，远小于全图', () => {
   }
 });
 
+
+test('结构视野收窄：整格刷墙（含 9 个小格）与整图一致', () => {
+  const prev = mkWorld('shared', [60, 40]);
+  const next = produce(prev, (d) => {
+    const m = d.maps[0];
+    const cx = 6, cy = 5;
+    m.cells[cy * m.width + cx] = 'wall';
+    for (let sy = 0; sy < 3; sy++) for (let sx = 0; sx < 3; sx++) m.fineCells[(cy * 3 + sy) * m.width * 3 + cx * 3 + sx] = 'wall';
+  });
+  const plan = planVision(next, diffWorld(prev, next));
+  assert.equal(plan.full, false);
+  assert.equal(plan.viewerScoped, true);
+  const inc = withVision(next, prev, { plan });
+  const full = withVision(next, prev, { full: true });
+  sameFog(inc.maps[0].fog, full.maps[0].fog, '整格刷墙');
+  for (const id of Object.keys(full.maps[0].views)) sameFog(inc.maps[0].views[id].fog, full.maps[0].views[id].fog, `整格刷墙：${id}`);
+});
+
+
+test('结构视野收窄：子格站位也不会漏圈半径边界', () => {
+  const prev = mkWorld('shared', [60, 40]);
+  prev.maps[0].tokens[0].subcell = { x: 2, y: 2 };
+  const next = produce(prev, (d) => { d.maps[0].cells[18 * d.maps[0].width + 16] = 'wall'; });
+  const plan = planVision(next, diffWorld(prev, next));
+  assert.equal(plan.full, false);
+  assert.equal(plan.viewerScoped, true);
+  const cells = plan.maps.get(prev.maps[0].id);
+  assert.ok(cells.has(18 * 60 + 16), '小格偏移后，半径边界上的 (16,18) 必须在脏区');
+  const inc = withVision(next, prev, { plan });
+  const full = withVision(next, prev, { full: true });
+  sameFog(inc.maps[0].fog, full.maps[0].fog, '子格站位');
+  for (const id of Object.keys(full.maps[0].views)) sameFog(inc.maps[0].views[id].fog, full.maps[0].views[id].fog, `子格站位：${id}`);
+});
+
+
+test('结构视野收窄 + 换 pcId：旧组雾要降灰，不能跳过快路径', () => {
+  for (const mode of ['shared', 'individual', 'grouped']) {
+    const prev = withVision(mkWorld(mode), emptyWorldFallback(mode), { full: true });
+    const next = produce(prev, (d) => {
+      const m = d.maps[0];
+      m.tokens[0].pcId = 'b'; // 旧组 a 已经没有当前棋子
+      m.cells[5 * m.width + 6] = 'wall';
+      for (let sy = 0; sy < 3; sy++) for (let sx = 0; sx < 3; sx++) m.fineCells[(5 * 3 + sy) * m.width * 3 + 6 * 3 + sx] = 'wall';
+    });
+    const plan = planVision(next, diffWorld(prev, next));
+    assert.equal(plan.viewerScoped, true, `${mode}：地形改动应走观察者半径`);
+    const inc = withVision(next, prev, { plan });
+    const full = withVision(next, prev, { full: true });
+    sameFog(inc.maps[0].fog, full.maps[0].fog, `${mode}/换 pcId+地形`);
+    for (const id of Object.keys(full.maps[0].views)) sameFog(inc.maps[0].views[id].fog, full.maps[0].views[id].fog, `${mode}/换 pcId+地形：${id}`);
+  }
+});
+
 // ---------- 增量 === 全量 ----------
 
 function runSequence(mode, steps = 120, seed0 = 20261119) {
@@ -266,6 +330,39 @@ function emptyWorldFallback(mode) {
   w.visionMode = mode;
   return w;
 }
+
+
+test('分组↔独立/共享切换后视图副本与全量一致', () => {
+  const compareAll = (inc, full, label) => {
+    for (let i = 0; i < full.maps.length; i++) {
+      sameFog(inc.maps[i].fog, full.maps[i].fog, `${label}/地图${i} fog`);
+      for (const id of Object.keys(full.maps[i].views)) sameFog(inc.maps[i].views[id].fog, full.maps[i].views[id].fog, `${label}/${id} 视野层`);
+    }
+  };
+  let prev = withVision(mkWorld('grouped'), emptyWorldFallback('grouped'), { full: true });
+  let next = produce(prev, (d) => { d.visionMode = 'individual'; });
+  let plan = planVision(next, diffWorld(prev, next));
+  let inc = withVision(next, prev, { plan });
+  let full = withVision(next, prev, { full: true });
+  compareAll(inc, full, '分组→独立');
+  assert.notEqual(inc.maps[0].views.a, inc.maps[0].views.b, '切成独立后每组应有自己的副本');
+
+  prev = inc;
+  next = produce(prev, (d) => { d.maps[0].tokens[0].x += 1; });
+  plan = planVision(next, diffWorld(prev, next));
+  inc = withVision(next, prev, { plan });
+  full = withVision(next, prev, { full: true });
+  compareAll(inc, full, '独立后移动');
+  assert.equal(inc.maps[0].views.c.fog[0], prev.maps[0].views.c.fog[0], '独立模式移动 a 不该改 c 的层');
+
+  prev = inc;
+  next = produce(prev, (d) => { d.visionMode = 'grouped'; });
+  plan = planVision(next, diffWorld(prev, next));
+  inc = withVision(next, prev, { plan });
+  full = withVision(next, prev, { full: true });
+  compareAll(inc, full, '独立→分组');
+  assert.equal(inc.maps[0].views.a, inc.maps[0].views.b, '回到分组后同组应共用一份层');
+});
 
 test('增量视野 === 整图视野（全队共享）', () => {
   const narrowed = runSequence('shared');

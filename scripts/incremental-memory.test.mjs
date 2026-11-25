@@ -17,7 +17,7 @@ await build({
   stdin: {
     contents: `export { produce } from 'immer';
 export { withVision } from './src/scene/perception';
-export { syncMemory } from './src/scene/memory';
+export { syncMemory, narrowTerrainMemoryPlan } from './src/scene/memory';
 export { diffWorld } from './src/scene/dirty';
 export { planVision } from './src/scene/visionPlan';
 export { emptyWorld, newMap } from './src/core/defaults';
@@ -26,7 +26,7 @@ export { clipArchitecture, architectureGeometry } from './src/scene/architecture
   },
   outfile: bundle, bundle: true, platform: 'node', format: 'cjs', logLevel: 'silent',
 });
-const { produce, withVision, syncMemory, diffWorld, planVision, emptyWorld, newMap, clipArchitecture, architectureGeometry } = await import(bundle);
+const { produce, withVision, syncMemory, narrowTerrainMemoryPlan, diffWorld, planVision, emptyWorld, newMap, clipArchitecture, architectureGeometry } = await import(bundle);
 after(() => rm(temp, { recursive: true, force: true }));
 
 function mkWorld(mode = 'shared') {
@@ -297,7 +297,68 @@ test('建筑记忆：增量移动保留旧墙、只补脏区新看见的墙', ()
   }
 });
 
-test('材质-only 改动：视野不收窄、也不整图重算，只让该图记忆全量', () => {
+
+test('建筑记忆：建筑改动视野收窄，但建筑记忆整层重排', () => {
+  for (const mode of ['shared', 'individual', 'grouped']) {
+    const w = emptyWorld();
+    w.visionMode = mode;
+    w.party = [
+      { id: 'a', name: '甲', sex: '男', heightCm: 173, color: '', visionGroupId: mode === 'grouped' ? 'g1' : undefined },
+      { id: 'b', name: '乙', sex: '女', heightCm: 164, color: '', visionGroupId: mode === 'grouped' ? 'g1' : undefined },
+    ];
+    if (mode === 'grouped') w.visionGroups = [{ id: 'g1', name: '甲组' }];
+    const map = newMap('建筑改动', '现实', 0, 40, 30, 'floor', false);
+    map.autoFog = true;
+    map.architecture = { walls: [{ id: 'w1', a: { x: 20.5, y: 4 }, b: { x: 20.5, y: 14 }, thickness: 0.25, material: 'wall' }], doors: [] };
+    map.tokens = [
+      { id: 'ta', pcId: 'a', name: '甲', color: '', x: 10, y: 10 },
+      { id: 'tb', pcId: 'b', name: '乙', color: '', x: 30, y: 10 },
+    ];
+    w.maps = [map];
+    let prev = withVision(w, emptyWorld(), { full: true });
+    prev = produce(prev, (d) => syncMemory(d));
+    // 把墙挪到观察者附近：视野只该重算圆盘，但建筑记忆必须整层重排，不能只补新墙。
+    const next = produce(prev, (d) => {
+      d.maps[0].architecture = { walls: [{ id: 'w2', a: { x: 12.5, y: 8 }, b: { x: 12.5, y: 12 }, thickness: 0.25, material: 'wall' }], doors: [] };
+    });
+    const dirty = diffWorld(prev, next);
+    const plan = planVision(next, dirty);
+    assert.equal(plan.full, false, `${mode}：建筑改动视野应能收窄`);
+    assert.equal(plan.viewerScoped, true, `${mode}：建筑改动应走观察者半径`);
+    assert.ok(plan.architectureFullMaps?.has(map.id), `${mode}：建筑记忆必须整层重排`);
+    const inc = produce(withVision(next, prev, { plan }), (d) => syncMemory(d, plan));
+    const full = produce(withVision(next, prev, { full: true }), (d) => syncMemory(d));
+    compareSeen(inc, full, 0, `建筑改动/${mode}`);
+  }
+});
+
+
+test('地形-only 记忆：收窄到真脏格 + 雾变化格，仍 === 全量', () => {
+  for (const mode of ['shared', 'individual', 'grouped']) {
+    const w = mkWorld(mode);
+    let prev = withVision(w, emptyWorld(), { full: true });
+    prev = produce(prev, (d) => syncMemory(d));
+    const next = produce(prev, (d) => {
+      const m = d.maps[0];
+      // 在甲附近刷一段墙，让甲/乙/丙的可见范围都发生变化
+      for (let y = 4; y <= 8; y++) {
+        m.cells[y * m.width + 9] = 'wall';
+        for (let sy = 0; sy < 3; sy++) for (let sx = 0; sx < 3; sx++) m.fineCells[(y * 3 + sy) * m.width * 3 + 9 * 3 + sx] = 'wall';
+      }
+    });
+    const dirty = diffWorld(prev, next);
+    const plan = planVision(next, dirty);
+    assert.ok(plan.terrainOnlyMaps?.has(w.maps[0].id), `${mode}：地形-only 应标记`);
+    const visioned = withVision(next, prev, { plan });
+    const narrow = narrowTerrainMemoryPlan(prev, visioned, plan, dirty);
+    assert.ok((narrow.maps.get(w.maps[0].id)?.size ?? Infinity) < (plan.maps.get(w.maps[0].id)?.size ?? 0), `${mode}：记忆脏格应比视野圆盘小`);
+    const inc = produce(visioned, (d) => syncMemory(d, narrow));
+    const full = produce(withVision(next, prev, { full: true }), (d) => syncMemory(d));
+    compareSeen(inc, full, 0, `地形-only 收窄/${mode}`);
+  }
+});
+
+test('材质-only 改动：视野不动，记忆只同步材质变了的格', () => {
   const w = emptyWorld();
   w.party = [{ id: 'a', name: '甲', sex: '男', heightCm: 173, color: '' }];
   const m = w.maps[0];
@@ -310,9 +371,15 @@ test('材质-only 改动：视野不收窄、也不整图重算，只让该图�
   const dirty = diffWorld(prev, next);
   assert.equal(dirty[0].structure, true, '材质改动仍然要同步记忆');
   assert.equal(dirty[0].visionStructure, false, '材质不改视野');
+  assert.equal(dirty[0].materialOnly, true, '材质-only 应走记忆收窄');
   const plan = planVision(next, dirty);
   assert.equal(plan.full, false, '不该整图重算视野');
-  assert.ok(plan.memoryFullMaps?.has(prev.maps[0].id), '这一张图仍要全量同步记忆');
+  assert.equal(plan.memoryFullMaps?.has(m.id), false, '材质-only 不该整张图同步记忆');
+  assert.ok(plan.materialOnlyMaps?.has(m.id), '应标记材质-only 图');
+  assert.ok(plan.memoryScopeMaps?.get(m.id)?.has(6 * m.width + 6), '记忆脏格应含材质改到的格');
   const out = withVision(next, prev, { plan });
   assert.deepEqual(out.maps[0].fog, fogBefore, '材质改动不该改 fog');
+  const inc = produce(out, (d) => syncMemory(d, plan));
+  const full = produce(out, (d) => syncMemory(d));
+  compareSeen(inc, full, 0, '材质-only/记忆收窄');
 });

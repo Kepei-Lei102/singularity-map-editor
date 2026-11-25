@@ -1,12 +1,12 @@
 import { architectureTransitionError } from '../scene/architecture';
-import { produce, type Draft } from 'immer';
+import { freeze, produce, type Draft } from 'immer';
 import { useSyncExternalStore } from 'react';
 import type { SenseHint, SenseKind, SenseRoll } from '../rules/sense';
-import type { PendingCodeAttempt, PendingJudgment, World } from './types';
+import type { GameMap, PendingCodeAttempt, PendingJudgment, World } from './types';
 import { demoWorld, emptyWorld } from './defaults';
 import { isPlayerEntry } from './deployment';
 import { normalizeNpcHp } from '../rules/combat';
-import { migrateWorld, syncMemory } from '../scene/memory';
+import { migrateWorld, narrowTerrainMemoryPlan, syncMemory } from '../scene/memory';
 import type { CombatNotice } from './types';
 import { setMediaIndex } from '../runtime/media';
 import { withVision } from '../scene/perception';
@@ -46,6 +46,8 @@ let saveTimer: number | undefined;
 // 沙盒（试玩）：开始时记下世界和撤销记录的长度，结束时整个换回来
 let sandbox: { world: World; past: World[]; future: World[] } | null = null;
 let batchStart: World | null = null; // 拖动开始时的世界：拖动中第一次真的改了东西才把它记进撤销
+let batchVisionBase: World | null = null; // 批量拖动期间整图视野/记忆只算一次，以这次开始时的世界为基准
+let batchVisionDeferred = false;
 
 // Outside undoable World snapshots: leaving an entity version permanently invalidates old advice.
 const targetRevisions = new WeakMap<object, number>();
@@ -138,42 +140,86 @@ function memoryDirty(a: World, b: World): boolean {
   return false;
 }
 
-/**
- * 修改世界。coalesce：同一个 key 在 1 秒内的连续修改合并成一步撤销（用于打字）。
- */
-export function update(fn: (d: Draft<World>) => void, opts: { coalesce?: string; history?: boolean } = {}) {
-  // NPC 血条每次改世界都归一：会话里直接 update 出来的 hpMax 0/负数、倒地缺 hp 不留在存档里。
-  // 必须在同一个 produce 里做：produce 返回的对象是冻结的，出去再改会静默失败。
-  let next = produce(world, (d) => { fn(d); normalizeNpcHp(d as unknown as World); });
-  if (next === world) return;
-  // Component edits (material/physical/openStates/state lists) obey the same close policy.
-  for (const m of next.maps) {
-    const before = world.maps.find(p => p.id === m.id);
-    if (!before || before.objects === m.objects) continue;
-    const error = architectureTransitionError(before, m);
-    if (error) { toast(error); return; }
+
+/** 批量拖到一半，手动改了 fog/views：先把之前欠的视野补上，再按非批量语义落这次手动雾。 */
+function manualFogChanged(a: World, b: World): boolean {
+  for (const m of b.maps) {
+    const o = a.maps.find((x) => x.id === m.id);
+    if (o && (o.fog !== m.fog || o.views !== m.views)) return true;
   }
-  const needMemory = memoryDirty(world, next);
-  // 脏集只算一次：视野只写脏格，记忆也只同步脏格。
-  const plan = planVision(next, diffWorld(world, next));
+  return false;
+}
+
+function markManualPending(next: World, pending: Set<string>) {
+  for (const id of pending) {
+    const m = next.maps.find((x) => x.id === id);
+    if (m?.autoFog) markManualFog(m);
+  }
+}
+
+/** 把批量里欠的视野/记忆从 batchVisionBase 补到当前 world，然后以补完的 world 为新基准。 */
+function flushBatchVision() {
+  if (!batching || !batchVisionBase || !batchVisionDeferred) return;
+  const base = batchVisionBase;
+  if (!Object.isFrozen(world)) freeze(world, true);
+  const dirty = diffWorld(base, world);
+  const plan = planVision(world, dirty);
   const manualPending = new Set<string>();
-  next = produce(withVision(next, world, { plan, onManualPending: (id) => manualPending.add(id) }), (d) => { if (needMemory) syncMemory(d, plan); });
+  const visioned = withVision(world, base, { plan, onManualPending: (id) => manualPending.add(id) });
+  const memoryPlan = narrowTerrainMemoryPlan(base, visioned, plan, dirty);
+  const next = produce(visioned, (d) => {
+    if (memoryDirty(base, world)) syncMemory(d, memoryPlan);
+  });
+  markManualPending(next, manualPending);
+  world = next;
+  batchVisionBase = next;
+  batchVisionDeferred = false;
+}
+
+function commitWorld(next: World, opts: { coalesce?: string; history?: boolean } = {}) {
+  // 批量里先改地形、后手动画雾：若直接欠到松手，手动雾会被自动雾盖掉（和非批量顺序不一致）。
+  // 先补上之前的视野，再以补完的世界重做这次手动雾修改。
+  // 注意：next 已经是这次修改后的世界；这里只处理补算，不再重放 fn。
+  // （手动雾 flush 需要重放 fn 的分支仍留在 update() 里，见下。）
+  // 拖动中的整图视野/记忆先欠着：每次 pointermove 都全量重算 200×200 的 36 万子格，
+  // 连续画一笔会按格子卡死。批量结束时从拖动起点的世界一次性补算，结果和不分批一样。
+  // 只在「本来就要整图重算」时欠；纯棋子移动这类脏格很小的更新仍即时算。
+  let deferred = !!batching && !!batchVisionBase && batchVisionDeferred;
+  let manualPending = new Set<string>();
+  if (!deferred) {
+    const needMemory = memoryDirty(world, next);
+    // 脏集只算一次：视野只写脏格，记忆也只同步脏格。
+    const dirty = diffWorld(world, next);
+    const plan = planVision(next, dirty);
+    if (batching && batchVisionBase && (plan.full || plan.viewerScoped || (plan.memoryFullMaps?.size ?? 0) > 0 || (plan.materialOnlyMaps?.size ?? 0) > 0)) {
+      deferred = true;
+      batchVisionDeferred = true;
+    } else {
+      const visioned = withVision(next, world, { plan, onManualPending: (id) => manualPending.add(id) });
+      const memoryPlan = narrowTerrainMemoryPlan(world, visioned, plan, dirty);
+      next = produce(visioned, (d) => { if (needMemory) syncMemory(d, memoryPlan); });
+    }
+  }
   next = bumpStateRevs(world, next);
   // 被驱逐是「ME 归零」状态，ME 回到至少 1 点后自动解除；不论 ME 是怎么恢复的，
   // 都从这里统一收口，避免每个恢复入口各自记得清状态。
-  next = produce(next, (d) => {
-    for (const m of d.maps) {
-      for (const k of m.tokens) {
-        if (!k.status?.endsWhenMePositive) continue;
-        const pc = k.pcId ? d.party.find((x) => x.id === k.pcId) : undefined;
-        if (pc && pc.me !== undefined && pc.me >= 1) {
-          const label = k.status.label;
-          delete k.status;
-          d.log.push({ id: uid(), at: Date.now(), session: d.session, kind: 'note', text: `${k.name} ME 恢复到 ${pc.me}，解除${label}。` });
+  let hasEndsStatus = false;
+  for (const m of next.maps) for (const k of m.tokens) if (k.status?.endsWhenMePositive) { hasEndsStatus = true; break; }
+  if (hasEndsStatus) {
+    next = produce(next, (d) => {
+      for (const m of d.maps) {
+        for (const k of m.tokens) {
+          if (!k.status?.endsWhenMePositive) continue;
+          const pc = k.pcId ? d.party.find((x) => x.id === k.pcId) : undefined;
+          if (pc && pc.me !== undefined && pc.me >= 1) {
+            const label = k.status.label;
+            delete k.status;
+            d.log.push({ id: uid(), at: Date.now(), session: d.session, kind: 'note', text: `${k.name} ME 恢复到 ${pc.me}，解除${label}。` });
+          }
         }
       }
-    }
-  });
+    });
+  }
   // syncMemory 在独立/分组模式会 clone fog 数组，withVision 里打的标记会落在旧数组上。
   // 标记必须跟着最终落盘的数组走，否则下一次视野脏动不会整图覆盖。
   for (const id of manualPending) {
@@ -191,16 +237,117 @@ export function update(fn: (d: Draft<World>) => void, opts: { coalesce?: string;
   emit();
 }
 
+/**
+ * 修改世界。coalesce：同一个 key 在 1 秒内的连续修改合并成一步撤销（用于打字）。
+ */
+export function update(fn: (d: Draft<World>) => void, opts: { coalesce?: string; history?: boolean } = {}) {
+  // NPC 血条每次改世界都归一：会话里直接 update 出来的 hpMax 0/负数、倒地缺 hp 不留在存档里。
+  // 必须在同一个 produce 里做：produce 返回的对象是冻结的，出去再改会静默失败。
+  let next = produce(world, (d) => { fn(d); normalizeNpcHp(d as unknown as World); });
+  if (next === world) return;
+  // 批量里先改地形、后手动画雾：若直接欠到松手，手动雾会被自动雾盖掉（和非批量顺序不一致）。
+  // 先补上之前的视野，再以补完的世界重做这次手动雾修改。
+  if (batching && batchVisionBase && batchVisionDeferred && manualFogChanged(world, next)) {
+    flushBatchVision();
+    next = produce(world, (d) => { fn(d); normalizeNpcHp(d as unknown as World); });
+    if (next === world) return;
+  }
+  // Component edits (material/physical/openStates/state lists) obey the same close policy.
+  for (const m of next.maps) {
+    const before = world.maps.find(p => p.id === m.id);
+    if (!before || before.objects === m.objects) continue;
+    const error = architectureTransitionError(before, m);
+    if (error) { toast(error); return; }
+  }
+  commitWorld(next, opts);
+}
+
+/** 材质专用快速路径：只浅拷贝 materialCells/fineMaterials 两个对象，不经 Immer 代理。 */
+export function updateMaterialFast(mapId: string, mutate: (m: Draft<GameMap>) => void) {
+  const idx = world.maps.findIndex((m) => m.id === mapId);
+  if (idx < 0) return;
+  const baseMap = world.maps[idx];
+  const nextMap = {
+    ...baseMap,
+    materialCells: { ...(baseMap.materialCells ?? {}) },
+    fineMaterials: { ...(baseMap.fineMaterials ?? {}) },
+  } as GameMap;
+  mutate(nextMap as unknown as Draft<GameMap>);
+  const sameMap = (a?: Record<number, string>, b?: Record<number, string>) => {
+    const aa = a ?? {}, bb = b ?? {};
+    const keys = new Set([...Object.keys(aa), ...Object.keys(bb)]);
+    for (const k of keys) if (aa[+k] !== bb[+k]) return false;
+    return true;
+  };
+  if (sameMap(baseMap.materialCells, nextMap.materialCells) && sameMap(baseMap.fineMaterials, nextMap.fineMaterials)) return;
+  const maps = world.maps.slice();
+  maps[idx] = nextMap;
+  const next = { ...world, maps };
+  if (!(batching && batchVisionBase)) freeze(next, true);
+  commitWorld(next);
+}
+
+/**
+ * 地形/小格专用快速路径：只浅拷贝受影响的地图和 cells/fineCells 两个数组，
+ * 不经过 Immer 对 200×200 的 36 万小格做整份代理。管线与 update() 完全共用。
+ */
+export function updateTerrainFast(mapId: string, mutate: (m: Draft<GameMap>) => void) {
+  const idx = world.maps.findIndex((m) => m.id === mapId);
+  if (idx < 0) return;
+  const baseMap = world.maps[idx];
+  // 只复制会改的两个数组；tokens/objects/views 等保持原引用。
+  const nextMap = {
+    ...baseMap,
+    cells: baseMap.cells.slice(),
+    fineCells: baseMap.fineCells.slice(),
+  } as GameMap;
+  mutate(nextMap as unknown as Draft<GameMap>);
+  // 同一种地形再点一次不该多一步撤销、也不该白跑视野。
+  let changed = false;
+  for (let i = 0; i < baseMap.cells.length; i++) if (nextMap.cells[i] !== baseMap.cells[i]) { changed = true; break; }
+  if (!changed) for (let i = 0; i < baseMap.fineCells.length; i++) if (nextMap.fineCells[i] !== baseMap.fineCells[i]) { changed = true; break; }
+  if (!changed) return;
+  const maps = world.maps.slice();
+  maps[idx] = nextMap;
+  const next = { ...world, maps };
+  if (next === world) return;
+  // 拖动画笔时这一帧的视野/记忆本来就欠着，不必为它会话冻结整张图；
+  // 非批量单笔才冻结新对象图，避免 Immer 对未冻结的 36 万格世界退化成整份代理。
+  if (!(batching && batchVisionBase)) freeze(next, true);
+  commitWorld(next);
+}
+
 /** 拖动开始时调用：整次拖动只占一步撤销。只是点一下、没拖动，撤销和重做记录都不碰。 */
 export function beginBatch() {
   if (batching) return;
   batchStart = world;
+  batchVisionBase = world;
+  batchVisionDeferred = false;
   batching = true;
   lastCoalesce = null;
 }
 export function endBatch() {
+  if (!batching) return;
   batching = false;
   batchStart = null;
+  const base = batchVisionBase;
+  batchVisionBase = null;
+  if (base && batchVisionDeferred && world !== base) {
+    // 局部画笔的快速路径在拖动中故意不冻结，这里补一次，避免整份 Immer 代理。
+    if (!Object.isFrozen(world)) freeze(world, true);
+    const dirty = diffWorld(base, world);
+    const plan = planVision(world, dirty);
+    const manualPending = new Set<string>();
+    const visioned = withVision(world, base, { plan, onManualPending: (id) => manualPending.add(id) });
+    const memoryPlan = narrowTerrainMemoryPlan(base, visioned, plan, dirty);
+    const next = produce(visioned, (d) => {
+      if (memoryDirty(base, world)) syncMemory(d, memoryPlan);
+    });
+    markManualPending(next, manualPending);
+    world = next;
+    emit();
+  }
+  batchVisionDeferred = false;
 }
 
 export function undo() {
@@ -208,9 +355,15 @@ export function undo() {
   if (sandbox) { toast('试玩里不能撤销（退出试玩后再改）'); return; }
   const prev = past.pop();
   if (!prev) return;
+  // 欠视野的世界不能进 redo 栈：否则 redo 会把未补视野的快照当成 base，松手也不补。
+  if (batching && batchVisionDeferred) flushBatchVision();
   future.push(world);
   world = prev;
-  if (batching) batchStart = world; // 拖动中途撤销：之后接着拖的部分算新的一步（从撤销后的样子开始）
+  if (batching) {
+    batchStart = world; // 拖动中途撤销：之后接着拖的部分算新的一步（从撤销后的样子开始）
+    batchVisionBase = world; // 撤销快照自带视野，不能再拿被撤掉前的基础去补
+    batchVisionDeferred = false;
+  }
   lastCoalesce = null;
   emit();
 }
@@ -218,9 +371,14 @@ export function redo() {
   if (sandbox) { toast('试玩里不能重做（退出试玩后再改）'); return; }
   const next = future.pop();
   if (!next) return;
+  if (batching && batchVisionDeferred) flushBatchVision();
   past.push(world);
   world = next;
-  if (batching) batchStart = world;
+  if (batching) {
+    batchStart = world;
+    batchVisionBase = world;
+    batchVisionDeferred = false;
+  }
   lastCoalesce = null;
   emit();
 }
@@ -232,6 +390,8 @@ export function replaceWorld(w: World) {
   future = [];
   batching = false;
   batchStart = null;
+  batchVisionBase = null;
+  batchVisionDeferred = false;
   lastCoalesce = null; // 换了世界，上一个世界的"连续打字合并"不能延续
   world = produce(withVision(migrateWorld(w), { ...w, maps: [] }), syncMemory);
   emit();
@@ -439,6 +599,8 @@ export function endSandbox() {
   epoch++;
   batching = false;
   batchStart = null;
+  batchVisionBase = null;
+  batchVisionDeferred = false;
   lastCoalesce = null;
   emit();
 }

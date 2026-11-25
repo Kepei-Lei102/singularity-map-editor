@@ -37,10 +37,142 @@ export function spatialFog(m: GameMap, L: VisionLayer, key: number): number {
   return L.fog[Math.floor(y / 3) * m.width + Math.floor(x / 3)] ?? 0;
 }
 
+
+/** 地形-only（且没有建筑片）时，个体/分组视野的聚合层可以只重算真脏格；
+ *  脏格外聚合层沿用上次结果。建筑/物件/贴图组不在这里省。 */
+
+/** 与 mergeLayersScoped 同语义，但直接写进 draft 的聚合层，省掉整层 clone。
+ * 只在「本层已经是自洽的旧聚合」且 architecture 全量兜底时使用。 */
+export function mergeLayersScopedInto(out: VisionLayer, m: GameMap, layersIn: VisionLayer[], scope: Set<number>): void {
+  // 分组模式下同一组共用一份层；去重后不要再对同一份数组乘 4 遍。
+  const layers = [...new Set(layersIn)];
+  out.seen.cellRevs ??= [];
+  const w3 = m.width * 3;
+  const choose = <T,>(items: { rev: number; value: T; material?: Id }[]) => items.sort((a, b) => b.rev - a.rev || JSON.stringify(b.value).localeCompare(JSON.stringify(a.value)))[0];
+  for (const i of scope) {
+    let fog = 0, bestRev = -1, bestValue: string | undefined, bestMaterial: Id | undefined;
+    for (const L of layers) {
+      const f = L.fog[i];
+      if (!f) continue;
+      if (f === 1) fog = 1; else if (fog === 0) fog = 2;
+      const rev = L.seen.cellRevs?.[i] ?? 0;
+      const value = L.seen.cells[i] ?? '';
+      if (bestValue === undefined || rev > bestRev || (rev === bestRev && JSON.stringify(value).localeCompare(JSON.stringify(bestValue)) > 0)) {
+        bestRev = rev; bestValue = value; bestMaterial = L.seen.materialCells?.[i];
+      }
+    }
+    out.fog[i] = fog;
+    out.seen.cells[i] = bestValue ?? ''; out.seen.cellRevs[i] = bestRev < 0 ? 0 : bestRev;
+    if (!out.seen.materialCells) out.seen.materialCells = {};
+    if (bestMaterial) out.seen.materialCells[i] = bestMaterial; else delete out.seen.materialCells[i];
+    const cx = i % m.width, cy = Math.floor(i / m.width);
+    for (let sy = 0; sy < 3; sy++) for (let sx = 0; sx < 3; sx++) {
+      const key = (cy * 3 + sy) * w3 + (cx * 3 + sx);
+      let known = false, archRev = -1, obsRev = 0;
+      for (const L of layers) {
+        if (!spatialFog(m, L, key)) continue;
+        known = true;
+        const rev = L.seen.architectureRevs?.[key] ?? L.seen.observed?.[key] ?? 0;
+        if (rev > archRev) archRev = rev;
+        const obs = L.seen.observed?.[key] ?? 0;
+        if (obs > obsRev) obsRev = obs;
+      }
+      if (!known) { delete out.seen.observed![key]; delete out.seen.architectureRevs![key]; }
+      else { out.seen.observed![key] = obsRev; out.seen.architectureRevs![key] = archRev < 0 ? 0 : archRev; }
+    }
+  }
+  const ids = new Set(layers.flatMap((L) => L.seen.objects.map((o) => o.id)));
+  out.seen.objects = []; out.seen.objectRevs = {};
+  for (const id of ids) {
+    const best = choose(layers.flatMap((L) => L.seen.objects.filter((o) => o.id === id).map((value) => ({ rev: L.seen.objectRevs?.[id] ?? 0, value }))));
+    const keys = spatialKeys(m, best.value);
+    if (keys.some((key) => (out.seen.observed?.[key] ?? 0) > best.rev)) continue;
+    out.seen.objects.push({ ...best.value }); out.seen.objectRevs[id] = best.rev;
+  }
+  const groupIds = new Set(layers.flatMap((L) => (L.seen.groups ?? []).filter((g) => !g.objectId).map((g) => g.id)));
+  out.seen.groups = []; out.seen.groupRevs = {};
+  for (const id of groupIds) {
+    const candidates = layers.flatMap((L) => (L.seen.groups ?? []).filter((g) => g.id === id && !g.objectId).map((value) => ({ rev: L.seen.groupRevs?.[id] ?? 0, value })));
+    if (!candidates.length) continue;
+    const cells = [...new Set(candidates.flatMap((c) => c.value.cells))].filter((key) => {
+      const x = key % w3, y = Math.floor(key / w3);
+      return key >= 0 && key < m.width * m.height * 9 && (out.fog[Math.floor(y / 3) * m.width + Math.floor(x / 3)] ?? 0) > 0;
+    }).filter((key, i, a) => i === 0 || key !== a[i - 1]).sort((a, b) => a - b);
+    if (!cells.length) continue;
+    const best = choose(candidates);
+    out.seen.groups.push({ ...best.value, cells });
+    out.seen.groupRevs[id] = Math.max(...candidates.map((c) => c.rev));
+  }
+}
+
+export function mergeLayersScoped(base: VisionLayer, m: GameMap, layersIn: VisionLayer[], scope: Set<number>): VisionLayer {
+  const layers = [...new Set(layersIn)];
+  const out = cloneLayer(base);
+  out.seen.cellRevs ??= [];
+  const w3 = m.width * 3;
+  const choose = <T,>(items: { rev: number; value: T; material?: Id }[]) => items.sort((a, b) => b.rev - a.rev || JSON.stringify(b.value).localeCompare(JSON.stringify(a.value)))[0];
+  for (const i of scope) {
+    let fog = 0, bestRev = -1, bestValue: string | undefined, bestMaterial: Id | undefined;
+    for (const L of layers) {
+      const f = L.fog[i];
+      if (!f) continue;
+      if (f === 1) fog = 1; else if (fog === 0) fog = 2;
+      const rev = L.seen.cellRevs?.[i] ?? 0;
+      const value = L.seen.cells[i] ?? '';
+      if (bestValue === undefined || rev > bestRev || (rev === bestRev && JSON.stringify(value).localeCompare(JSON.stringify(bestValue)) > 0)) {
+        bestRev = rev; bestValue = value; bestMaterial = L.seen.materialCells?.[i];
+      }
+    }
+    out.fog[i] = fog;
+    out.seen.cells[i] = bestValue ?? ''; out.seen.cellRevs[i] = bestRev < 0 ? 0 : bestRev;
+    if (bestMaterial) out.seen.materialCells![i] = bestMaterial; else delete out.seen.materialCells![i];
+    const cx = i % m.width, cy = Math.floor(i / m.width);
+    for (let sy = 0; sy < 3; sy++) for (let sx = 0; sx < 3; sx++) {
+      const key = (cy * 3 + sy) * w3 + (cx * 3 + sx);
+      let known = false, archRev = -1, obsRev = 0;
+      for (const L of layers) {
+        if (!spatialFog(m, L, key)) continue;
+        known = true;
+        const rev = L.seen.architectureRevs?.[key] ?? L.seen.observed?.[key] ?? 0;
+        if (rev > archRev) archRev = rev;
+        const obs = L.seen.observed?.[key] ?? 0;
+        if (obs > obsRev) obsRev = obs;
+      }
+      if (!known) { delete out.seen.observed![key]; delete out.seen.architectureRevs![key]; }
+      else { out.seen.observed![key] = obsRev; out.seen.architectureRevs![key] = archRev < 0 ? 0 : archRev; }
+    }
+  }
+  const ids = new Set(layers.flatMap((L) => L.seen.objects.map((o) => o.id)));
+  out.seen.objects = []; out.seen.objectRevs = {};
+  for (const id of ids) {
+    const best = choose(layers.flatMap((L) => L.seen.objects.filter((o) => o.id === id).map((value) => ({ rev: L.seen.objectRevs?.[id] ?? 0, value }))));
+    const keys = spatialKeys(m, best.value);
+    if (keys.some((key) => (out.seen.observed?.[key] ?? 0) > best.rev)) continue;
+    out.seen.objects.push({ ...best.value }); out.seen.objectRevs[id] = best.rev;
+  }
+  const groupIds = new Set(layers.flatMap((L) => (L.seen.groups ?? []).filter((g) => !g.objectId).map((g) => g.id)));
+  out.seen.groups = []; out.seen.groupRevs = {};
+  for (const id of groupIds) {
+    const candidates = layers.flatMap((L) => (L.seen.groups ?? []).filter((g) => g.id === id && !g.objectId).map((value) => ({ rev: L.seen.groupRevs?.[id] ?? 0, value })));
+    if (!candidates.length) continue;
+    const cells = [...new Set(candidates.flatMap((c) => c.value.cells))].filter((key) => {
+      const x = key % w3, y = Math.floor(key / w3);
+      return key >= 0 && key < m.width * m.height * 9 && (out.fog[Math.floor(y / 3) * m.width + Math.floor(x / 3)] ?? 0) > 0;
+    }).sort((a, b) => a - b);
+    if (!cells.length) continue;
+    const best = choose(candidates);
+    out.seen.groups.push({ ...best.value, cells });
+    out.seen.groupRevs[id] = Math.max(...candidates.map((c) => c.rev));
+  }
+  // 地形-only 不改建筑；当前没建筑也要保留历史墙记忆（clone 自 base），不能清空。
+  return out;
+}
+
 /** Merge knowledge only. Spatial observations include empty space, so seeing a demolition
  * supersedes old geometry even when the observer never knew that wall/object existed.
  * Legacy equal-version conflicts use content order: associative, deterministic and stable on remerge. */
-export function mergeLayers(m: GameMap, layers: VisionLayer[]): VisionLayer {
+export function mergeLayers(m: GameMap, layersIn: VisionLayer[]): VisionLayer {
+  const layers = [...new Set(layersIn)];
   if (layers.length === 1) return cloneLayer(layers[0]);
   const out = emptyVision(m.width * m.height);
   out.seen.cellRevs = []; out.seen.observed = {}; out.seen.objectRevs = {}; out.seen.architectureRevs = {}; out.seen.groups = []; out.seen.groupRevs = {};
@@ -152,7 +284,7 @@ const rectHits = (box: { x0: number; y0: number; x1: number; y1: number }, r: { 
  * 清掉已经不该存在的记忆。给了 scope 就只处理脏区：脏区外的雾没变，
  * 那里的记忆条目也不可能变成“全都没去过”。
  */
-export function pruneMemory(m: GameMap, L: VisionLayer, scope?: Set<number>, source?: GameMap) {
+export function pruneMemory(m: GameMap, L: VisionLayer, scope?: Set<number>, source?: GameMap, architectureFull = false) {
   const src = source ?? (isDraft(m) ? current(m) : m);
   const layer = L;
   const box = scope ? scopeRect(src, scope) : null;
@@ -177,8 +309,8 @@ export function pruneMemory(m: GameMap, L: VisionLayer, scope?: Set<number>, sou
       return cells.length ? [{ ...g, cells }] : [];
     });
   }
-  if (!box) L.seen.architecture = sortArchitecture([...clipArchitecture(src, layer, 1, layer.seen.architecture ?? []), ...clipArchitecture(src, layer, 2, layer.seen.architecture ?? [])]);
-  // scope 下建筑没变，syncLayer 已经保留旧记忆并补了新看见的片段；这里不再整层重算。
+  if (!box || architectureFull) L.seen.architecture = sortArchitecture([...clipArchitecture(src, layer, 1, layer.seen.architecture ?? []), ...clipArchitecture(src, layer, 2, layer.seen.architecture ?? [])]);
+  // scope 下建筑没变时，syncLayer 已经保留旧记忆并补了新看见的片段；这里不再整层重算。
   if (!box) { for (const key of Object.keys(layer.seen.observed ?? {})) if (!spatialFog(src, layer, +key)) delete L.seen.observed![+key]; }
   else {
     const w3 = src.width * 3;

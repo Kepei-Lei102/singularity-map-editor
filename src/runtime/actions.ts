@@ -5,7 +5,7 @@ import { checkArchitecture } from '../core/schema.js';
 import type { Draft } from 'immer';
 // JSZip 只在导出/导入时用；按需 load，玩家端不需要把 zip 打进主包。
 const loadJSZip = async () => (await import('jszip')).default;
-import { getUI, getWorld, reachableWorlds, replaceWorld, setUI, toast, update, worldContext, type Selection } from '../core/store';
+import { getUI, getWorld, reachableWorlds, replaceWorld, setUI, toast, update, updateMaterialFast, updateTerrainFast, worldContext, type Selection } from '../core/store';
 import { blocksMovement, pcWithin } from '../scene/perception';
 import { sightCacheFor, viewerOf, visiblePoint } from '../scene/sight';
 import { sightCtxFor } from '../scene/sightIndex';
@@ -1380,8 +1380,7 @@ export function addMark(mapId: string, author: string, x: number, y: number, sym
 
   /** 大格画笔：写 cells，并把 3×3 小格重新铺成同一地形。 */
 export function paintTerrainCells(mapId: string, cells: [number, number][], terrainId: string | null) {
-  update((d) => {
-    const m = findMap(d, mapId); if (!m) return;
+  updateTerrainFast(mapId, (m) => {
     for (const [x, y] of cells) {
       if (x < 0 || y < 0 || x >= m.width || y >= m.height) continue;
       m.cells[y * m.width + x] = terrainId ?? '';
@@ -1392,8 +1391,7 @@ export function paintTerrainCells(mapId: string, cells: [number, number][], terr
 
 /** 小格画笔：直接写 fineCells；不需要先细分。 */
 export function paintTerrainSubcells(mapId: string, cells3: [number, number][], terrainId: string | null) {
-  update((d) => {
-    const m = findMap(d, mapId); if (!m) return;
+  updateTerrainFast(mapId, (m) => {
     for (const [x3, y3] of cells3) {
       if (x3 < 0 || y3 < 0 || x3 >= m.width * 3 || y3 >= m.height * 3) continue;
       m.fineCells[subKey(m, x3, y3)] = terrainId ?? '';
@@ -1403,29 +1401,26 @@ export function paintTerrainSubcells(mapId: string, cells3: [number, number][], 
 
 /** 大格材质：写 materialCells；清掉这一格下的 9 个小格材质覆盖，回到大格底。 */
 export function paintMaterialCells(mapId: string, cells: [number, number][], materialId: string | null) {
-  update((d) => {
-    const m = findMap(d, mapId); if (!m) return;
-    m.materialCells ??= {};
-    m.fineMaterials ??= {};
+  updateMaterialFast(mapId, (m) => {
+    const mm = m as GameMap;
     for (const [x, y] of cells) {
-      if (x < 0 || y < 0 || x >= m.width || y >= m.height) continue;
-      const i = y * m.width + x;
-      if (materialId) m.materialCells[i] = materialId; else delete m.materialCells[i];
-      for (let sy = 0; sy < 3; sy++) for (let sx = 0; sx < 3; sx++) delete m.fineMaterials[subKey(m, x * 3 + sx, y * 3 + sy)];
+      if (x < 0 || y < 0 || x >= mm.width || y >= mm.height) continue;
+      const i = y * mm.width + x;
+      if (materialId) mm.materialCells![i] = materialId; else delete mm.materialCells![i];
+      for (let sy = 0; sy < 3; sy++) for (let sx = 0; sx < 3; sx++) delete mm.fineMaterials![subKey(mm, x * 3 + sx, y * 3 + sy)];
     }
   });
 }
 
 /** 小格材质：写 fineMaterials；没有就退回大格材质。 */
 export function paintMaterialSubcells(mapId: string, cells3: [number, number][], materialId: string | null) {
-  update((d) => {
-    const m = findMap(d, mapId); if (!m) return;
-    m.fineMaterials ??= {};
+  updateMaterialFast(mapId, (m) => {
+    const mm = m as GameMap;
     for (const [x3, y3] of cells3) {
-      if (x3 < 0 || y3 < 0 || x3 >= m.width * 3 || y3 >= m.height * 3) continue;
-      const key = subKey(m, x3, y3);
-      if (materialId) m.fineMaterials[key] = materialId;
-      else delete m.fineMaterials[key];
+      if (x3 < 0 || y3 < 0 || x3 >= mm.width * 3 || y3 >= mm.height * 3) continue;
+      const key = subKey(mm, x3, y3);
+      if (materialId) mm.fineMaterials![key] = materialId;
+      else delete mm.fineMaterials![key];
     }
   });
 }

@@ -10,7 +10,8 @@ import { linesToFlow } from '../rules/flow';
 import { normalizeNpcHp, type NpcHpMigrationWarning } from '../rules/combat';
 import { DEFAULT_MATERIALS } from '../core/defaults';
 import { uid } from '../core/util';
-import { cloneLayer, emptyVision, mergeLayers, pruneMemory, spatialFog, visionKey } from './vision';
+import { emptyVision, mergeLayers, mergeLayersScopedInto, pruneMemory, spatialFog, visionKey } from './vision';
+import type { Dirty } from './dirty';
 import type { VisionPlan } from './visionPlan';
 
 // 星际争霸式迷雾：fog 0 没去过 / 1 看得见 / 2 记忆。
@@ -112,7 +113,7 @@ function touchesGroup(box: { x0: number; y0: number; x1: number; y1: number }, w
 }
 
 /** 把一份迷雾里"看得见"的部分同步进它的记忆。给了 scope 就只处理这些主格。 */
-function syncLayer(m: Draft<GameMap>, L: Draft<VisionLayer>, rev: number, scope?: CellScope, source?: GameMap) {
+function syncLayer(m: Draft<GameMap>, L: Draft<VisionLayer>, rev: number, scope?: CellScope, source?: GameMap, architectureFull = false) {
   // Read geometry/fog from one plain snapshot; scanning subcells through Immer proxies
   // repeats thousands of trapped subdivision lookups on every movement.
   const src = source ?? (isDraft(m) ? current(m) : m);
@@ -142,8 +143,8 @@ function syncLayer(m: Draft<GameMap>, L: Draft<VisionLayer>, rev: number, scope?
   if (scope) for (const i of scope) writeCell(i);
   else for (let i = 0; i < n; i++) writeCell(i);
   const bbox = scope ? scopeBBox(src, scope) : null;
-  if (scope && bbox) {
-    // 移动路径下建筑没变（变了 plan 会 full）。脏区外旧记忆原样保留，
+  if (scope && bbox && !architectureFull) {
+    // 纯移动/地形/物件改动下建筑没变：脏区外旧记忆原样保留，
     // 只把脏区里新看见的当前几何补进去，不再整层扫所有墙和子格。
     const old = layer.seen.architecture ?? [];
     const key = (r: { x: number; y: number; w: number; h: number; material: string }) => `${r.x},${r.y},${r.w},${r.h},${r.material}`;
@@ -220,33 +221,69 @@ function syncLayer(m: Draft<GameMap>, L: Draft<VisionLayer>, rev: number, scope?
 }
 
 /** 每次修改世界后执行：全队那份和每个人自己那份，都把"看得见"的部分同步进记忆。 */
+
+/**
+ * 地形-only 改动：视野已经按观察者半径收窄，记忆还能再缩到「真被改到的格 + 雾变了的格」。
+ * 全量口径每次会给所有可见格盖新 rev，增量只盖脏格；两者归一化后的 seen 一致，
+ * 但省掉 4 个玩家各自 9 宫的 3 万次 Immer 写入。
+ */
+export function narrowTerrainMemoryPlan(prev: World, next: World, plan?: VisionPlan, dirty?: Dirty[]): VisionPlan | undefined {
+  if (!plan || plan.full || !plan.terrainOnlyMaps?.size || !dirty) return plan;
+  let maps: Map<string, Set<number>> | null = null;
+  const memoryScope = new Map<string, Set<number>>(plan.memoryScopeMaps ?? []);
+  for (const id of plan.terrainOnlyMaps) {
+    if (plan.memoryFullMaps?.has(id)) continue;
+    const pm = prev.maps.find((m) => m.id === id), nm = next.maps.find((m) => m.id === id);
+    if (!pm || !nm) continue;
+    const changed = new Set<number>(dirty.find((d) => d.mapId === id)?.changedTerrainCells ?? []);
+    // 地形改动只可能影响观察者圆盘里的格；拿原计划圆盘做比较范围，
+    // 比逐张 40k 雾数组全扫快一个数量级，也不会漏掉某个视角的雾变化。
+    const scope = plan.maps.get(id);
+    const compared = new Set<number[]>();
+    const compareFog = (a?: number[], b?: number[]) => {
+      if (!a || !b || a === b || compared.has(a)) return;
+      compared.add(a);
+      if (scope) for (const i of scope) { if (a[i] !== b[i]) changed.add(i); }
+      else { const n = Math.min(a.length, b.length); for (let i = 0; i < n; i++) if (a[i] !== b[i]) changed.add(i); }
+    };
+    compareFog(pm.fog, nm.fog);
+    for (const [pid, layer] of Object.entries(pm.views ?? {})) compareFog(layer.fog, nm.views?.[pid]?.fog);
+    maps ??= new Map();
+    maps.set(id, changed);
+    memoryScope.set(id, changed);
+  }
+  return maps ? { ...plan, maps, memoryScopeMaps: memoryScope } : plan;
+}
+
 export function syncMemory(d: Draft<World>, plan?: VisionPlan) {
   const rev = d.observationSeq = (d.observationSeq ?? 0) + 1;
   for (const m of d.maps) {
     migrateArchitecture(m);
     syncObjectGroups(m);
     const memoryFull = plan ? !!plan.memoryFullMaps?.has(m.id) : true;
-    const scope: CellScope = plan && !memoryFull ? plan.maps.get(m.id) ?? undefined : undefined;
+    const architectureFull = !!plan?.architectureFullMaps?.has(m.id);
+    const scope: CellScope = plan && !memoryFull ? plan.memoryScopeMaps?.get(m.id) ?? plan.maps.get(m.id) ?? undefined : undefined;
     if (scope && scope.size === 0) continue; // 这张图没变
     const mapSource = isDraft(m) ? current(m) : m;
     if (d.visionMode === 'shared') {
-      syncLayer(m, m, rev, scope, mapSource);
-      pruneMemory(m, m, scope, mapSource);
+      syncLayer(m, m, rev, scope, mapSource, architectureFull);
+      pruneMemory(m, m, scope, mapSource, architectureFull);
       // 共享模式下每个人看到的就是地图那份，共用数组而不是复制 9 份。
       for (const p of d.party) m.views[p.id] = { fog: m.fog, seen: m.seen };
     } else {
       const done = new Set<string>();
       for (const p of d.party) {
         const key = visionKey(d, p.id); if (done.has(key)) continue; done.add(key);
-        const L = m.views[p.id]; syncLayer(m, L, rev, scope, mapSource); pruneMemory(m, L, scope, mapSource);
-        // p 自己就是第一次写回，不用再 clone 一份；同组其他人才需要独立副本。
-        let first = true;
-        for (const peer of d.party.filter(x => visionKey(d, x.id) === key)) {
-          m.views[peer.id] = first ? L : cloneLayer(L);
-          first = false;
-        }
+        const L = m.views[p.id]; syncLayer(m, L, rev, scope, mapSource, architectureFull); pruneMemory(m, L, scope, mapSource, architectureFull);
+        // 同组看到的东西完全相同，共用一份层；切模式时 withVision 会补真副本。
+        for (const peer of d.party.filter(x => visionKey(d, x.id) === key)) m.views[peer.id] = L;
       }
-      Object.assign(m, mergeLayers(m, d.party.map(p => m.views[p.id])));
+      const layers = d.party.map((p) => m.views[p.id]);
+      const terrainOnly = !!plan?.terrainOnlyMaps?.has(m.id);
+      const materialOnly = !!plan?.materialOnlyMaps?.has(m.id);
+      const noArchitecture = !m.architectureFragments?.length && !m.architecture?.walls?.length && !m.architecture?.doors?.length && !m.seen.architecture?.length;
+      if ((terrainOnly || materialOnly) && noArchitecture && scope) mergeLayersScopedInto(m, m, layers, scope);
+      else Object.assign(m, mergeLayers(m, layers));
     }
     // 辨识改变知识归属，不刷新灰区中物件的位置或状态。
     const identities = new Map(mapSource.objects.map(o => [o.id, identityKnowledge(o)]));
