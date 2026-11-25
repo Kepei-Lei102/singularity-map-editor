@@ -75,6 +75,23 @@ test('diffWorld：只挪一格时只报一个 moved，不算结构变化', () =>
   assert.equal(dirty[0].full, false);
 });
 
+test('diffWorld：棋子引用没变不算结构；同长度换掉/删掉仍算结构脏', () => {
+  const prev = mkWorld();
+  assert.equal(diffWorld(prev, prev)[0].structure, false, '同一份世界不该整图');
+
+  const replaced = produce(prev, (d) => {
+    d.maps[0].tokens[2] = { ...d.maps[0].tokens[2], id: 't4' };
+  });
+  assert.equal(diffWorld(prev, replaced)[0].structure, true, '同长度换 id 必须兜住');
+
+  const removed = produce(prev, (d) => { d.maps[0].tokens.pop(); });
+  assert.equal(diffWorld(prev, removed)[0].structure, true, '删棋子必须兜住');
+
+  const moved = produce(prev, (d) => { d.maps[0].tokens[0].x += 1; });
+  assert.equal(diffWorld(prev, moved)[0].structure, false, '只挪一格不该结构脏');
+  assert.equal(diffWorld(prev, moved)[0].moved.length, 1);
+});
+
 test('diffWorld：改一格地形是结构变化，但视野只圈观察者半径', () => {
   const prev = mkWorld('shared', [60, 40]);
   const next = produce(prev, (d) => { d.maps[0].cells[3 * d.maps[0].width + 3] = 'grass'; });

@@ -159,7 +159,16 @@ export function diffWorld(prev: World, next: World): Dirty[] {
       if (!old) continue; // 新棋子：由下面 structure 兜底走全图
       if (tokenMoved(old, t)) moved.push({ from: { x: old.x, y: old.y }, to: { x: t.x, y: t.y } });
     }
-    const added = m.tokens.length !== before.tokens.length || before.tokens.some((t) => !m.tokens.some((x) => x.id === t.id));
+    // 棋子数组没换引用就根本没动棋子；换过引用时用 id 集合 O(n) 判断有没有删/换。
+    // 原来这里对每个旧棋子再扫一遍新棋子，是 O(n²)，300 棋子单次约 1.6ms。
+    let added = false;
+    if (before.tokens !== m.tokens) {
+      if (m.tokens.length !== before.tokens.length) added = true;
+      else {
+        const newIds = new Set(m.tokens.map((t) => t.id));
+        added = before.tokens.some((t) => !newIds.has(t.id));
+      }
+    }
     // 自动迷雾从关到开：之前是手动态，地图 fog 没被自动规则算过，这次必须整图补上。
     const autoFogOn = !before.autoFog && m.autoFog;
     const structure = added || isManualFog(before) || autoFogOn || mapStructureChanged(before, m);
