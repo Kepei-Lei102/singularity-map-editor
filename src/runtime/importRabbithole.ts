@@ -173,7 +173,7 @@ export async function importRabbithole(file: File): Promise<RabbitholeImport> {
 
   const ground = maps.find((m) => m.floor === 1) ?? maps[0];
   const world: World = {
-    version: 2,
+    version: 3,
     name: '示例地图（从 Rabbithole 导入）',
     terrains: [...structuredClone(DEFAULT_TERRAINS), ...EXTRA_TERRAINS],
     maps,

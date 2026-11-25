@@ -211,10 +211,12 @@ function commitWorld(next: World, opts: { coalesce?: string; history?: boolean }
         for (const k of m.tokens) {
           if (!k.status?.endsWhenMePositive) continue;
           const pc = k.pcId ? d.party.find((x) => x.id === k.pcId) : undefined;
-          if (pc && pc.me !== undefined && pc.me >= 1) {
+          // NPC 的 ME 在棋子上（k.me），PC 的在角色卡上（pc.me）；两边都要收口。
+          const me = pc ? pc.me : k.me;
+          if (me !== undefined && me >= 1) {
             const label = k.status.label;
             delete k.status;
-            d.log.push({ id: uid(), at: Date.now(), session: d.session, kind: 'note', text: `${k.name} ME 恢复到 ${pc.me}，解除${label}。` });
+            d.log.push({ id: uid(), at: Date.now(), session: d.session, kind: 'note', text: `${k.name} ME 恢复到 ${me}，解除${label}。` });
           }
         }
       }

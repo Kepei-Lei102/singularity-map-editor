@@ -27,6 +27,7 @@ import { cellFloor, hasPitBottom } from '../scene/terrain';
 import { canAffordStep, canTurn, chargeUsedThisTurn, moveBudgetOn, movePool, RUN_MODES, runMeShort, spendCharge, stepPrice, tickCharge, STAND_UP_COST, ROLL_OVER_COST, type ChargeState, type RunMode } from '../rules/move';
 import { ATTACK_BAND_LABEL, ATTACK_DICE, ATTACK_RANGE, BANISHED_LABEL, DYING_LABEL, DYING_ROUNDS, ENGAGE_RANGE, RESCUED_HP, ROBOT_LABEL, applyDamage, attackRoundSummary, attackTargets, canRescue, canUseSharp, downedBy, downedLabel, hpOf, hpOfToken, npcHpPool, opportunityTriggers, randomDie, robotArrived, robotIncoming, rollAttack, rollRescue, settleDeath, statusBlocksAction, stepLimitNear, type AttackTarget, type Downed, type Roller } from '../rules/combat';
 import { attackSkillById, passiveStunTriggers, pickRiderEffects, riderStatus, STUN_PASSIVE_ID, stunnedDamageDiceMultiplier, type AttackRider } from '../rules/attackSkills';
+import { isPsychActionId, knowsPsychologicalWeakness, psychActionName, rollPsychDamage } from '../rules/psychology';
 
 // 试玩：放白板玩家进去，用 WASD 走，体验视野。退出时一切恢复原样（沙盒）。
 // 默认是非战斗：不限步数；打开"战斗模式"才是每回合 5 格。
@@ -1185,6 +1186,117 @@ export function trialAttack(targetTokenId: string, opts: { roll?: number; roller
   return settleAttack(targetTokenId, opts.roll ?? 1 + Math.floor(Math.random() * 100), { ...opts, rolledBy: 'host' });
 }
 
+/**
+ * 把玩家的一句话接成已有动作，并在命中后结算心理真伤。
+ *
+ * 这里不新增动作：actionId 必须是动作库里已有的「嘴炮(38) / 群嘲(149)」。
+ * 原文这两条都是「仅见证者裁决」，所以 hit 由主持人给，不另掷 D100。
+ * 知道弱点 1D8，不知道 1D4；可反复打，没有全局次数闸。
+ */
+export function trialPsychUtterance(
+  utteranceId: string,
+  actionId: string,
+  hit: boolean,
+  opts: { roller?: Roller } = {},
+): string | null {
+  if (!isPsychActionId(actionId)) return '心理真伤只挂在已有的【嘴炮】【群嘲】上，不单独成一个动作';
+  const t = tr();
+  if (!t) return '只有试玩中才能接这句话';
+  const w = getWorld();
+  const m = findMap(w, t.mapId);
+  const u = (w.utterances ?? []).find((x) => x.id === utteranceId);
+  if (!m || !u) return '找不到地图或这句话';
+  if (u.resolution) return '这句话已经接过了';
+  const actor = m.tokens.find((x) => x.pcId === u.pcId);
+  if (!actor) return '说话的人不在场';
+  const pl = t.players.find((x) => x.tokenId === actor.id);
+  if (!pl || pl.pcId !== u.pcId) return '说话的人不在试玩队伍里';
+  if (!u.targetTokenId) return '这句话没有指向目标；先让玩家对某个人说';
+  const target = m.tokens.find((x) => x.id === u.targetTokenId);
+  if (!target) return '目标不在了';
+  if (actor.corpse) return `${actor.name}已经死了，说不了话`;
+  if (actor.down) return `${actor.name}昏厥中，做不了动作`;
+  if (statusBlocksAction(actor.status)) return `${actor.name}${actor.status!.label}中，暂时不能行动`;
+  if (t.combat && actor.id !== t.players[t.current]?.tokenId) return '战斗中只能由当前行动角色发起';
+  if (turnEnded(t, actor.id)) return `${actor.name}这个回合已经结束了`;
+  if (t.combat && actedOf(t, actor.id)) return '这回合的行动点已经用掉了';
+  if (target.id === actor.id) return '不用对自己来这一下';
+  if (target.corpse) return `${target.name}已经死了`;
+  if (target.down) return `${target.name}昏厥中，接不了心理动作`;
+  if (target.status?.label === DYING_LABEL) return `${target.name}已经濒死了`;
+
+  const name = psychActionName(actionId);
+  const actionName = `【${name}】`;
+  const observerId = pl.pcId;
+  const known = knowsPsychologicalWeakness(target, observerId);
+  const roller = opts.roller ?? randomDie;
+  const damage = hit ? rollPsychDamage(known, roller) : 0;
+  let msg = '';
+  let ledgerNote = '';
+  let applied = false;
+
+  update((d) => {
+    const dm = findMap(d, t.mapId)!;
+    const du = (d.utterances ?? []).find((x) => x.id === utteranceId);
+    const da = dm.tokens.find((x) => x.id === actor.id);
+    const dt = dm.tokens.find((x) => x.id === target.id);
+    if (!du || !da || !dt) return;
+    applied = true;
+    du.resolution = { label: actionName, actionId, outcome: hit ? '命中' : '落空', by: 'witness', at: Date.now() };
+
+    const deltas: Delta[] = [];
+    const tp = dt.pcId ? d.party.find((x) => x.id === dt.pcId) : null;
+    const before = tp ? tp.me : dt.me;
+    const after = before == null ? null : Math.max(0, before - damage);
+    if (before == null) {
+      msg = hit
+        ? `${actionName}命中：${dt.name} 没填 ME，心理伤害没落地。`
+        : `${actionName}落空：${dt.name} 没填 ME（这次没打中，没有伤害）。`;
+      ledgerNote = hit ? `${actionName}命中：目标没填 ME，心理伤害未落地` : '落空';
+    } else {
+      if (after !== before) {
+        if (tp) tp.me = after!; else dt.me = after!;
+        deltas.push({ kind: 'me', id: dt.pcId ?? dt.id, name: dt.name, from: before, to: after! });
+      }
+      const landed = after! < before;
+      const formula = hit && landed ? (known ? '已知弱点 1D8' : '未知弱点 1D4') : '';
+      msg = `${actionName}${hit ? '命中' : '落空'}：${dt.name} ME ${before}${after === before ? '' : `→${after}`}${formula ? `（${formula}）` : ''}`;
+      if (!hit) ledgerNote = '落空';
+      else if (before === 0) ledgerNote = `${actionName}命中：目标已无 ME，未再扣`;
+      else if (after! < before) ledgerNote = known ? `${actionName}命中：心理弱点已知，1D8 ME` : `${actionName}命中：心理弱点未知，1D4 ME`;
+      else ledgerNote = `${actionName}命中：没有扣到 ME`;
+      if (after === 0 && before > 0 && !dt.corpse && !dt.down && dt.status?.label !== DYING_LABEL) {
+        const from = dt.status?.label ?? null;
+        dt.status = { label: BANISHED_LABEL, blocksAction: true, endsWhenMePositive: true };
+        deltas.push({ kind: 'status', id: dt.id, name: dt.name, from, to: BANISHED_LABEL });
+        d.log.push({ id: uid(), at: Date.now(), session: d.session, kind: 'note', text: `${dt.name} ME 归零，被驱逐；ME 恢复到 1 点后解除。` });
+      } else if (after === 0 && before === 0) {
+        msg += '（已经没有 ME）';
+      }
+    }
+    d.log.push({
+      id: uid(), at: Date.now(), session: d.session, kind: 'note',
+      text: `${da.name} 对 ${dt.name} 用了${actionName}${hit ? '，命中' : '，落空'}${known && hit ? '（已知心理弱点）' : ''}`,
+    });
+    appendEvent(d, newEvent(d, Date.now(),
+      { kind: da.pcId ? 'pc' : 'npc', id: da.pcId ?? da.id, name: da.name },
+      { id: actionId, name, source: '动作库' },
+      {
+        target: { kind: dt.pcId ? 'pc' : 'npc', id: dt.pcId ?? dt.id, name: dt.name },
+        deltas,
+        note: ledgerNote,
+      },
+    ));
+  });
+  if (!applied) return '这句话或目标已经不在了，没有落账';
+  if (!msg) msg = `${actionName}${hit ? '命中' : '落空'}。`;
+  setTr({
+    ...(t.combat && actor ? { acted: { ...(t.acted ?? {}), [actor.id]: true } } : {}),
+    msg,
+  });
+  return null;
+}
+
 // —— 门：开门 / 撬锁 ——
 //
 // 门锁是门上的正交状态：locked（锁着没有）+ keyable（还能不能配钥匙）。
@@ -1791,8 +1903,15 @@ export function settleAttack(
   const rounds = r.rounds.map((x) => ({ dice: x.dice, rolls: [...x.rolls], damage: x.damage }));
   const baseDamageDice = ATTACK_DICE[r.band];
   // 007 / 灵巧：命中才抽效果；知道对应弱点就抽两种，且不重复。
+  // 心理弱点改成按观察者记：攻击者自己知道才算，不能用「目标有这条弱点」冒充全队知道。
+  const observerId = pl.pcId ?? pl.tokenId;
+  const riderWeaknessKnown = attackSkill
+    ? attackSkill.weakness === 'psychological'
+      ? knowsPsychologicalWeakness(target, observerId)
+      : !!target.weakness?.physical
+    : false;
   const riderEffects: AttackRider[] = r.hit && attackSkill
-    ? pickRiderEffects(attackSkill.id, !!target.weakness?.[attackSkill.weakness], roller)
+    ? pickRiderEffects(attackSkill.id, riderWeaknessKnown, roller)
     : [];
   if (r.hit && riderEffects.includes('暴击') && rounds[0]) {
     const extra = roller(8);

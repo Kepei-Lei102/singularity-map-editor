@@ -5,6 +5,7 @@ import { TALK_ACTIONS, guessTalkAction } from '../rules/talkActions';
 import { moveBudgetOn } from '../rules/move';
 import { intentEnabled, requestTalkIntent, setIntentEnabled, type AdvisorSettings } from '../runtime/sessionAI';
 import { ATTACK_SKILLS, STUN_PASSIVE_ID, type AttackSkillDef } from '../rules/attackSkills';
+import { PSYCH_ACTION_IDS, psychActionName } from '../rules/psychology';
 
 /**
  * 猜动作用的连接设置。跟「本场 AI」面板是两套：
@@ -26,7 +27,7 @@ import {
   MOVE_PER_TURN, actionsLeft, addTrialPlayer, clearTrialStatus, endTrial, setTrialStatus, statusLeft, switchTrialPlayer, toggleTrialPause,
   tickRobots, trialAskCode, trialDoors, trialOpenDoor, trialPickLock, trialRamDoor, trialRun, trialSense, trialStance, trialSubmitCode, trialSettleCode, cancelPendingCode,
   type CodeConsequence,
-  toggleCombat, toggleMarkMode, trialAttack, trialAttackTargets, trialRescue, trialOpportunityAttack, trialSkipOpportunity,
+  toggleCombat, toggleMarkMode, trialAttack, trialAttackTargets, trialRescue, trialOpportunityAttack, trialSkipOpportunity, trialPsychUtterance,
   runModeOf, sharpOf,
   type TrialStatusOptions,
 } from '../runtime/trial';
@@ -370,6 +371,27 @@ export function TrialHud() {
                       原话里带「吵」「求」这类字眼时，把最可能的那个标出来。 */}
                   {asking === u.id && <div className="muted small-text">在想…</div>}
                   <div className="trial-say-chips">
+                    {PSYCH_ACTION_IDS.map((id) => {
+                      const name = psychActionName(id);
+                      return (
+                        <span key={id} className="inline">
+                          <button className="small chip" disabled={!u.targetTokenId}
+                            title={u.targetTokenId ? `现有动作【${name}】：见证者判定命中后按已知/未知弱点结算 ME` : '这句话没有指向目标，先让玩家对某个人说'}
+                            onClick={() => {
+                              const e = trialPsychUtterance(u.id, id, true);
+                              if (e) set({ msg: e });
+                              else setTaking(null);
+                            }}>{name}·命中</button>
+                          <button className="small chip" disabled={!u.targetTokenId}
+                            title="这句话接成现有动作，但这次没打中；只记记录，不扣 ME"
+                            onClick={() => {
+                              const e = trialPsychUtterance(u.id, id, false);
+                              if (e) set({ msg: e });
+                              else setTaking(null);
+                            }}>{name}·落空</button>
+                        </span>
+                      );
+                    })}
                     {TALK_ACTIONS.map((a) => {
                       // 正则优先；正则没结果就用模型猜的（猜不出来就是 null）
                       const guess = guessTalkAction(u.text)?.name ?? aiGuess[u.id] ?? null;

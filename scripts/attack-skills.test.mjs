@@ -41,7 +41,8 @@ function setup({ skills = ['007-9-004'], me = 5, target = {}, partyB = false, wi
     { id: 'ta', pcId: 'a', name: '甲', color: '#fff', x: 2, y: 2 },
     { id: 'tb', pcId: partyB ? 'b' : null, name: '乙', color: '#f00', x: 3, y: 2,
       hp: target.hp ?? 40, hpMax: target.hpMax ?? 40, ...(target.me !== undefined ? { me: target.me, meMax: target.meMax ?? target.me } : {}),
-      ...(target.status ? { status: target.status } : {}), ...(target.weakness ? { weakness: target.weakness } : {}), ...(target.down ? { down: true } : {}) },
+      ...(target.status ? { status: target.status } : {}), ...(target.weakness ? { weakness: target.weakness } : {}),
+      ...(target.weaknessKnownBy ? { weaknessKnownBy: target.weaknessKnownBy } : {}), ...(target.down ? { down: true } : {}) },
   ];
   w.maps = [m];
   api.replaceWorld(w);
@@ -133,7 +134,7 @@ test('全力攻击：已知物理弱点叠两种，暴击补一颗伤害骰', ()
 });
 
 test('灵巧攻击：心理弱点叠降智 + 恐惧，恐惧挡行动', () => {
-  setup({ skills: ['007-9-203'], target: { weakness: { psychological: true }, me: 10 } });
+  setup({ skills: ['007-9-203'], target: { weakness: { psychological: true }, weaknessKnownBy: { a: { psychological: true } }, me: 10 } });
   assert.equal(api.trialAttack('tb', { roll: 50, roller: seq([2, 2, 2, 5]), skillId: '007-9-203' }), null);
   const w = api.getWorld();
   const tok = w.maps[0].tokens.find((x) => x.id === 'tb');

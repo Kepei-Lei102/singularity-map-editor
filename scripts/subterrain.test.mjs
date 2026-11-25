@@ -155,7 +155,7 @@ test('v1 存档（粗格 + 稀疏子格）迁移成完整 fineCells，并丢掉�
   w.maps = [m];
   const migrated = api.migrateWorld(w);
   const mm = migrated.maps[0];
-  assert.equal(migrated.version, 2);
+  assert.equal(migrated.version, 3);
   assert.equal(mm.fineCells.length, mm.width * mm.height * 9);
   assert.equal(api.terrainAtSubcell(mm, 6, 6), 'grass');
   assert.equal(api.terrainAtSubcell(mm, 7, 6), 'floor');
@@ -247,8 +247,8 @@ test('9 个小格全被擦空时，LOD 不再回退大格底', () => {
 
 
 test('parseWorld 拒绝未知/缺失版本、坏 maps 条目和缺 party', () => {
-  const v3 = api.emptyWorld(); v3.version = 3;
-  assert.throws(() => api.parseWorld(JSON.stringify(v3)), /工程版本/);
+  const v4 = api.emptyWorld(); v4.version = 4;
+  assert.throws(() => api.parseWorld(JSON.stringify(v4)), /工程版本/);
   const noVersion = api.emptyWorld(); delete noVersion.version;
   assert.throws(() => api.parseWorld(JSON.stringify(noVersion)), /工程版本/);
   const badMaps = api.emptyWorld(); badMaps.maps = [null];
@@ -271,7 +271,7 @@ test('parseWorld 仍能读有效 v1：迁移出完整 fineCells', () => {
   const v1 = api.emptyWorld(); v1.version = 1;
   delete v1.maps[0].fineCells;
   const w = api.parseWorld(JSON.stringify(v1));
-  assert.equal(w.version, 2);
+  assert.equal(w.version, 3);
   assert.equal(w.maps[0].fineCells.length, w.maps[0].width * w.maps[0].height * 9);
 });
 

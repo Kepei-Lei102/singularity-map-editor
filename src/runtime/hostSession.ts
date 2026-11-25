@@ -2,7 +2,7 @@ import { identityKnown, playerSeen, UNKNOWN_OBJECT } from '../scene/identity';
 import { objectEnabled } from '../core/objectData.js';
 import { isArchitectureObject, clipArchitecture, fogAt, tokenPosition } from '../scene/architecture';
 import { anyVisible } from '../scene/memory';
-import type { CellGroup, CodeRequest, CombatNotice, DiceJudgment, Endpoint, GameMap, PendingJudgment, PlayerClue, VisionLayer, World } from '../core/types';
+import type { CellGroup, CodeRequest, CombatNotice, DiceJudgment, Endpoint, GameMap, PendingJudgment, PlayerClue, Token, VisionLayer, World } from '../core/types';
 import { visibleMarks } from '../scene/perception';
 import { viewerOf, visiblePoint } from '../scene/sight';
 import { numbering } from '../scene/render';
@@ -217,6 +217,17 @@ function opaqueMemoryId(sourceId: string, key: string): string {
   return `mh${(h >>> 0).toString(36)}`;
 }
 
+/** 玩家载荷里的棋子：剥掉所有观察者的认知，只保留这一位自己知道的心理弱点。 */
+function playerToken(t: Token, pcId?: string): Token {
+  // 只有「客观存在 + 这个人知道」才下发；脏 knownBy 不能凭空制造心理弱点。
+  const known = !!t.weakness?.psychological && !!pcId && !!t.weaknessKnownBy?.[pcId]?.psychological;
+  const physical = !!t.weakness?.physical;
+  const weakness = physical || known
+    ? { ...(physical ? { physical: true } : {}), ...(known ? { psychological: true } : {}) }
+    : undefined;
+  return { ...t, weakness, weaknessKnownBy: undefined };
+}
+
 /** Only the bound role's live cells and memory leave the host. */
 export function playerMap(m: GameMap, L: VisionLayer, pcId?: string): GameMap {
   const seen = {
@@ -315,7 +326,10 @@ export function playerMap(m: GameMap, L: VisionLayer, pcId?: string): GameMap {
     fineMaterials,
     groups,
     d100: m.d100.map(() => 0), rooms: [], roomCells: m.roomCells.map(() => ''), notes: '', spawn: null,
-    tokens: m.tokens.filter(t => { const p = tokenPosition(t); return t.pcId === pcId || fogAt(m, L, p.x, p.y) === 1; }),
+    // 心理弱点：只有当前玩家自己知道的那份才下发；有弱点本身也不许从载荷里漏。
+    tokens: m.tokens
+      .filter(t => { const p = tokenPosition(t); return t.pcId === pcId || fogAt(m, L, p.x, p.y) === 1; })
+      .map(t => playerToken(t, pcId)),
     objects: visibleObjects.map(o => ({
       id: o.id, kind: o.kind, name: identityKnown(o, pcId) ? o.name : UNKNOWN_OBJECT, x: o.x, y: o.y, w: o.w, h: o.h, anchor: o.anchor, height: o.height, color: o.color, icon: identityKnown(o, pcId) ? o.icon : '',
       state: identityKnown(o, pcId) ? o.state : 0, states: identityKnown(o, pcId) ? o.states.map((s, k) => k === o.state ? s : '') : [''], ghost: !!o.blocksWhen && !o.blocksWhen.includes(o.state), ...(texturedObjectIds.has(o.id) ? { textured: true } : {}), notes: '', hidden: false, media: [], secrets: [],

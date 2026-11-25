@@ -298,7 +298,11 @@ export function syncMemory(d: Draft<World>, plan?: VisionPlan) {
 
 /** 旧存档（只有 0/1 迷雾）补上记忆字段。 */
 export function migrateWorld(w: World): World {
-  const v1 = (w as { version?: number }).version === 1;
+  const sourceVersion = (w as { version?: unknown }).version;
+  // v3 起 weakness.psychological 表示「客观存在」，weaknessKnownBy 按观察者记。
+  // v1/v2（以及没写 version 的旧档）的 psychological=true 仍是旧的「队里已知」，需要迁成全队 knownBy。
+  const legacyWeakness = typeof sourceVersion !== 'number' || sourceVersion < 3;
+  const v1 = sourceVersion === 1;
   for (const m of w.maps) {
     migrateArchitecture(m);
     // v1（粗格 + 稀疏子格覆盖）→ v2（完整小格数组）。
@@ -382,9 +386,19 @@ export function migrateWorld(w: World): World {
     for (const L of Object.values(m.views)) delete (L as { subFog?: unknown }).subFog;
     for (const L of Object.values(m.views)) { if (L?.seen) { L.seen.groups ??= []; L.seen.groupRevs ??= {}; } }
     for (const o of m.objects) for (const s of o.secrets) { s.kind ??= 'roll'; s.range ??= 1; }
+    // 旧档的 weakness.psychological 是「队里已知」的布尔，不是「客观上有没有」。
+    // 只有 v1/v2 才迁：true = 有这条弱点 + 当前全队已知；false/空 = 没有。
+    // v3 新档不迁；没有 knownBy 就是「存在但当前没人知道」。
+    for (const t of m.tokens ?? []) {
+      if (legacyWeakness && t.weakness?.psychological && t.weaknessKnownBy === undefined) {
+        t.weaknessKnownBy = {};
+        for (const p of w.party) t.weaknessKnownBy[p.id] = { psychological: true };
+      }
+      // 陈旧认知清掉：没有心理弱点的人身上不该挂着「谁知道」。
+      if (t.weaknessKnownBy && !t.weakness?.psychological) delete t.weaknessKnownBy;
+    }
   }
-  if (v1) w.version = 2;
-  w.version = 2;
+  w.version = 3;
   w.materials ??= structuredClone(DEFAULT_MATERIALS);
   w.visionMode ??= 'shared';
   w.visionGroups ??= [];

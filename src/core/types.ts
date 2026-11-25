@@ -232,8 +232,13 @@ export interface Token {
   /** 棋子自己的 me/meMax（NPC 用；玩家角色的 ME 在角色卡上）。 */
   me?: number;
   meMax?: number;
-  /** 队里已经知道的弱点；攻击技能的附加效果按它决定能不能叠第二种。 */
+  /**
+   * 心理弱点客观上存在（旧档里的「已知」迁移成存在 + 全队 knownBy）。
+   * 物理弱点这一轮仍沿用旧口径：勾了＝队里已知，不按观察者拆。
+   */
   weakness?: { physical?: boolean; psychological?: boolean };
+  /** 心理弱点按观察者记：PC 用 pcId，NPC 用 tokenId。只有演到「被这个人知道」才写进来。 */
+  weaknessKnownBy?: Record<Id, { psychological?: boolean }>;
   /** 钝器把人打晕：昏厥中，不能行动。 */
   down?: boolean;
 }
@@ -841,7 +846,7 @@ export interface World {
   utterances?: Utterance[] | null;
   /** 只在玩家载荷里：试玩里这个窗口自己的处境——被暂停了？轮到他了吗？ */
   trialFlags?: { paused: boolean; isCurrent: boolean } | null;
-  version: 2;
+  version: 3;
   name: string;
   terrains: Terrain[];
   materials?: Material[];

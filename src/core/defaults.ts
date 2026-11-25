@@ -49,7 +49,7 @@ export function newObject(kind: 'object' | 'zone', x: number, y: number, w: numb
 export function emptyWorld(): World {
   const m = newMap('一楼', '现实', 1, 24, 16);
   return {
-    version: 2, name: '未命名世界', terrains: structuredClone(DEFAULT_TERRAINS), materials: structuredClone(DEFAULT_MATERIALS),
+    version: 3, name: '未命名世界', terrains: structuredClone(DEFAULT_TERRAINS), materials: structuredClone(DEFAULT_MATERIALS),
     maps: [m], connections: [], party: [], log: [], media: [],
     flows: [{ id: uid(), name: '主线', mapId: null, edges: [], nodes: [{ id: uid(), title: '开场', x: 40, y: 40, kind: 'start', effect: null, origin: 'predicted', status: 'predicted' }] }],
     session: 1, playerMapId: null, visionMode: 'shared', marks: [], npcs: [],

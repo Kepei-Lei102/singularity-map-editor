@@ -1006,7 +1006,7 @@ export function parseWorld(text: string, autoOpen = false): World {
   try { w = JSON.parse(text); } catch { throw new Error('world.json 不是有效的 JSON'); }
   if (!w || typeof w !== 'object' || !Array.isArray((w as { maps?: unknown }).maps)) throw new Error('工程文件里没有 maps 列表');
   const rawVersion = (w as { version?: unknown }).version;
-  if (rawVersion !== 1 && rawVersion !== 2) throw new Error(`工程版本是 ${JSON.stringify(rawVersion)}，这个编辑器只认 1 / 2`);
+  if (rawVersion !== 1 && rawVersion !== 2 && rawVersion !== 3) throw new Error(`工程版本是 ${JSON.stringify(rawVersion)}，这个编辑器只认 1 / 2 / 3`);
   const rawMaps = (w as { maps: unknown[] }).maps;
   if (rawMaps.some((m) => !m || typeof m !== 'object' || Array.isArray(m))) throw new Error('工程文件的 maps 列表里有不是对象的条目');
   for (const m of rawMaps as { name?: unknown; width?: unknown; height?: unknown; cells?: unknown; objects?: unknown }[]) {

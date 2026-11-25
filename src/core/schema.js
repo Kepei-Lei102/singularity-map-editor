@@ -516,7 +516,7 @@ export function checkWorld(w, migrated = false) {
   };
 
   obj(w, '工程');
-  if (w.version !== 2) fail('version', '不是 2（不是这个编辑器的工程文件）');
+  if (w.version !== 1 && w.version !== 2 && w.version !== 3) fail('version', '不是 1 / 2 / 3（不是这个编辑器的工程文件）');
   str(w.name, 'name');
   arr(w.terrains, 'terrains').forEach((t, i) => {
     const at = `terrains[${i}]`;
@@ -781,6 +781,14 @@ export function checkWorld(w, migrated = false) {
         obj(t.weakness, `${ta}.weakness`);
         optBool(t.weakness.physical, `${ta}.weakness.physical`);
         optBool(t.weakness.psychological, `${ta}.weakness.psychological`);
+      }
+      if (t.weaknessKnownBy !== undefined) {
+        if (!t.weakness?.psychological) fail(`${ta}.weaknessKnownBy`, '有观察者认知，但目标没有心理弱点');
+        obj(t.weaknessKnownBy, `${ta}.weaknessKnownBy`);
+        for (const [observer, known] of Object.entries(t.weaknessKnownBy)) {
+          obj(known, `${ta}.weaknessKnownBy.${observer}`);
+          optBool(known.psychological, `${ta}.weaknessKnownBy.${observer}.psychological`);
+        }
       }
       if (t.down !== undefined) optBool(t.down, `${ta}.down`);
     });

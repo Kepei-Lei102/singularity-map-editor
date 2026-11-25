@@ -782,9 +782,29 @@ export function TokenInspector({ world, mapId, t }: { world: World; mapId: strin
       <div className="inline">
         <Check label="物理弱点已知" value={!!t.weakness?.physical}
           onChange={(v) => up((x) => { x.weakness = { ...(x.weakness ?? {}), physical: v || undefined }; })} />
-        <Check label="心理弱点已知" value={!!t.weakness?.psychological}
-          onChange={(v) => up((x) => { x.weakness = { ...(x.weakness ?? {}), psychological: v || undefined }; })} />
+        <Check label="有心理弱点" value={!!t.weakness?.psychological}
+          onChange={(v) => up((x) => {
+            x.weakness = { ...(x.weakness ?? {}), psychological: v || undefined };
+            if (v) x.weaknessKnownBy ??= {};
+            else delete x.weaknessKnownBy;
+          })} />
       </div>
+      {t.weakness?.psychological && (
+        <div>
+          <div className="hint">谁知道（演到「被这个人知道」才勾；不自动共享，玩家端只下发各自知道的那份）</div>
+          <div className="inline">
+            {world.party.map((p) => (
+              <Check key={p.id} label={p.name} value={!!t.weaknessKnownBy?.[p.id]?.psychological}
+                onChange={(v) => up((x) => {
+                  x.weaknessKnownBy = { ...(x.weaknessKnownBy ?? {}) };
+                  if (v) x.weaknessKnownBy[p.id] = { psychological: true };
+                  else delete x.weaknessKnownBy[p.id];
+                }, `wk${p.id}`)} />
+            ))}
+          </div>
+          {!world.party.length && <div className="hint">队里还没有角色。</div>}
+        </div>
+      )}
       {t.pcId && <div className="hint">地图上的三圈是"看清"范围：1 格触手可及 / 5 格一步之遥 / 15 格屋子那头（1 格 = {CELL_METERS} 米，只画看得见的格子）。</div>}
     </Section>
   );
