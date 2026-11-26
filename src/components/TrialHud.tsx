@@ -134,6 +134,7 @@ export function TrialHud() {
     <div className="trial-hud">
       <div className="trial-row">
         <b>试玩中</b>
+        <span className="trial-demo" title="试玩的角色是新建的白板玩家，不是你队伍里的角色；正式跑团请用「带团」">白板占位</span>
         {t.players.map((p, i) => (
           <span key={p.tokenId} className="chip-group">
             <button className={`small chip ${i === t.current ? 'on' : ''} ${p.paused ? 'paused' : ''}`} onClick={() => switchTrialPlayer(i)}>

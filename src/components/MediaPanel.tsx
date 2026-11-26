@@ -10,6 +10,16 @@ const isPdf = (mime: string) => mime === 'application/pdf';
 const fmtBytes = (n: number) => n >= 1024 * 1024 ? `${(n / (1024 * 1024)).toFixed(1)} MB` : n >= 1024 ? `${Math.round(n / 1024)} KB` : `${Math.round(n)} B`;
 const kindOf = (mime: string) => (mime.startsWith('video') ? '视频' : mime.startsWith('audio') ? '音频' : mime.startsWith('image') ? '图片' : isPdf(mime) ? 'PDF' : '文件');
 
+/** 图片媒体的缩略图。加载中、文件不在本机或解码失败时都留一个固定尺寸的省略槽。 */
+function MediaThumb({ id }: { id: string }) {
+  const [failed, setFailed] = useState(false);
+  const url = useBlobUrl(id);
+  // 文件被导入/恢复换掉后 URL 会变；这时清掉上一次的失败，不然缩略图会一直空着。
+  useEffect(() => { setFailed(false); }, [id, url]);
+  if (failed || !url) return <span className="media-thumb media-thumb-empty" title={failed ? '文件读不出来' : '文件不在本机，或还没读完'} aria-hidden="true" />;
+  return <img className="media-thumb" src={url} alt="" loading="lazy" onError={() => setFailed(true)} />;
+}
+
 export function MediaPanel() {
   const w = useWorld();
   const online = useSyncExternalStore(subscribeTransportKind, isOnlineTransport, isOnlineTransport);
@@ -45,7 +55,10 @@ export function MediaPanel() {
       </label>
       {w.media.map((m) => (
         <div key={m.id} className="list-row">
-          <span>{kindOf(m.mime)} · {m.name} <span className="muted">{(m.size / 1048576).toFixed(1)}MB</span></span>
+          <span className="media-meta">
+            {m.mime.startsWith('image/') && <MediaThumb id={m.id} />}
+            <span className="media-meta-text" title={m.name}>{kindOf(m.mime)} · {m.name} <span className="muted">{(m.size / 1048576).toFixed(1)}MB</span></span>
+          </span>
           <span className="inline">
             <button className="small" title="只在主持人这边播放" onClick={() => playMedia(m.id, m.name, false)}>▶</button>
             <button className="small" title={online ? '同步给玩家（线上会分块传文件）' : '同步给玩家窗口'} onClick={() => playMedia(m.id, m.name, true)}>📡</button>

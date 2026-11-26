@@ -216,7 +216,7 @@ export function PlayerView() {
         const { hp, max } = hpOf(me ?? {});
         return <div className="player-status">
           {avatar ? <img className="player-status-avatar" src={avatar} alt="" /> : <i className="dot" style={{ background: me?.color ?? '#fff' }} />}
-          <span className="player-status-name">{me?.name ?? '你'}</span>
+          <span className="player-status-name">{me?.name ?? '你'}{world?.trialFlags && <span className="player-trial-badge" title="试玩占位角色，不是正式角色">试玩占位</span>}</span>
           <span className="player-status-hp" title="HP">
             <span className="bar"><span className="bar-fill" style={{ width: `${max ? Math.max(0, Math.min(100, (hp / max) * 100)) : 0}%` }} /></span>
             <b>{hp} / {max}</b>

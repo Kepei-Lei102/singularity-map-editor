@@ -129,6 +129,11 @@ textarea { resize: vertical; }
 .sub { margin-top: 10px; }
 .sub-title { color: var(--muted); font-size: 12px; margin-bottom: 4px; }
 .list-row { display: flex; justify-content: space-between; align-items: center; gap: 6px; padding: 3px 0; }
+.media-meta { display: flex; align-items: center; gap: 8px; min-width: 0; flex: 1; }
+.media-meta > .media-meta-text { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.media-thumb { display: block; width: 44px; height: 44px; object-fit: cover; border-radius: 4px; border: 1px solid var(--line); background: var(--panel2); flex: none; }
+.media-thumb-empty { display: flex; align-items: center; justify-content: center; color: var(--muted); font-size: 12px; user-select: none; }
+.media-thumb-empty::before { content: '…'; }
 .chips { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 6px; }
 .chip { padding: 2px 8px; border-radius: 12px; font-size: 12px; background: var(--panel2); border: 1px solid var(--line); }
 .chip.on { border-color: var(--accent); color: var(--accent); }
@@ -322,6 +327,7 @@ button.ai { color: #e6c2ff; border-color: #6b4f8c; }
 .trial-hud { position: absolute; left: 50%; bottom: 40px; transform: translateX(-50%); z-index: 4; width: min(760px, calc(100% - 24px));
   background: rgba(18, 18, 24, 0.94); border: 1px solid #3f7d4e; border-radius: 10px; padding: 8px 12px; font-size: 12.5px;
   display: flex; flex-direction: column; gap: 6px; }
+.trial-demo { font-size: 11px; color: var(--accent2); border: 1px solid var(--accent2); border-radius: 999px; padding: 0 6px; white-space: nowrap; }
 .trial-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .trial-row .spacer { flex: 1; }
 .trial-row select { width: auto; }
@@ -409,6 +415,7 @@ label.check.off { opacity: 0.45; }
 }
 .player-status-avatar { width: 30px; height: 30px; border-radius: 50%; object-fit: cover; border: 1px solid #3a3a44; }
 .player-status-name { font-weight: 600; color: var(--text); }
+.player-trial-badge { margin-left: 6px; font-size: 11px; font-weight: 400; color: var(--accent2); border: 1px solid var(--accent2); border-radius: 999px; padding: 0 5px; vertical-align: middle; }
 .player-status-hp { display: inline-flex; align-items: center; gap: 8px; }
 .player-status-hp .bar { display: block; width: 96px; height: 6px; border-radius: 3px; background: #2a2a33; overflow: hidden; }
 .player-status-hp .bar-fill { display: block; height: 100%; background: var(--danger); transition: width 0.4s ease; }
